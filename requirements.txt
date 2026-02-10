@@ -1,0 +1,13 @@
+# Basis Protocol - Backend Dependencies
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+psycopg2-binary==2.9.10
+httpx==0.28.1
+python-dotenv==1.0.1
+python-dateutil
+fastapi
+httpx
+psycopg2-binary
+python-dateutil
+python-dotenv
+uvicorn[standard]

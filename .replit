@@ -1,7 +1,13 @@
+run = "python main.py"
+language = "python3"
+entrypoint = "main.py"
 modules = ["python-3.11"]
-[deployment]
-deploymentTarget = "autoscale"
-run = ["streamlit", "run", "app.py", "--server.port", "5000"]
 
 [nix]
-channel = "stable-25_05"
+channel = "stable-24_05"
+
+[env]
+PYTHONUNBUFFERED = "1"
+
+[deployment]
+run = ["python", "main.py"]
