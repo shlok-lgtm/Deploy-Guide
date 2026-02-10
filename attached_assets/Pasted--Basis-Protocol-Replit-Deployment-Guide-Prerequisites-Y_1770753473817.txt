@@ -1,0 +1,255 @@
+# Basis Protocol — Replit Deployment Guide
+
+## Prerequisites
+
+You need:
+- A Replit account (free or paid)
+- A Neon PostgreSQL database (free tier works: https://neon.tech)
+- A CoinGecko Pro API key ($0/month demo tier: https://www.coingecko.com/en/api)
+- An Etherscan API key (free: https://etherscan.io/apis)
+
+---
+
+## Step 1: Create the Repl
+
+1. Go to https://replit.com and click **Create Repl**
+2. Choose **Python** as the template
+3. Name it `basis-protocol` (or whatever you want)
+4. Click **Create Repl**
+
+---
+
+## Step 2: Upload the Code
+
+Option A — **Upload the tar.gz** (easiest):
+1. In the Replit file panel, click the three dots menu → **Upload file**
+2. Upload `basis-replit-deploy.tar.gz`
+3. Open the Shell tab and run:
+```bash
+tar xzf basis-replit-deploy.tar.gz
+rm basis-replit-deploy.tar.gz
+```
+
+Option B — **Drag and drop**:
+1. Extract the tar.gz on your local machine
+2. Drag the extracted folders/files into Replit's file panel
+
+After upload, your file tree should look like:
+```
+├── main.py
+├── run.sh
+├── setup.py
+├── requirements.txt
+├── import_history.py
+├── import_governance.py
+├── .env.example
+├── app/
+│   ├── __init__.py
+│   ├── config.py
+│   ├── database.py
+│   ├── server.py
+│   ├── worker.py
+│   ├── scoring.py
+│   ├── governance.py
+│   ├── content_engine.py
+│   ├── schemas/
+│   └── collectors/
+│       ├── coingecko.py
+│       ├── defillama.py
+│       ├── curve.py
+│       └── offline.py
+├── migrations/
+│   └── 001_initial_schema.sql
+├── exports/
+│   └── governance_export.sql
+└── data/
+    ├── backtest/
+    └── scraped/
+```
+
+---
+
+## Step 3: Set Environment Variables (Secrets)
+
+In Replit, click the **Secrets** tab (lock icon in the left sidebar).
+
+Add these secrets:
+
+| Key | Value | Required |
+|-----|-------|----------|
+| `DATABASE_URL` | Your Neon PostgreSQL connection string | **Yes** |
+| `COINGECKO_API_KEY` | Your CoinGecko API key | **Yes** |
+| `ETHERSCAN_API_KEY` | Your Etherscan API key | **Yes** |
+| `ANTHROPIC_API_KEY` | Your Anthropic API key (for content drafts) | Optional |
+| `WORKER_ENABLED` | `true` | Optional (defaults to true) |
+| `COLLECTION_INTERVAL` | `60` | Optional (minutes between scoring cycles) |
+
+Your Neon DATABASE_URL looks like:
+```
+postgresql://username:password@ep-xyz-12345.us-east-2.aws.neon.tech/neondb?sslmode=require
+```
+
+---
+
+## Step 4: Configure the Run Command
+
+Click the three dots next to the Run button (or open `.replit` file) and set:
+
+**Run command:**
+```
+python main.py
+```
+
+If Replit asks you to configure the run command, just enter `python main.py`.
+
+If there's a `.replit` file, make sure it contains:
+```toml
+run = "python main.py"
+entrypoint = "main.py"
+
+[nix]
+channel = "stable-24_05"
+```
+
+---
+
+## Step 5: Install Dependencies
+
+Open the Shell tab and run:
+```bash
+pip install -r requirements.txt
+```
+
+---
+
+## Step 6: Initialize the Database
+
+In the Shell tab:
+```bash
+python setup.py
+```
+
+This will:
+- Apply the schema migration (creates SII tables)
+- Seed the stablecoin registry
+- Verify all imports work
+
+You should see:
+```
+Database connected ✓
+Migration applied ✓
+Tables: component_readings, daily_scores, stablecoins
+Stablecoins seeded: 8
+All modules load ✓
+Setup complete!
+```
+
+---
+
+## Step 7: Import Governance Data
+
+This imports the ~28K rows of governance forum data you already crawled:
+
+```bash
+python import_governance.py --sql-file exports/governance_export.sql
+```
+
+This creates the `gov_*` tables and loads your existing Aave/MakerDAO/Compound/Morpho/Frax data. You should see something like:
+```
+Governance tables ready
+Importing X rows into gov_documents...
+  ✓ gov_documents: X rows
+  ✓ gov_stablecoin_mentions: X rows
+  ✓ gov_metric_mentions: X rows
+```
+
+---
+
+## Step 8: Run It
+
+Click the **Run** button (or `python main.py` in Shell).
+
+You should see:
+```
+Initializing database pool...
+Database connected ✓
+Governance intelligence routes registered
+Content engine routes registered
+Starting API on port 8000
+Background worker thread started
+```
+
+Your API is now live at your Replit URL.
+
+---
+
+## Step 9: Verify
+
+Open these URLs in your browser (replace with your Replit URL):
+
+| Endpoint | What it shows |
+|----------|--------------|
+| `https://your-repl.replit.app/api/health` | Database connection status |
+| `https://your-repl.replit.app/api/stablecoins` | List of tracked stablecoins |
+| `https://your-repl.replit.app/api/scores/latest` | Latest SII scores (empty until first worker cycle) |
+| `https://your-repl.replit.app/api/governance/stats` | Governance intel stats |
+| `https://your-repl.replit.app/api/governance/debates?days=30` | Hot governance debates |
+| `https://your-repl.replit.app/api/content/digest?days=14` | Content opportunities |
+
+The first scoring cycle takes ~2-3 minutes (hits CoinGecko, DeFiLlama, Curve, Etherscan). After that, scores appear at `/api/scores/latest`.
+
+---
+
+## Step 10: (Optional) Manual Governance Crawl
+
+To trigger a fresh governance crawl immediately:
+```bash
+# In Shell:
+python -c "from app.governance import run_crawl; run_crawl(since_days=7)"
+```
+
+Or via the API:
+```bash
+curl -X POST https://your-repl.replit.app/api/governance/crawl
+```
+
+The worker also auto-crawls governance forums every ~6 hours.
+
+---
+
+## API Reference (Quick)
+
+### SII Scores
+- `GET /api/scores/latest` — Current scores for all stablecoins
+- `GET /api/scores/{coin_id}` — Single coin detail
+- `GET /api/scores/history/{coin_id}?days=30` — Score history
+
+### Governance Intel
+- `GET /api/governance/stats` — Document counts, top stablecoins
+- `GET /api/governance/debates?days=7` — Hot debates
+- `GET /api/governance/sentiment?days=14` — Sentiment by stablecoin
+- `GET /api/governance/metrics?days=7` — What risk metrics people are discussing
+
+### Content Engine
+- `GET /api/content/digest?days=7` — Ranked content opportunities
+- `POST /api/content/draft` — Generate a draft thread from a signal
+- `GET /api/content/arc/{day}` — 60-day content arc entry
+
+---
+
+## Troubleshooting
+
+**"Database connection failed"**
+→ Check your DATABASE_URL in Secrets. Make sure it includes `?sslmode=require` for Neon.
+
+**"No module named 'psycopg2'"**
+→ Run `pip install -r requirements.txt` in Shell.
+
+**Scores are empty**
+→ Wait 2-3 minutes for the first worker cycle. Check the console logs for API errors (usually means missing CoinGecko key).
+
+**Governance data empty**
+→ Run the import: `python import_governance.py --sql-file exports/governance_export.sql`
+
+**Port already in use**
+→ Stop the current run, wait 10 seconds, try again. Or set `API_PORT=3000` in Secrets.
