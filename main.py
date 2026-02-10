@@ -46,6 +46,28 @@ def run_worker_loop():
         time.sleep(WORKER_INTERVAL * 60)
 
 
+def run_migrations():
+    """Apply database migrations if not already applied."""
+    from app.database import fetch_one, run_migration
+    try:
+        result = fetch_one("SELECT 1 FROM migrations WHERE name = '001_initial_schema'")
+        if result:
+            logger.info("Migration 001_initial_schema already applied ✓")
+            return
+    except Exception:
+        logger.info("Migrations table not found — applying initial migration...")
+
+    migration_path = os.path.join(os.path.dirname(__file__), "migrations", "001_initial_schema.sql")
+    if os.path.exists(migration_path):
+        success = run_migration(migration_path)
+        if success:
+            logger.info("Initial migration applied successfully ✓")
+        else:
+            logger.error("Failed to apply initial migration")
+    else:
+        logger.warning(f"Migration file not found: {migration_path}")
+
+
 def main():
     # 1. Initialize database
     logger.info("Initializing database pool...")
@@ -55,7 +77,16 @@ def main():
     if db_status.get("status") == "healthy":
         logger.info("Database connected ✓")
     else:
-        logger.warning(f"Database connection issue — API will start but scores may be empty: {db_status}")
+        logger.info("Database tables may not exist yet — running migrations...")
+
+    # 1b. Auto-apply migrations
+    run_migrations()
+
+    db_status = db_health_check()
+    if db_status.get("status") == "healthy":
+        logger.info(f"Database ready: {db_status.get('stablecoin_count', 0)} stablecoins registered ✓")
+    else:
+        logger.warning(f"Database issue after migrations: {db_status}")
 
     # 2. Start worker thread
     worker_enabled = os.environ.get("WORKER_ENABLED", "true").lower() == "true"
