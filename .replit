@@ -15,7 +15,7 @@ run = ["python", "main.py"]
 [userenv]
 
 [userenv.shared]
-WORKER_ENABLED = "false"
+WORKER_ENABLED = "true"
 
 [workflows]
 runButton = "Project"
