@@ -18,7 +18,7 @@ ALCHEMY_API_KEY = os.environ.get("ALCHEMY_API_KEY", "")
 
 # API settings
 API_HOST = os.environ.get("API_HOST", "0.0.0.0")
-API_PORT = int(os.environ.get("API_PORT", "8000"))
+API_PORT = int(os.environ.get("API_PORT", "5000"))
 _cors_raw = os.environ.get("CORS_ORIGINS", "*")
 CORS_ORIGINS = ["*"] if _cors_raw.strip() == "*" else [s.strip() for s in _cors_raw.split(",")]
 

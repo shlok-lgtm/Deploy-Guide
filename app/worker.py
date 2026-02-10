@@ -184,7 +184,7 @@ def store_component_readings(components: list[dict]):
                 INSERT INTO component_readings
                     (stablecoin_id, component_id, category, raw_value, normalized_score, data_source, collected_at)
                 VALUES (%s, %s, %s, %s, %s, %s, NOW())
-                ON CONFLICT (stablecoin_id, component_id, (collected_at::date))
+                ON CONFLICT (stablecoin_id, component_id, immutable_date(collected_at))
                 DO UPDATE SET
                     raw_value = EXCLUDED.raw_value,
                     normalized_score = EXCLUDED.normalized_score,

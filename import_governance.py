@@ -59,7 +59,6 @@ def import_from_sql(sql_file: str):
         re.DOTALL
     )
     
-    conn = get_conn()
     imported = {}
     
     for match in copy_pattern.finditer(sql_content):
@@ -78,42 +77,44 @@ def import_from_sql(sql_file: str):
         
         logger.info(f"Importing {len(rows)} rows into {new_table}...")
         
-        # For documents table, remap column if needed
         col_list = columns.strip()
         
-        # Skip sii_component_id FK references that won't exist in new schema
+        cols_to_drop = []
         if new_table == 'gov_metric_mentions' and 'sii_component_id' in col_list:
-            # Remove sii_component_id column and corresponding data
+            cols_to_drop.append('sii_component_id')
+        if new_table == 'gov_documents' and 'author_reputation' in col_list:
+            cols_to_drop.append('author_reputation')
+        
+        if cols_to_drop:
             cols = [c.strip() for c in col_list.split(',')]
-            fk_idx = cols.index('sii_component_id')
-            cols.pop(fk_idx)
+            drop_indices = sorted([cols.index(c) for c in cols_to_drop if c in cols], reverse=True)
+            for idx in drop_indices:
+                cols.pop(idx)
             col_list = ', '.join(cols)
             
             new_rows = []
             for row in rows:
                 fields = row.split('\t')
-                if len(fields) > fk_idx:
-                    fields.pop(fk_idx)
+                for idx in drop_indices:
+                    if len(fields) > idx:
+                        fields.pop(idx)
                 new_rows.append('\t'.join(fields))
             rows = new_rows
         
         try:
-            with conn.cursor() as cur:
-                # Use COPY for speed
-                from io import StringIO
-                copy_sql = f"COPY {new_table} ({col_list}) FROM STDIN"
-                data_buffer = StringIO('\n'.join(rows))
-                cur.copy_expert(copy_sql, data_buffer)
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    from io import StringIO
+                    copy_sql = f"COPY {new_table} ({col_list}) FROM STDIN"
+                    data_buffer = StringIO('\n'.join(rows))
+                    cur.copy_expert(copy_sql, data_buffer)
             
-            conn.commit()
             imported[new_table] = len(rows)
             logger.info(f"  ✓ {new_table}: {len(rows)} rows")
             
         except Exception as e:
-            conn.rollback()
             logger.error(f"  ✗ {new_table} failed: {e}")
             
-            # Try row-by-row fallback
             logger.info(f"  Trying row-by-row insert for {new_table}...")
             success = 0
             cols = [c.strip() for c in col_list.split(',')]
@@ -122,22 +123,19 @@ def import_from_sql(sql_file: str):
             
             for row in rows:
                 fields = row.split('\t')
-                # Convert \N to None
                 fields = [None if f == '\\N' else f for f in fields]
                 if len(fields) != len(cols):
                     continue
                 try:
-                    with conn.cursor() as cur:
-                        cur.execute(insert_sql, fields)
-                    conn.commit()
+                    with get_conn() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute(insert_sql, fields)
                     success += 1
                 except Exception as e2:
-                    conn.rollback()
+                    pass
             
             imported[new_table] = success
             logger.info(f"  ✓ {new_table}: {success}/{len(rows)} rows (row-by-row)")
-    
-    conn.close()
     
     # Fix sequences
     fix_sequences()
@@ -149,23 +147,20 @@ def import_from_sql(sql_file: str):
 
 def fix_sequences():
     """Fix auto-increment sequences after COPY import."""
-    conn = get_conn()
     tables = ['gov_documents', 'gov_stablecoin_mentions', 'gov_metric_mentions',
               'gov_analysis_tags', 'gov_crawl_logs']
     
     for table in tables:
         try:
-            with conn.cursor() as cur:
-                cur.execute(f"""
-                    SELECT setval(pg_get_serial_sequence('{table}', 'id'),
-                                  COALESCE(MAX(id), 1))
-                    FROM {table}
-                """)
-            conn.commit()
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(f"""
+                        SELECT setval(pg_get_serial_sequence('{table}', 'id'),
+                                      COALESCE(MAX(id), 1))
+                        FROM {table}
+                    """)
         except Exception:
-            conn.rollback()
-    
-    conn.close()
+            pass
 
 
 if __name__ == "__main__":

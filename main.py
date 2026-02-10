@@ -51,11 +51,11 @@ def main():
     logger.info("Initializing database pool...")
     init_pool()
 
-    # Check connection
-    if db_health_check():
+    db_status = db_health_check()
+    if db_status.get("status") == "healthy":
         logger.info("Database connected ✓")
     else:
-        logger.warning("Database connection failed — API will start but scores may be empty")
+        logger.warning(f"Database connection issue — API will start but scores may be empty: {db_status}")
 
     # 2. Start worker thread
     worker_enabled = os.environ.get("WORKER_ENABLED", "true").lower() == "true"
@@ -67,7 +67,7 @@ def main():
         logger.info("Worker disabled (set WORKER_ENABLED=true to enable)")
 
     # 3. Start API server
-    port = int(os.environ.get("PORT", os.environ.get("API_PORT", "8000")))
+    port = int(os.environ.get("PORT", os.environ.get("API_PORT", "5000")))
     logger.info(f"Starting API on port {port}")
     
     uvicorn.run(

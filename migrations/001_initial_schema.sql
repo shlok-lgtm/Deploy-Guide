@@ -36,11 +36,17 @@ CREATE TABLE IF NOT EXISTS component_readings (
     data_source VARCHAR(100),                -- e.g. 'coingecko', 'defillama'
     is_stale BOOLEAN DEFAULT FALSE,
     error_message TEXT,
-    collected_at TIMESTAMPTZ DEFAULT NOW(),
-    
-    -- For dedup: only keep latest reading per component per day
-    UNIQUE(stablecoin_id, component_id, (collected_at::date))
+    collected_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Immutable date extraction for use in unique index
+CREATE OR REPLACE FUNCTION immutable_date(ts timestamptz) RETURNS date AS $$
+  SELECT (ts AT TIME ZONE 'UTC')::date;
+$$ LANGUAGE sql IMMUTABLE;
+
+-- Expression-based unique index for dedup (one reading per component per day)
+DROP INDEX IF EXISTS idx_readings_unique_per_day;
+CREATE UNIQUE INDEX idx_readings_unique_per_day ON component_readings(stablecoin_id, component_id, immutable_date(collected_at));
 
 CREATE INDEX IF NOT EXISTS idx_readings_stablecoin ON component_readings(stablecoin_id);
 CREATE INDEX IF NOT EXISTS idx_readings_component ON component_readings(component_id);

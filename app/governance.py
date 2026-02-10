@@ -206,17 +206,13 @@ CREATE INDEX IF NOT EXISTS idx_gov_metrics_cat ON gov_metric_mentions(metric_cat
 
 def apply_gov_migration():
     """Create governance tables if they don't exist."""
-    conn = get_conn()
     try:
-        with conn.cursor() as cur:
-            cur.execute(GOV_MIGRATION)
-        conn.commit()
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(GOV_MIGRATION)
         logger.info("Governance tables ready")
     except Exception as e:
-        conn.rollback()
         logger.error(f"Gov migration failed: {e}")
-    finally:
-        conn.close()
 
 
 # =============================================================================
@@ -506,64 +502,57 @@ def _assess_importance(context: str) -> str:
 
 def store_post(post: ForumPost) -> Optional[int]:
     """Store a forum post and its extractions. Returns doc ID or None if exists."""
-    conn = get_conn()
     try:
-        with conn.cursor() as cur:
-            # Check if exists
-            cur.execute(
-                "SELECT id FROM gov_documents WHERE source = %s AND source_id = %s",
-                (post.source, post.source_id),
-            )
-            row = cur.fetchone()
-            if row:
-                return None  # Already stored
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id FROM gov_documents WHERE source = %s AND source_id = %s",
+                    (post.source, post.source_id),
+                )
+                row = cur.fetchone()
+                if row:
+                    return None
 
-            # Insert document
-            cur.execute("""
-                INSERT INTO gov_documents
-                    (source, source_id, url, title, body, author,
-                     published_at, document_type, category, extra_data)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING id
-            """, (
-                post.source, post.source_id, post.url, post.title,
-                post.body, post.author, post.published_at,
-                post.document_type, post.category,
-                json.dumps({
-                    "reply_count": post.reply_count,
-                    "views": post.views,
-                    "tags": post.tags or [],
-                }),
-            ))
-            doc_id = cur.fetchone()[0]
-
-            # Extract and store entities
-            coin_mentions = extract_stablecoins(f"{post.title} {post.body}")
-            for m in coin_mentions:
                 cur.execute("""
-                    INSERT INTO gov_stablecoin_mentions
-                        (document_id, stablecoin, context, sentiment)
-                    VALUES (%s, %s, %s, %s)
-                """, (doc_id, m["stablecoin"], m["context"], m["sentiment"]))
+                    INSERT INTO gov_documents
+                        (source, source_id, url, title, body, author,
+                         published_at, document_type, category, extra_data)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (
+                    post.source, post.source_id, post.url, post.title,
+                    post.body, post.author, post.published_at,
+                    post.document_type, post.category,
+                    json.dumps({
+                        "reply_count": post.reply_count,
+                        "views": post.views,
+                        "tags": post.tags or [],
+                    }),
+                ))
+                doc_id = cur.fetchone()[0]
 
-            metric_mentions = extract_metrics(f"{post.title} {post.body}")
-            for m in metric_mentions:
-                cur.execute("""
-                    INSERT INTO gov_metric_mentions
-                        (document_id, metric_name, metric_category,
-                         raw_text, importance_signal)
-                    VALUES (%s, %s, %s, %s, %s)
-                """, (doc_id, m["metric_name"], m["metric_category"],
-                      m["raw_text"], m["importance_signal"]))
+                coin_mentions = extract_stablecoins(f"{post.title} {post.body}")
+                for m in coin_mentions:
+                    cur.execute("""
+                        INSERT INTO gov_stablecoin_mentions
+                            (document_id, stablecoin, context, sentiment)
+                        VALUES (%s, %s, %s, %s)
+                    """, (doc_id, m["stablecoin"], m["context"], m["sentiment"]))
 
-        conn.commit()
-        return doc_id
+                metric_mentions = extract_metrics(f"{post.title} {post.body}")
+                for m in metric_mentions:
+                    cur.execute("""
+                        INSERT INTO gov_metric_mentions
+                            (document_id, metric_name, metric_category,
+                             raw_text, importance_signal)
+                        VALUES (%s, %s, %s, %s, %s)
+                    """, (doc_id, m["metric_name"], m["metric_category"],
+                          m["raw_text"], m["importance_signal"]))
+
+            return doc_id
     except Exception as e:
-        conn.rollback()
         logger.error(f"Failed to store post {post.source_id}: {e}")
         return None
-    finally:
-        conn.close()
 
 
 # =============================================================================
@@ -572,138 +561,130 @@ def store_post(post: ForumPost) -> Optional[int]:
 
 def get_hot_debates(days: int = 7, limit: int = 10) -> list[dict]:
     """Find hot governance debates with stablecoin mentions."""
-    conn = get_conn()
     try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT
-                    d.id, d.title, d.source, d.url, d.published_at,
-                    d.document_type,
-                    COALESCE((d.extra_data->>'reply_count')::int, 0) as reply_count,
-                    COALESCE((d.extra_data->>'views')::int, 0) as views,
-                    array_agg(DISTINCT sm.stablecoin)
-                        FILTER (WHERE sm.stablecoin IS NOT NULL) as stablecoins,
-                    array_agg(DISTINCT sm.sentiment)
-                        FILTER (WHERE sm.sentiment IS NOT NULL) as sentiments,
-                    array_agg(DISTINCT mm.metric_category)
-                        FILTER (WHERE mm.metric_category IS NOT NULL) as metrics
-                FROM gov_documents d
-                LEFT JOIN gov_stablecoin_mentions sm ON d.id = sm.document_id
-                LEFT JOIN gov_metric_mentions mm ON d.id = mm.document_id
-                WHERE d.published_at > NOW() - INTERVAL '%s days'
-                GROUP BY d.id
-                HAVING COUNT(sm.id) > 0
-                ORDER BY
-                    COALESCE((d.extra_data->>'reply_count')::int, 0) DESC,
-                    COUNT(sm.id) DESC
-                LIMIT %s
-            """, (days, limit))
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT
+                        d.id, d.title, d.source, d.url, d.published_at,
+                        d.document_type,
+                        COALESCE((d.extra_data->>'reply_count')::int, 0) as reply_count,
+                        COALESCE((d.extra_data->>'views')::int, 0) as views,
+                        array_agg(DISTINCT sm.stablecoin)
+                            FILTER (WHERE sm.stablecoin IS NOT NULL) as stablecoins,
+                        array_agg(DISTINCT sm.sentiment)
+                            FILTER (WHERE sm.sentiment IS NOT NULL) as sentiments,
+                        array_agg(DISTINCT mm.metric_category)
+                            FILTER (WHERE mm.metric_category IS NOT NULL) as metrics
+                    FROM gov_documents d
+                    LEFT JOIN gov_stablecoin_mentions sm ON d.id = sm.document_id
+                    LEFT JOIN gov_metric_mentions mm ON d.id = mm.document_id
+                    WHERE d.published_at > NOW() - INTERVAL '%s days'
+                    GROUP BY d.id
+                    HAVING COUNT(sm.id) > 0
+                    ORDER BY
+                        COALESCE((d.extra_data->>'reply_count')::int, 0) DESC,
+                        COUNT(sm.id) DESC
+                    LIMIT %s
+                """, (days, limit))
 
-            cols = [c.name for c in cur.description]
-            return [dict(zip(cols, row)) for row in cur.fetchall()]
+                cols = [c.name for c in cur.description]
+                return [dict(zip(cols, row)) for row in cur.fetchall()]
     except Exception as e:
         logger.error(f"Hot debates query failed: {e}")
         return []
-    finally:
-        conn.close()
 
 
 def get_sentiment_trends(days: int = 14) -> list[dict]:
     """Get stablecoin sentiment trends over time."""
-    conn = get_conn()
     try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT
-                    sm.stablecoin,
-                    sm.sentiment,
-                    COUNT(*) as count,
-                    DATE_TRUNC('day', d.published_at)::date as day
-                FROM gov_stablecoin_mentions sm
-                JOIN gov_documents d ON sm.document_id = d.id
-                WHERE d.published_at > NOW() - INTERVAL '%s days'
-                GROUP BY sm.stablecoin, sm.sentiment,
-                         DATE_TRUNC('day', d.published_at)
-                ORDER BY day DESC
-            """, (days,))
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT
+                        sm.stablecoin,
+                        sm.sentiment,
+                        COUNT(*) as count,
+                        DATE_TRUNC('day', d.published_at)::date as day
+                    FROM gov_stablecoin_mentions sm
+                    JOIN gov_documents d ON sm.document_id = d.id
+                    WHERE d.published_at > NOW() - INTERVAL '%s days'
+                    GROUP BY sm.stablecoin, sm.sentiment,
+                             DATE_TRUNC('day', d.published_at)
+                    ORDER BY day DESC
+                """, (days,))
 
-            cols = [c.name for c in cur.description]
-            return [dict(zip(cols, row)) for row in cur.fetchall()]
+                cols = [c.name for c in cur.description]
+                return [dict(zip(cols, row)) for row in cur.fetchall()]
     except Exception as e:
         logger.error(f"Sentiment trends query failed: {e}")
         return []
-    finally:
-        conn.close()
 
 
 def get_metric_attention(days: int = 7) -> list[dict]:
     """What SII-relevant metrics are being discussed?"""
-    conn = get_conn()
     try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT
-                    mm.metric_category,
-                    mm.metric_name,
-                    mm.importance_signal,
-                    COUNT(*) as mention_count,
-                    array_agg(DISTINCT d.source) as sources
-                FROM gov_metric_mentions mm
-                JOIN gov_documents d ON mm.document_id = d.id
-                WHERE d.published_at > NOW() - INTERVAL '%s days'
-                GROUP BY mm.metric_category, mm.metric_name,
-                         mm.importance_signal
-                ORDER BY mention_count DESC
-                LIMIT 20
-            """, (days,))
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT
+                        mm.metric_category,
+                        mm.metric_name,
+                        mm.importance_signal,
+                        COUNT(*) as mention_count,
+                        array_agg(DISTINCT d.source) as sources
+                    FROM gov_metric_mentions mm
+                    JOIN gov_documents d ON mm.document_id = d.id
+                    WHERE d.published_at > NOW() - INTERVAL '%s days'
+                    GROUP BY mm.metric_category, mm.metric_name,
+                             mm.importance_signal
+                    ORDER BY mention_count DESC
+                    LIMIT 20
+                """, (days,))
 
-            cols = [c.name for c in cur.description]
-            return [dict(zip(cols, row)) for row in cur.fetchall()]
+                cols = [c.name for c in cur.description]
+                return [dict(zip(cols, row)) for row in cur.fetchall()]
     except Exception as e:
         logger.error(f"Metric attention query failed: {e}")
         return []
-    finally:
-        conn.close()
 
 
 def get_stats() -> dict:
     """Get governance intelligence stats."""
-    conn = get_conn()
     try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM gov_documents")
-            total_docs = cur.fetchone()[0]
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM gov_documents")
+                total_docs = cur.fetchone()[0]
 
-            cur.execute("""
-                SELECT source, COUNT(*) FROM gov_documents
-                GROUP BY source ORDER BY COUNT(*) DESC
-            """)
-            by_source = {r[0]: r[1] for r in cur.fetchall()}
+                cur.execute("""
+                    SELECT source, COUNT(*) FROM gov_documents
+                    GROUP BY source ORDER BY COUNT(*) DESC
+                """)
+                by_source = {r[0]: r[1] for r in cur.fetchall()}
 
-            cur.execute("SELECT COUNT(*) FROM gov_stablecoin_mentions")
-            total_mentions = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM gov_stablecoin_mentions")
+                total_mentions = cur.fetchone()[0]
 
-            cur.execute("SELECT COUNT(*) FROM gov_metric_mentions")
-            total_metrics = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM gov_metric_mentions")
+                total_metrics = cur.fetchone()[0]
 
-            cur.execute("""
-                SELECT stablecoin, COUNT(*) FROM gov_stablecoin_mentions
-                GROUP BY stablecoin ORDER BY COUNT(*) DESC LIMIT 10
-            """)
-            top_coins = {r[0]: r[1] for r in cur.fetchall()}
+                cur.execute("""
+                    SELECT stablecoin, COUNT(*) FROM gov_stablecoin_mentions
+                    GROUP BY stablecoin ORDER BY COUNT(*) DESC LIMIT 10
+                """)
+                top_coins = {r[0]: r[1] for r in cur.fetchall()}
 
-            return {
-                "total_documents": total_docs,
-                "documents_by_source": by_source,
-                "total_stablecoin_mentions": total_mentions,
-                "total_metric_mentions": total_metrics,
-                "top_stablecoins": top_coins,
-            }
+                return {
+                    "total_documents": total_docs,
+                    "documents_by_source": by_source,
+                    "total_stablecoin_mentions": total_mentions,
+                    "total_metric_mentions": total_metrics,
+                    "top_stablecoins": top_coins,
+                }
     except Exception as e:
         logger.error(f"Stats query failed: {e}")
         return {}
-    finally:
-        conn.close()
 
 
 # =============================================================================
@@ -737,21 +718,17 @@ def run_crawl(forums: list[str] = None, since_days: int = 30):
             logger.error(f"Crawl error for {forum_key}: {e}")
             error_count += 1
 
-        # Log crawl
-        conn = get_conn()
         try:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO gov_crawl_logs
-                        (source, completed_at, documents_new, errors, status)
-                    VALUES (%s, NOW(), %s, %s, %s)
-                """, (forum_key, new_count, error_count,
-                      'completed' if error_count == 0 else 'completed_with_errors'))
-            conn.commit()
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        INSERT INTO gov_crawl_logs
+                            (source, completed_at, documents_new, errors, status)
+                        VALUES (%s, NOW(), %s, %s, %s)
+                    """, (forum_key, new_count, error_count,
+                          'completed' if error_count == 0 else 'completed_with_errors'))
         except Exception:
-            conn.rollback()
-        finally:
-            conn.close()
+            pass
 
         total_new += new_count
         logger.info(f"Completed {forum_key}: {new_count} new documents")
