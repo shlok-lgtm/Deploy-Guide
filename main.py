@@ -48,24 +48,49 @@ def run_worker_loop():
 
 def run_migrations():
     """Apply database migrations if not already applied."""
-    from app.database import fetch_one, run_migration
+    from app.database import fetch_one, run_migration, get_conn
+
     try:
         result = fetch_one("SELECT 1 FROM migrations WHERE name = '001_initial_schema'")
         if result:
             logger.info("Migration 001_initial_schema already applied ✓")
+        else:
+            raise Exception("not applied")
+    except Exception:
+        logger.info("Applying initial migration...")
+        migration_path = os.path.join(os.path.dirname(__file__), "migrations", "001_initial_schema.sql")
+        if os.path.exists(migration_path):
+            success = run_migration(migration_path)
+            if success:
+                logger.info("Initial migration applied successfully ✓")
+            else:
+                logger.error("Failed to apply initial migration")
+                return
+        else:
+            logger.warning(f"Migration file not found: {migration_path}")
+            return
+
+    try:
+        result = fetch_one("SELECT 1 FROM migrations WHERE name = '002_import_governance'")
+        if result:
+            logger.info("Migration 002_import_governance already applied ✓")
             return
     except Exception:
-        logger.info("Migrations table not found — applying initial migration...")
+        pass
 
-    migration_path = os.path.join(os.path.dirname(__file__), "migrations", "001_initial_schema.sql")
-    if os.path.exists(migration_path):
-        success = run_migration(migration_path)
-        if success:
-            logger.info("Initial migration applied successfully ✓")
-        else:
-            logger.error("Failed to apply initial migration")
+    logger.info("Applying migration 002: import governance data...")
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "migration_002",
+        os.path.join(os.path.dirname(__file__), "migrations", "002_import_governance.py")
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    success = mod.run(get_conn)
+    if success:
+        logger.info("Migration 002_import_governance applied ✓")
     else:
-        logger.warning(f"Migration file not found: {migration_path}")
+        logger.warning("Migration 002_import_governance had issues")
 
 
 def main():
