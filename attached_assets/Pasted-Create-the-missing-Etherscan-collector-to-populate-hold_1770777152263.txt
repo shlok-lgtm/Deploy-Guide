@@ -1,0 +1,42 @@
+Create the missing Etherscan collector to populate holder distribution scores. This is a new file only — minimal changes to existing code.
+Step 1: Create app/collectors/etherscan.py
+This collector needs to fetch holder concentration data for each stablecoin. Use Etherscan API V2 format.
+Contract addresses for the 9 stablecoins (Ethereum mainnet):
+
+USDC: 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48
+USDT: 0xdAC17F958D2ee523a2206206994597C13D831ec7
+DAI: 0x6B175474E89094C44Da98b954EedeAC495271d0F
+FRAX: 0x853d955aCEf822Db058eb8505911ED77F175b99e
+PYUSD: 0x6c3ea9036406852006290770BEdFcAbA0e23A0e8
+USDe: 0x4c9EDD5852cd905f086C759E8383e09bff1E68B3
+TUSD: 0x0000000000085d4780B73119b644AE5ecd22b376
+USDD: 0x0C10bF8FcB7Bf5412187A595ab97a3609160b5c6
+FDUSD: 0xc5f0f7b66764F6ec8C8Dff7BA683102295E16409
+
+The collector should:
+
+Use os.environ.get("ETHERSCAN_API_KEY") for auth
+Call the Etherscan V2 token holder list endpoint for each contract
+Calculate three components:
+
+top_10_concentration: percentage of supply held by top 10 addresses (normalize: lower concentration = higher score)
+unique_holders: total unique holder count (normalize: more holders = higher score, log scale)
+exchange_concentration: percentage held by known exchange addresses (normalize: lower = higher score)
+
+
+Return components in the same format as the other collectors: [{"component_id": "...", "category": "holder_distribution", "raw_value": X, "normalized_score": Y, "source": "etherscan"}]
+Rate limit: 1 request per second (free tier allows 5/sec but be conservative)
+If the API call fails or the endpoint isn't available on this key tier, return empty list gracefully — don't crash the scoring cycle
+
+Known exchange addresses (label the big ones):
+
+Binance: 0x28C6c06298d514Db089934071355E5743bf21d60
+Coinbase: 0x503828976D22510aad0201ac7EC88293211D23Da
+Kraken: 0x2910543Af39abA0Cd09dBb2D50200b3E800A63D2
+
+Step 2: Wire it into the worker
+In app/worker.py, add a call to the Etherscan collector alongside the existing CoinGecko/DeFiLlama/Curve calls. The Etherscan data should be collected once per cycle (not per-coin if the endpoint returns all holders at once).
+Step 3: Test
+After creating the collector, run a single scoring cycle for USDC only and show me the distribution scores:
+bashcurl -s localhost:5000/api/scores/usdc | python3 -c "import sys,json; d=json.load(sys.stdin); print(json.dumps(d.get('categories',{}), indent=2))"
+IMPORTANT: Do not rewrite or restructure any existing collector files. Only create the new etherscan.py and add the minimal wiring in worker.py to call it.
