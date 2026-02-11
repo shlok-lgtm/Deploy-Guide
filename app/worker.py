@@ -11,6 +11,7 @@ Usage:
 """
 
 import asyncio
+import json
 import logging
 import sys
 import os
@@ -40,6 +41,7 @@ from app.collectors.offline import (
     collect_governance_components, collect_reserve_components,
     collect_network_components,
 )
+from app.collectors.etherscan import collect_holder_distribution
 
 logging.basicConfig(
     level=logging.INFO,
@@ -86,6 +88,7 @@ async def collect_all_components(
         safe_collect("market", collect_market_activity_components(client, cg_id, stablecoin_id)),
         safe_collect("defillama", collect_defillama_components(client, cg_id, stablecoin_id)),
         safe_collect("curve", collect_curve_components(client, stablecoin_id)),
+        safe_collect("etherscan", collect_holder_distribution(client, stablecoin_id)),
     )
     
     for result in results:
@@ -329,11 +332,13 @@ def store_provenance(components: list[dict]):
         return
     with get_cursor() as cur:
         for comp in components:
+            metadata = comp.get("metadata")
+            metadata_json = json.dumps(metadata) if metadata else None
             cur.execute("""
                 INSERT INTO data_provenance
                     (stablecoin_id, component_id, category, raw_value, normalized_score,
-                     data_source, recorded_at)
-                VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                     data_source, metadata, recorded_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
             """, (
                 comp.get("stablecoin_id"),
                 comp.get("component_id"),
@@ -341,6 +346,7 @@ def store_provenance(components: list[dict]):
                 comp.get("raw_value"),
                 comp.get("normalized_score"),
                 comp.get("data_source"),
+                metadata_json,
             ))
 
 
