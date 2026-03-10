@@ -1,0 +1,114 @@
+Design system to adopt:
+Replace the current dark theme entirely with a "regulatory disclosure document" aesthetic:
+css--paper:      #f5f2ec   /* warm off-white page background */
+--paper-warm: #f0ece3   /* slightly darker warm for hover/detail rows */
+--ink:        #0a0a0a   /* near-black for primary text and borders */
+--ink-mid:    #3a3a3a   /* secondary text */
+--ink-light:  #6a6a6a   /* tertiary text */
+--ink-faint:  #9a9a9a   /* captions */
+--rule-mid:   #c8c4bc   /* table row dividers */
+--rule-light: #e0ddd6   /* light separators */
+--accent:     #c0392b   /* rust/red for warnings and low scores */
+
+Font stack (import from Google Fonts):
+  IBM Plex Mono — all numbers, scores, metadata, monospaced labels
+  IBM Plex Sans — all prose, coin names, headers
+The page background is --paper. The document block sits inside a 3px solid --ink border with a 6px 6px 0 0 offset shadow (color #c8c4bc) to give it a printed-document feel.
+
+Page header block:
+A single connected block with three stacked sections, all sharing the same outer 1.5px solid --ink border:
+Section 1 — Title bar (top, cream background):
+
+Left: "Stablecoin Integrity Index" — IBM Plex Sans, 28px, alternating bold/regular weight
+Right: "FORM SII-001 · BASIS PROTOCOL" — IBM Plex Mono, 10px, --ink-faint, uppercase, tracked
+
+Below the title, a divider line, then a stats strip with 5 items separated by 1px solid --rule-mid vertical lines:
+10 STABLECOINS · 48 COMPONENTS · 6 DATA SOURCES · DETERMINISTIC METHODOLOGY · UPDATED HOURLY
+All in IBM Plex Mono, 10px, uppercase, --ink-light.
+Section 2 — Formula bar (no top border, shares outer border):
+
+Left: SII = 0.30×Peg + 0.25×Liq + 0.20×Struct + 0.15×Flow + 0.10×Dist in IBM Plex Mono 11px
+Right: Methodology v1.0 · stable since Jan 2026 + current timestamp in IBM Plex Mono 10px uppercase
+No bottom border on this section — it flows directly into Section 3
+
+Section 3 — On-chain commit banner (light sage green tint, closes the block):
+
+Background: #f0f7f2, outer border continues as 1.5px solid --ink, top internal divider 1px solid #b8d9c4
+Left: animated 6px green dot (#2d7a3a) + Scores committed to Ethereum mainnet · Block #[BLOCK] · Merkle root: 0x[HASH] in IBM Plex Mono 10.5px, color #2a5c38
+Right: Methodology v1.0 · public · immutable · verify on-chain ↗ in IBM Plex Mono 10px, #4a8060
+After this section, 32px gap before the table
+
+
+Table structure:
+Remove the current columns: SII score (as separate column), Grade badge, Price, Status.
+New column order (left to right):
+# · Stablecoin · SII Grade · Trend · Peg · Liq · Flow · Dist · Str
+Name cell (Stablecoin column):
+
+Top line: [SYMBOL] in IBM Plex Mono 15px bold --ink + a 1px solid --rule-mid vertical hairline (1px wide, 12px tall) with 10px margin each side + [SCORE] in IBM Plex Mono 12px weight-500 --ink-light
+These three elements sit on one flex row, baseline-aligned
+Below: issuer name (e.g. "Circle") in IBM Plex Sans 11px --ink-faint
+Example: USDC  |  88.8 on top, Circle below
+
+Grade cell (SII Grade column):
+
+Left-aligned, padding 8px 16px
+Single large grade letter: IBM Plex Sans 38px bold, left-aligned
+Color: --ink for A grades, --ink-mid for B+/B, --accent (rust) for B− and below
+No score number in this cell — score already lives in the name cell
+
+Trend cell (immediately after grade):
+
+56×28px canvas sparkline showing 21 data points of SII history
+Green line (#2d6b45) if trending up, rust line (--accent) if trending down, gray if flat
+Delta number below sparkline: +4.7 in green or −5.1 in rust, IBM Plex Mono 10px bold
+
+Sub-score cells (Peg, Liq, Flow, Dist, Str):
+
+Number in IBM Plex Mono 12px. Color: --ink bold if ≥85, --ink-mid if 65–84, --accent if <65
+Below the number: a 3px tall inline bar, full cell width minus 8px padding each side
+Bar floor is 50 (not 0) — so a score of 75 fills 50% of the bar, 100 fills 100%, 50 fills 0%
+Bar color matches text color tier: dark/black for high, gray for mid, rust for low
+
+Row behavior:
+
+Every data row has 1px dotted --rule-mid bottom border and cursor: pointer
+On hover: background shifts to --paper-warm, and a detail strip appears below the row
+Detail strip shows: Price · Mkt Cap · Vol 24h · Reserve Type · Attestation · Chains · MiCA status
+All detail items in IBM Plex Mono 10–11px
+
+Tier separator (between A-tier and B-tier rows):
+
+Replace the current thick separator with a <tr> that is just 6px tall, transparent background, no borders — whitespace only
+
+
+Table header:
+
+3px solid --ink bottom border
+All header labels: IBM Plex Mono 9px uppercase tracked, --ink-light
+Background: --paper
+
+
+Footnote section (below table):
+
+2.5px solid --ink top border, 1.5px solid --rule-mid outer border
+Three columns: Component Weights (30/25/20/15/10%) · Grade Scale legend · Disclosure statement
+All in IBM Plex Mono/Sans 10–11px
+
+
+Remove entirely:
+
+The dark background
+The colored grade badge boxes (A/B/C in colored squares)
+The SII score as a standalone column
+The Price column from the main table (move to hover detail strip)
+The Status column from the main table (move to hover detail strip)
+Any gradient or glow effects
+
+
+Do not change:
+
+Any backend API endpoints or data fetching logic
+The scoring formula or component calculations
+The list of stablecoins being tracked
+Any database or cron job logic
