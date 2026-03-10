@@ -51,6 +51,16 @@ const fmtB = (n) => {
   return `$${n.toLocaleString()}`;
 };
 
+function useIsMobile() {
+  const [mobile, setMobile] = useState(window.innerWidth < 700);
+  useEffect(() => {
+    const h = () => setMobile(window.innerWidth < 700);
+    window.addEventListener("resize", h);
+    return () => window.removeEventListener("resize", h);
+  }, []);
+  return mobile;
+}
+
 function useScores() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -249,7 +259,7 @@ function CategoryBar({ label, score, weight, useBlue }) {
   );
 }
 
-function PageHeader({ ts }) {
+function PageHeader({ ts, mobile }) {
   const [now, setNow] = useState(new Date());
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 60000);
@@ -268,25 +278,25 @@ function PageHeader({ ts }) {
 
   return (
     <div style={{ border: `1.5px solid ${T.ink}`, marginBottom: 0 }}>
-      <div style={{ padding: "18px 24px 0" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-          <h1 style={{ margin: 0, fontSize: 28, fontFamily: T.sans, color: T.ink, fontWeight: 400, letterSpacing: -0.3 }}>
+      <div style={{ padding: mobile ? "14px 12px 0" : "18px 24px 0" }}>
+        <div style={{ display: "flex", flexDirection: mobile ? "column" : "row", justifyContent: "space-between", alignItems: mobile ? "flex-start" : "baseline", gap: mobile ? 4 : 0 }}>
+          <h1 style={{ margin: 0, fontSize: mobile ? 20 : 28, fontFamily: T.sans, color: T.ink, fontWeight: 400, letterSpacing: -0.3 }}>
             <span style={{ fontWeight: 700 }}>Stablecoin</span> Integrity <span style={{ fontWeight: 700 }}>Index</span>
           </h1>
-          <span style={{ fontFamily: T.mono, fontSize: 10, color: T.inkFaint, textTransform: "uppercase", letterSpacing: 2 }}>
+          <span style={{ fontFamily: T.mono, fontSize: mobile ? 9 : 10, color: T.inkFaint, textTransform: "uppercase", letterSpacing: 2 }}>
             FORM SII-001 · BASIS PROTOCOL
           </span>
         </div>
 
         <div style={{ height: 1, background: T.ruleMid, margin: "12px 0" }} />
 
-        <div style={{ display: "flex", alignItems: "center", gap: 0, paddingBottom: 14 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: mobile ? 4 : 0, paddingBottom: 14 }}>
           {stats.map((s, i) => (
             <div key={i} style={{ display: "flex", alignItems: "center" }}>
-              <span style={{ fontFamily: T.mono, fontSize: 10, color: T.inkLight, textTransform: "uppercase", letterSpacing: 1.5, padding: "0 12px" }}>
+              <span style={{ fontFamily: T.mono, fontSize: mobile ? 8 : 10, color: T.inkLight, textTransform: "uppercase", letterSpacing: mobile ? 0.5 : 1.5, padding: mobile ? "2px 6px" : "0 12px" }}>
                 {s}
               </span>
-              {i < stats.length - 1 && (
+              {!mobile && i < stats.length - 1 && (
                 <div style={{ width: 1, height: 12, background: T.ruleMid }} />
               )}
             </div>
@@ -294,32 +304,35 @@ function PageHeader({ ts }) {
         </div>
       </div>
 
-      <div style={{ borderTop: `1px solid ${T.ruleMid}`, padding: "10px 24px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <span style={{ fontFamily: T.mono, fontSize: 11, color: T.ink }}>
+      <div style={{ borderTop: `1px solid ${T.ruleMid}`, padding: mobile ? "8px 12px" : "10px 24px", display: "flex", flexDirection: mobile ? "column" : "row", justifyContent: "space-between", alignItems: mobile ? "flex-start" : "center", gap: mobile ? 4 : 0 }}>
+        <span style={{ fontFamily: T.mono, fontSize: mobile ? 9 : 11, color: T.ink }}>
           SII = 0.30×Peg + 0.25×Liq + 0.20×Struct + 0.15×Flow + 0.10×Dist
         </span>
-        <span style={{ fontFamily: T.mono, fontSize: 10, color: T.inkLight, textTransform: "uppercase", letterSpacing: 1 }}>
-          Methodology v1.0 · stable since Jan 2026 · {timestamp}
+        <span style={{ fontFamily: T.mono, fontSize: mobile ? 8 : 10, color: T.inkLight, textTransform: "uppercase", letterSpacing: 1 }}>
+          Methodology v1.0 · {timestamp}
         </span>
       </div>
 
-      <div style={{ borderTop: `1px solid #b8d9c4`, background: "#f0f7f2", padding: "10px 24px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div style={{ borderTop: `1px solid #b8d9c4`, background: "#f0f7f2", padding: mobile ? "8px 12px" : "10px 24px", display: "flex", flexDirection: mobile ? "column" : "row", justifyContent: "space-between", alignItems: mobile ? "flex-start" : "center", gap: mobile ? 4 : 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#2d7a3a", animation: "pulse 2s ease-in-out infinite" }} />
-          <span style={{ fontFamily: T.mono, fontSize: 10.5, color: "#2a5c38" }}>
-            Scores committed to Ethereum mainnet · Block #21847293 · Merkle root: 0x7f3a...c4e1
+          <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#2d7a3a", flexShrink: 0, animation: "pulse 2s ease-in-out infinite" }} />
+          <span style={{ fontFamily: T.mono, fontSize: mobile ? 9 : 10.5, color: "#2a5c38" }}>
+            {mobile ? "On-chain · Block #21847293" : "Scores committed to Ethereum mainnet · Block #21847293 · Merkle root: 0x7f3a...c4e1"}
           </span>
         </div>
-        <span style={{ fontFamily: T.mono, fontSize: 10, color: "#4a8060" }}>
-          Methodology v1.0 · public · immutable · verify on-chain ↗
-        </span>
+        {!mobile && (
+          <span style={{ fontFamily: T.mono, fontSize: 10, color: "#4a8060" }}>
+            Methodology v1.0 · public · immutable · verify on-chain ↗
+          </span>
+        )}
       </div>
     </div>
   );
 }
 
-function RankingsView({ scores, loading, onSelect, ts }) {
+function RankingsView({ scores, loading, onSelect, ts, mobile }) {
   const [hoveredRow, setHoveredRow] = useState(null);
+  const [tappedRow, setTappedRow] = useState(null);
   const hoverTimeout = useRef(null);
 
   const coinIds = scores ? scores.map((c) => c.id) : [];
@@ -356,7 +369,81 @@ function RankingsView({ scores, loading, onSelect, ts }) {
 
   const cols = "40px 1fr 80px 72px 56px 56px 56px 56px 56px";
 
-  const renderRow = (coin, i, globalIdx) => {
+  const renderMobileRow = (coin, globalIdx) => {
+    const cats = coin.categories || {};
+    const pegScore = typeof cats.peg === "object" ? cats.peg?.score : cats.peg;
+    const liqScore = typeof cats.liquidity === "object" ? cats.liquidity?.score : cats.liquidity;
+    const flowScore = typeof cats.flows === "object" ? cats.flows?.score : cats.flows;
+    const distScore = typeof cats.distribution === "object" ? cats.distribution?.score : cats.distribution;
+    const strScore = typeof cats.structural === "object" ? cats.structural?.score : cats.structural;
+    const isExpanded = tappedRow === coin.id;
+    const mica = MICA_STATUS[coin.id] || "—";
+    const reserveType = RESERVE_TYPE[coin.id] || "—";
+
+    return (
+      <div key={coin.id} style={{ borderBottom: `1px dotted ${T.ruleMid}` }}>
+        <div
+          onClick={() => setTappedRow(isExpanded ? null : coin.id)}
+          style={{ padding: "12px 12px", cursor: "pointer", background: isExpanded ? T.paperWarm : "transparent" }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+            <span style={{ fontFamily: T.mono, fontSize: 11, color: T.inkFaint, minWidth: 20 }}>{globalIdx}</span>
+            <span style={{ fontFamily: T.mono, fontSize: 15, fontWeight: 700, color: T.ink }}>{coin.symbol}</span>
+            <div style={{ width: 1, height: 12, background: T.ruleMid }} />
+            <span style={{ fontFamily: T.mono, fontSize: 12, fontWeight: 500, color: T.inkLight }}>{fmt(coin.score, 1)}</span>
+            <span style={{ fontFamily: T.sans, fontSize: 28, fontWeight: 700, color: gradeColor(coin.grade), marginLeft: "auto", lineHeight: 1 }}>
+              {coin.grade || "—"}
+            </span>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, paddingLeft: 30 }}>
+            <span style={{ fontFamily: T.sans, fontSize: 11, color: T.inkFaint }}>{coin.issuer}</span>
+            <span style={{ fontFamily: T.mono, fontSize: 9, color: T.inkFaint }}>·</span>
+            <span style={{ fontFamily: T.mono, fontSize: 9, color: T.inkFaint }}>{coin.price != null ? `$${coin.price.toFixed(4)}` : ""}</span>
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 8, paddingLeft: 30 }}>
+            {[
+              { label: "Peg", score: pegScore },
+              { label: "Liq", score: liqScore },
+              { label: "Flow", score: flowScore },
+              { label: "Dist", score: distScore },
+              { label: "Str", score: strScore },
+            ].map((item) => (
+              <div key={item.label} style={{ flex: 1 }}>
+                <div style={{ fontFamily: T.mono, fontSize: 8, color: T.inkFaint, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 2 }}>{item.label}</div>
+                <div style={{ fontFamily: T.mono, fontSize: 11, color: subScoreColor(item.score), fontWeight: item.score >= 85 ? 700 : 400 }}>
+                  {item.score != null ? fmt(item.score, 0) : "—"}
+                </div>
+                <SubScoreBar score={item.score} />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {isExpanded && (
+          <div style={{ padding: "8px 12px 12px 42px", background: T.paperWarm, display: "flex", flexDirection: "column", gap: 4 }}>
+            {[
+              { label: "Mkt Cap", value: fmtB(coin.market_cap) },
+              { label: "Vol 24h", value: fmtB(coin.volume_24h) },
+              { label: "Reserve Type", value: reserveType },
+              { label: "MiCA", value: mica },
+            ].map((item, idx) => (
+              <span key={idx} style={{ fontFamily: T.mono, fontSize: 10, color: T.inkMid }}>
+                <span style={{ color: T.inkFaint }}>{item.label}: </span>{item.value}
+              </span>
+            ))}
+            <span
+              onClick={(e) => { e.stopPropagation(); onSelect(coin.id); }}
+              style={{ fontFamily: T.mono, fontSize: 10.5, color: T.inkMid, cursor: "pointer", textDecoration: "underline", marginTop: 4 }}
+            >
+              Full detail →
+            </span>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderDesktopRow = (coin, i, globalIdx) => {
     const cats = coin.categories || {};
     const pegScore = typeof cats.peg === "object" ? cats.peg?.score : cats.peg;
     const liqScore = typeof cats.liquidity === "object" ? cats.liquidity?.score : cats.liquidity;
@@ -478,46 +565,59 @@ function RankingsView({ scores, loading, onSelect, ts }) {
 
   return (
     <div>
-      <PageHeader ts={ts} />
+      <PageHeader ts={ts} mobile={mobile} />
 
-      <div style={{ height: 32 }} />
+      <div style={{ height: mobile ? 16 : 32 }} />
 
-      <div>
-        <div style={{
-          display: "grid",
-          gridTemplateColumns: cols,
-          padding: "8px 16px",
-          background: T.paper,
-          borderBottom: `3px solid ${T.ink}`,
-          fontFamily: T.mono, fontSize: 9, textTransform: "uppercase",
-          letterSpacing: 1.5, color: T.inkLight,
-        }}>
-          <span>#</span>
-          <span>Stablecoin</span>
-          <span>SII Grade</span>
-          <span style={{ textAlign: "center" }}>Trend</span>
-          <span>Peg</span>
-          <span>Liq</span>
-          <span>Flow</span>
-          <span>Dist</span>
-          <span>Str</span>
+      {mobile ? (
+        <div>
+          <div style={{ borderBottom: `3px solid ${T.ink}`, padding: "8px 12px", fontFamily: T.mono, fontSize: 9, textTransform: "uppercase", letterSpacing: 1.5, color: T.inkLight }}>
+            Rankings · {sorted.length} stablecoins
+          </div>
+          {aTier.map((coin) => renderMobileRow(coin, globalIdx++))}
+          {aTier.length > 0 && rest.length > 0 && (
+            <div style={{ height: 6, background: "transparent" }} />
+          )}
+          {rest.map((coin) => renderMobileRow(coin, globalIdx++))}
         </div>
+      ) : (
+        <div>
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: cols,
+            padding: "8px 16px",
+            background: T.paper,
+            borderBottom: `3px solid ${T.ink}`,
+            fontFamily: T.mono, fontSize: 9, textTransform: "uppercase",
+            letterSpacing: 1.5, color: T.inkLight,
+          }}>
+            <span>#</span>
+            <span>Stablecoin</span>
+            <span>SII Grade</span>
+            <span style={{ textAlign: "center" }}>Trend</span>
+            <span>Peg</span>
+            <span>Liq</span>
+            <span>Flow</span>
+            <span>Dist</span>
+            <span>Str</span>
+          </div>
 
-        {aTier.map((coin, i) => renderRow(coin, i, globalIdx++))}
+          {aTier.map((coin, i) => renderDesktopRow(coin, i, globalIdx++))}
 
-        {aTier.length > 0 && rest.length > 0 && (
-          <div style={{ height: 6, background: "transparent" }} />
-        )}
+          {aTier.length > 0 && rest.length > 0 && (
+            <div style={{ height: 6, background: "transparent" }} />
+          )}
 
-        {rest.map((coin, i) => renderRow(coin, i, globalIdx++))}
-      </div>
+          {rest.map((coin, i) => renderDesktopRow(coin, i, globalIdx++))}
+        </div>
+      )}
 
-      <Footnotes />
+      <Footnotes mobile={mobile} />
     </div>
   );
 }
 
-function Footnotes() {
+function Footnotes({ mobile }) {
   return (
     <div style={{
       borderTop: `2.5px solid ${T.ink}`,
@@ -525,10 +625,10 @@ function Footnotes() {
       borderTopWidth: 2.5,
       borderTopColor: T.ink,
       marginTop: 24,
-      padding: "16px 24px",
+      padding: mobile ? "12px 12px" : "16px 24px",
       display: "grid",
-      gridTemplateColumns: "1fr 1fr 1fr",
-      gap: 24,
+      gridTemplateColumns: mobile ? "1fr" : "1fr 1fr 1fr",
+      gap: mobile ? 16 : 24,
     }}>
       <div>
         <div style={{ fontFamily: T.mono, fontSize: 9, textTransform: "uppercase", letterSpacing: 1.5, color: T.inkLight, marginBottom: 8 }}>
@@ -572,7 +672,7 @@ function Footnotes() {
   );
 }
 
-function DetailView({ coinId, onBack }) {
+function DetailView({ coinId, onBack, mobile }) {
   const { data: coin, loading: detailLoading } = useCoinDetail(coinId);
   const { data: history, loading: histLoading } = useCoinHistory(coinId, 90);
 
@@ -618,24 +718,24 @@ function DetailView({ coinId, onBack }) {
         ← Back to Rankings
       </button>
 
-      <div style={{ display: "flex", alignItems: "flex-start", gap: 20, marginBottom: 32 }}>
+      <div style={{ display: "flex", flexDirection: mobile ? "column" : "row", alignItems: mobile ? "flex-start" : "flex-start", gap: mobile ? 12 : 20, marginBottom: mobile ? 20 : 32 }}>
         <div style={{ flex: 1 }}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 14 }}>
-            <h1 style={{ margin: 0, fontSize: 26, fontWeight: 600, color: T.ink, fontFamily: T.sans, letterSpacing: -0.5 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: mobile ? 8 : 14, flexWrap: "wrap" }}>
+            <h1 style={{ margin: 0, fontSize: mobile ? 20 : 26, fontWeight: 600, color: T.ink, fontFamily: T.sans, letterSpacing: -0.5 }}>
               {coin.name}
             </h1>
-            <span style={{ fontSize: 14, color: T.inkFaint, fontFamily: T.mono }}>{coin.symbol}</span>
-            <span style={{ fontFamily: T.sans, fontSize: 20, fontWeight: 700, color: gradeColor(coin.grade) }}>
+            <span style={{ fontSize: mobile ? 12 : 14, color: T.inkFaint, fontFamily: T.mono }}>{coin.symbol}</span>
+            <span style={{ fontFamily: T.sans, fontSize: mobile ? 16 : 20, fontWeight: 700, color: gradeColor(coin.grade) }}>
               {coin.grade}
             </span>
           </div>
-          <div style={{ fontSize: 12, color: T.inkLight, marginTop: 6, fontFamily: T.sans }}>
-            Issued by {coin.issuer} · {coin.component_count || "—"} components measured · {RESERVE_TYPE[coin.id] || "—"} · MiCA: {MICA_STATUS[coin.id] || "—"}
+          <div style={{ fontSize: mobile ? 10 : 12, color: T.inkLight, marginTop: 6, fontFamily: T.sans, lineHeight: 1.5 }}>
+            Issued by {coin.issuer} · {coin.component_count || "—"} components · {RESERVE_TYPE[coin.id] || "—"} · MiCA: {MICA_STATUS[coin.id] || "—"}
           </div>
         </div>
 
-        <div style={{ textAlign: "right" }}>
-          <span style={{ fontFamily: T.mono, fontSize: 28, fontWeight: 700, color: T.ink }}>{fmt(coin.score, 1)}</span>
+        <div style={{ textAlign: mobile ? "left" : "right" }}>
+          <span style={{ fontFamily: T.mono, fontSize: mobile ? 22 : 28, fontWeight: 700, color: T.ink }}>{fmt(coin.score, 1)}</span>
           <div style={{ fontSize: 11, color: T.inkFaint, fontFamily: T.mono, marginTop: 4 }}>
             ${coin.price?.toFixed(4)} · MCap {fmtB(coin.market_cap)}
           </div>
@@ -649,8 +749,8 @@ function DetailView({ coinId, onBack }) {
         <ScoreChart history={history} />
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 }}>
-        <div style={{ border: `1px solid ${T.ruleMid}`, padding: "16px 20px" }}>
+      <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr" : "1fr 1fr", gap: 16, marginBottom: 20 }}>
+        <div style={{ border: `1px solid ${T.ruleMid}`, padding: mobile ? "12px" : "16px 20px" }}>
           <div style={{ fontSize: 10, fontWeight: 600, color: T.inkLight, textTransform: "uppercase", letterSpacing: 1.5, marginBottom: 16, fontFamily: T.mono }}>
             Category Scores
           </div>
@@ -661,7 +761,7 @@ function DetailView({ coinId, onBack }) {
           <CategoryBar label="Structural Risk" score={str.score} weight={str.weight || 0.20} />
         </div>
 
-        <div style={{ border: `1px solid ${T.ruleMid}`, padding: "16px 20px" }}>
+        <div style={{ border: `1px solid ${T.ruleMid}`, padding: mobile ? "12px" : "16px 20px" }}>
           <div style={{ fontSize: 10, fontWeight: 600, color: T.inkLight, textTransform: "uppercase", letterSpacing: 1.5, marginBottom: 16, fontFamily: T.mono }}>
             Structural Breakdown
           </div>
@@ -732,9 +832,9 @@ function DetailView({ coinId, onBack }) {
   );
 }
 
-function MethodologyView() {
+function MethodologyView({ mobile }) {
   return (
-    <div style={{ padding: "24px 0 64px", maxWidth: 780 }}>
+    <div style={{ padding: mobile ? "16px 0 32px" : "24px 0 64px", maxWidth: 780 }}>
       <h1 style={{ margin: "0 0 8px", fontSize: 22, fontWeight: 600, color: T.ink, fontFamily: T.sans, letterSpacing: -0.3 }}>
         Methodology
       </h1>
@@ -800,7 +900,7 @@ function MethodologyView() {
           <div style={{ fontSize: 10, fontWeight: 600, color: T.inkLight, textTransform: "uppercase", letterSpacing: 1.5, marginBottom: 14, fontFamily: T.mono }}>
             Grade Scale
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 6 }}>
+          <div style={{ display: "grid", gridTemplateColumns: mobile ? "repeat(3, 1fr)" : "repeat(6, 1fr)", gap: 6 }}>
             {[
               { grade: "A+", range: "90–100" }, { grade: "A", range: "85–90" }, { grade: "A-", range: "80–85" },
               { grade: "B+", range: "75–80" }, { grade: "B", range: "70–75" }, { grade: "B-", range: "65–70" },
@@ -876,6 +976,7 @@ export default function App() {
   const [view, setView] = useState("rankings");
   const [selectedCoin, setSelectedCoin] = useState(null);
   const { data: scores, loading, error, ts } = useScores();
+  const mobile = useIsMobile();
 
   const handleSelect = useCallback((coinId) => {
     setSelectedCoin(coinId);
@@ -900,7 +1001,7 @@ export default function App() {
         @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
         * { box-sizing: border-box; margin: 0; padding: 0; }
         html { background: ${T.paper}; }
-        body { background: ${T.paper}; }
+        body { background: ${T.paper}; overflow-x: hidden; }
         ::-webkit-scrollbar { width: 5px; }
         ::-webkit-scrollbar-track { background: ${T.paper}; }
         ::-webkit-scrollbar-thumb { background: ${T.ruleMid}; border-radius: 3px; }
@@ -911,15 +1012,14 @@ export default function App() {
       `}</style>
 
       <div style={{
-        maxWidth: 1100, margin: "0 auto", padding: "32px 24px 0",
+        maxWidth: 1100, margin: "0 auto", padding: mobile ? "8px 6px 0" : "32px 24px 0",
       }}>
         <div style={{
-          border: `3px solid ${T.ink}`,
-          boxShadow: `6px 6px 0 0 ${T.ruleMid}`,
+          border: `${mobile ? 2 : 3}px solid ${T.ink}`,
+          boxShadow: mobile ? "none" : `6px 6px 0 0 ${T.ruleMid}`,
           background: T.paper,
-          padding: "0 0 0",
         }}>
-          <div style={{ padding: "12px 24px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ padding: mobile ? "10px 12px" : "12px 24px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <nav style={{ display: "flex", gap: 16 }}>
               {[
                 { id: "rankings", label: "Rankings" },
@@ -945,22 +1045,22 @@ export default function App() {
 
           <div style={{ borderTop: `1px solid ${T.ruleLight}` }} />
 
-          <div style={{ padding: "0 24px 24px" }}>
+          <div style={{ padding: mobile ? "0 8px 12px" : "0 24px 24px" }}>
             <main style={{ animation: "fadeIn 0.3s ease" }}>
               {view === "rankings" && (
-                <RankingsView scores={scores} loading={loading} onSelect={handleSelect} ts={ts} />
+                <RankingsView scores={scores} loading={loading} onSelect={handleSelect} ts={ts} mobile={mobile} />
               )}
               {view === "detail" && selectedCoin && (
-                <DetailView coinId={selectedCoin} onBack={handleBack} />
+                <DetailView coinId={selectedCoin} onBack={handleBack} mobile={mobile} />
               )}
-              {view === "methodology" && <MethodologyView />}
+              {view === "methodology" && <MethodologyView mobile={mobile} />}
             </main>
           </div>
 
           <Footer />
         </div>
 
-        <div style={{ height: 32 }} />
+        <div style={{ height: mobile ? 16 : 32 }} />
       </div>
     </div>
   );
