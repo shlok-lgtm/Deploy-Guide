@@ -1,0 +1,67 @@
+## Task: Add USD1 (World Liberty Financial) as the 10th stablecoin in the SII scoring system
+
+### Context
+USD1 is a fiat-backed stablecoin issued by World Liberty Financial (Trump-affiliated). It launched March 2025 and has grown to ~$3.4B market cap — the fastest-growing stablecoin in history. It is backed by U.S. cash, short-term U.S. Treasury securities, and cash equivalents. Custodian is BitGo Trust Company. Portfolio managed by Fidelity Investments. Monthly attestation reports published. Applied for OCC national trust bank charter January 2026. Available on Ethereum, BNB Chain, Solana, and Tron.
+
+### Key Details
+- **Token name:** World Liberty Financial USD
+- **Symbol:** USD1
+- **Contract address (Ethereum):** 0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d
+- **Contract address (BSC):** 0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d (same address)
+- **Also on:** Solana, Tron
+- **CoinGecko ID:** Look up "usd1-world-liberty-financial" or find via search — it IS listed on CoinGecko
+- **Peg:** 1:1 USD
+- **Reserve backing:** Cash + U.S. government money market funds + short-term Treasuries
+- **Custodian:** BitGo Trust Company (South Dakota)
+- **Auditor/Attestation:** Monthly reserve reports published on worldlibertyfinancial.com
+- **Issuer jurisdiction:** United States (Delaware entity, applied for OCC national trust charter)
+- **Notable:** Binance converted Binance-Peg BUSD collateral to USD1 at 1:1. Trading pairs BNB/USD1, ETH/USD1, SOL/USD1 on Binance.
+
+### What to do
+
+1. **Add USD1 to the stablecoin configuration/registry** alongside the existing 9 stablecoins (USDC, USDT, DAI/USDS, FRAX, TUSD, FDUSD, PYUSD, LUSD, USDe — or whatever the current 9 are). Use the same data structure and config pattern as the existing stablecoins.
+
+2. **Data source integration — replicate what works for other stablecoins:**
+   - **CoinGecko:** Price, market cap, 24h volume, price history (use the CoinGecko Pro API with the existing API key)
+   - **DeFiLlama:** TVL in DeFi protocols, DEX liquidity pools
+   - **Etherscan:** On-chain supply, holder count, transfer activity, top holders, contract verification status (use existing Etherscan API key with contract address above)
+   - **DEX data:** Check Uniswap (Ethereum) and PancakeSwap (BSC) for pool depth and slippage data
+   - **Curve:** USD1 may not have Curve pools yet — handle gracefully with null/N/A rather than erroring
+
+3. **Scoring — apply the same SII formula:**
+   - Peg Stability (30%): Current deviation, 24h max deviation, 7d std dev, 30d stability
+   - Liquidity (25%): Market cap, DEX TVL, trading volume, volume/mcap ratio, slippage
+   - Flows (15%): Mint/burn from Etherscan transfer events to/from treasury/mint address
+   - Distribution (10%): Top holder concentration, unique holders, exchange vs DeFi split
+   - Smart Contract (10%): Contract verified status, upgrade proxy pattern (it IS a TransparentUpgradeableProxy — flag this), audit status
+   - Network/Oracle (10%): Multi-chain deployment count, bridge availability
+
+4. **USD1-specific considerations to handle:**
+   - It uses a TransparentUpgradeableProxy pattern — this should factor into the smart contract risk component (upgradeable = higher risk score on that dimension, same as you'd handle any proxy)
+   - It's relatively new (launched March 2025) — some historical components (30d stability, historical depeg events) will have limited data. Handle gracefully — use available history, don't penalize for short history but don't award credit for untested resilience either
+   - Multi-chain: Supply is split across Ethereum, BSC, Solana, Tron. If you're only tracking Ethereum supply via Etherscan, note that this is partial. CoinGecko market cap should reflect total cross-chain supply.
+   - Attestation data: Reserve reports at worldlibertyfinancial.com/usd1 — for now, set attestation recency and granularity as manual/offline components (same as other stablecoins' attestation fields)
+
+5. **Regulatory component values (manual/static for now):**
+   - MiCA Compliance: NO (not licensed in EU, US-based entity)
+   - US State Licenses: PENDING (applied for OCC national trust charter Jan 2026)
+   - GENIUS Act Compliance: PENDING (will need to comply by ~Nov 2026 effective date)
+   - Set these as static config values matching the pattern used for other stablecoins
+
+6. **Dashboard/UI:** Add USD1 to the stablecoin comparison dashboard, score table, and any charts. It should appear alongside all other scored stablecoins. Use the same visual treatment — no special styling for USD1 vs any other coin (neutrality is core to the product).
+
+7. **API endpoint:** Ensure the /api/sii/scores endpoint returns USD1 in the response array with the same schema as all other stablecoins.
+
+### What NOT to do
+- Do NOT create a separate scoring methodology for USD1. Same formula, same weights, same normalization as every other stablecoin.
+- Do NOT add any editorial commentary, political framing, or special annotations about USD1's Trump affiliation in the UI or API. The score speaks for itself. Neutrality is a hard guardrail.
+- Do NOT hard-code score values. All automated components should pull from live data sources.
+- Do NOT break existing stablecoin scores or the scoring pipeline while adding USD1.
+
+### Testing
+- After adding, run the full scoring pipeline and verify:
+  - USD1 appears in the API response
+  - USD1 score is reasonable (likely somewhere in the 40-65 range given limited history, high concentration, proxy contract risk, but strong peg and growing liquidity)
+  - All other stablecoin scores remain unchanged
+  - Dashboard renders 10 stablecoins without layout issues
+  - No errors in data fetching (handle gracefully if any source returns no data for USD1)
