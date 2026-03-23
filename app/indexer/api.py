@@ -89,6 +89,30 @@ def register_wallet_routes(app: FastAPI) -> None:
         )
         return {"wallets": rows, "count": len(rows)}
 
+    @app.get("/api/wallets/debug")
+    async def wallets_debug():
+        """Debug: check wallet_graph schema visibility from this server instance."""
+        results = {}
+        try:
+            results["db_info"] = fetch_one("SELECT current_database() AS db, current_user AS usr")
+        except Exception as e:
+            results["db_info_error"] = str(e)
+        try:
+            results["schema_exists"] = fetch_one(
+                "SELECT COUNT(*) AS table_count FROM information_schema.tables WHERE table_schema = 'wallet_graph'"
+            )
+        except Exception as e:
+            results["schema_error"] = str(e)
+        try:
+            results["wallet_count"] = fetch_one("SELECT COUNT(*) AS c FROM wallet_graph.wallets")
+        except Exception as e:
+            results["wallet_count_error"] = str(e)
+        try:
+            results["migration"] = fetch_one("SELECT name, applied_at FROM migrations WHERE name = '007_wallet_graph'")
+        except Exception as e:
+            results["migration_error"] = str(e)
+        return results
+
     @app.get("/api/wallets/stats")
     async def wallets_stats():
         """Aggregate stats for the wallet risk graph."""
