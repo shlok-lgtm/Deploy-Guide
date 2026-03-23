@@ -96,20 +96,39 @@ def run_migrations():
         result = fetch_one("SELECT 1 FROM migrations WHERE name = '006_add_usd1'")
         if result:
             logger.info("Migration 006_add_usd1 already applied ✓")
-            return
     except Exception:
-        pass
+        result = None
 
-    logger.info("Applying migration 006: add USD1 stablecoin...")
-    migration_path = os.path.join(os.path.dirname(__file__), "migrations", "006_add_usd1.sql")
-    if os.path.exists(migration_path):
-        success = run_migration(migration_path)
-        if success:
-            logger.info("Migration 006_add_usd1 applied ✓")
+    if not result:
+        logger.info("Applying migration 006: add USD1 stablecoin...")
+        migration_path = os.path.join(os.path.dirname(__file__), "migrations", "006_add_usd1.sql")
+        if os.path.exists(migration_path):
+            success = run_migration(migration_path)
+            if success:
+                logger.info("Migration 006_add_usd1 applied ✓")
+            else:
+                logger.error("Failed to apply migration 006_add_usd1")
         else:
-            logger.error("Failed to apply migration 006_add_usd1")
-    else:
-        logger.warning(f"Migration file not found: {migration_path}")
+            logger.warning(f"Migration file not found: {migration_path}")
+
+    try:
+        result = fetch_one("SELECT 1 FROM migrations WHERE name = '007_wallet_graph'")
+        if result:
+            logger.info("Migration 007_wallet_graph already applied ✓")
+    except Exception:
+        result = None
+
+    if not result:
+        logger.info("Applying migration 007: wallet graph schema...")
+        migration_path = os.path.join(os.path.dirname(__file__), "migrations", "007_wallet_graph.sql")
+        if os.path.exists(migration_path):
+            success = run_migration(migration_path)
+            if success:
+                logger.info("Migration 007_wallet_graph applied ✓")
+            else:
+                logger.error("Failed to apply migration 007_wallet_graph")
+        else:
+            logger.warning(f"Migration file not found: {migration_path}")
 
 
 def main():
