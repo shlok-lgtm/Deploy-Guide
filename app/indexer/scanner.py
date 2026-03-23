@@ -121,19 +121,21 @@ async def scan_wallet_holdings(
         decimals = info.get("decimals", 18)
         balance = balance_raw / (10 ** decimals)
 
-        # For stablecoins, price ≈ $1.00
-        value_usd = balance
-
-        # Check if this is a scored asset
+        # Check if this is a scored asset and get price + score data
         is_scored = contract_lower in SCORED_CONTRACTS
         sii_score = None
         sii_grade = None
+        price = 1.0  # default for unscored stablecoins
         if is_scored:
             sid = SCORED_CONTRACTS[contract_lower]["stablecoin_id"]
             score_data = sii_scores.get(sid)
             if score_data:
                 sii_score = score_data.get("overall_score")
                 sii_grade = score_data.get("grade")
+                if score_data.get("current_price") is not None:
+                    price = score_data["current_price"]
+
+        value_usd = balance * price
 
         holdings.append({
             "token_address": contract_lower,

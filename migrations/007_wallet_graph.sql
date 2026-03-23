@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS wallet_graph.wallet_holdings (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_holdings_unique_per_day
-    ON wallet_graph.wallet_holdings(wallet_address, token_address, immutable_date(indexed_at));
+    ON wallet_graph.wallet_holdings(wallet_address, token_address, public.immutable_date(indexed_at));
 CREATE INDEX IF NOT EXISTS idx_holdings_wallet ON wallet_graph.wallet_holdings(wallet_address);
 CREATE INDEX IF NOT EXISTS idx_holdings_token ON wallet_graph.wallet_holdings(token_address);
 CREATE INDEX IF NOT EXISTS idx_holdings_indexed ON wallet_graph.wallet_holdings(indexed_at DESC);
@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS wallet_graph.wallet_risk_scores (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_wrs_unique_per_day
-    ON wallet_graph.wallet_risk_scores(wallet_address, immutable_date(computed_at));
+    ON wallet_graph.wallet_risk_scores(wallet_address, public.immutable_date(computed_at));
 CREATE INDEX IF NOT EXISTS idx_wrs_wallet ON wallet_graph.wallet_risk_scores(wallet_address);
 CREATE INDEX IF NOT EXISTS idx_wrs_score ON wallet_graph.wallet_risk_scores(risk_score DESC);
 CREATE INDEX IF NOT EXISTS idx_wrs_computed ON wallet_graph.wallet_risk_scores(computed_at DESC);

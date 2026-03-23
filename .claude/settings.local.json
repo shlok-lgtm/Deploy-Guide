@@ -7,7 +7,8 @@
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(git push:*)",
-      "WebFetch(domain:basis-deploy-guide.replit.app)"
+      "WebFetch(domain:basis-deploy-guide.replit.app)",
+      "Bash(psql:*)"
     ]
   }
 }

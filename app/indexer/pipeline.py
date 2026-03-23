@@ -36,14 +36,15 @@ logger = logging.getLogger(__name__)
 
 
 def _get_current_sii_scores() -> dict:
-    """Load current SII scores from the scores table."""
+    """Load current SII scores and prices from the scores table."""
     rows = fetch_all(
-        "SELECT stablecoin_id, overall_score, grade FROM scores"
+        "SELECT stablecoin_id, overall_score, grade, current_price FROM scores"
     )
     return {
         row["stablecoin_id"]: {
             "overall_score": float(row["overall_score"]) if row["overall_score"] else None,
             "grade": row["grade"],
+            "current_price": float(row["current_price"]) if row.get("current_price") else None,
         }
         for row in rows
     }
@@ -77,7 +78,7 @@ def _store_holdings(wallet_address: str, holdings: list[dict]) -> None:
             DELETE FROM wallet_graph.wallet_holdings
             WHERE wallet_address = %s
               AND token_address = %s
-              AND immutable_date(indexed_at) = CURRENT_DATE
+              AND public.immutable_date(indexed_at) = CURRENT_DATE
             """,
             (wallet_address, h["token_address"]),
         )
@@ -109,7 +110,7 @@ def _store_risk_score(wallet_address: str, risk: dict) -> None:
         """
         DELETE FROM wallet_graph.wallet_risk_scores
         WHERE wallet_address = %s
-          AND immutable_date(computed_at) = CURRENT_DATE
+          AND public.immutable_date(computed_at) = CURRENT_DATE
         """,
         (wallet_address,),
     )
