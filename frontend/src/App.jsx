@@ -43,6 +43,19 @@ const gradeColor = (g) => {
 };
 
 const fmt = (n, d = 1) => (n != null ? Number(n).toFixed(d) : "—");
+const truncAddr = (addr) => addr ? `${addr.slice(0, 8)}…${addr.slice(-6)}` : "—";
+const fmtHHI = (hhi) => hhi != null ? Number(hhi).toFixed(0) : "—";
+const statusColor = (s) => {
+  if (s === "scored")      return "#2d6b45";
+  if (s === "queued")      return T.inkMid;
+  if (s === "in_progress") return T.inkLight;
+  return T.inkFaint;
+};
+const coverageColor = (q) => {
+  if (q === "full" || q === "high") return T.ink;
+  if (q === "partial" || q === "medium") return T.inkMid;
+  return T.accent;
+};
 const fmtB = (n) => {
   if (!n) return "—";
   if (n >= 1e12) return `$${(n / 1e12).toFixed(1)}T`;
@@ -120,6 +133,64 @@ function useCoinHistory(coinId, days = 90) {
   }, [coinId, days]);
 
   return { data, loading };
+}
+
+function useWalletTop(limit = 50) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    fetch(`${API}/api/wallets/top?limit=${limit}`)
+      .then((r) => r.json())
+      .then((d) => { setData(d.wallets || []); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [limit]);
+  return { data, loading };
+}
+
+function useWalletRiskiest(limit = 50) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    fetch(`${API}/api/wallets/riskiest?limit=${limit}`)
+      .then((r) => r.json())
+      .then((d) => { setData(d.wallets || []); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [limit]);
+  return { data, loading };
+}
+
+function useBacklog(limit = 50) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    fetch(`${API}/api/backlog?limit=${limit}`)
+      .then((r) => r.json())
+      .then((d) => { setData(d.backlog || []); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [limit]);
+  return { data, loading };
+}
+
+function useWalletDetail(address) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const lookup = useCallback((addr) => {
+    if (!addr) return;
+    setLoading(true);
+    setError(null);
+    setData(null);
+    fetch(`${API}/api/wallets/${addr.trim()}`)
+      .then((r) => {
+        if (!r.ok) throw new Error(`Not found (${r.status})`);
+        return r.json();
+      })
+      .then((d) => { setData(d); setLoading(false); })
+      .catch((e) => { setError(e.message); setLoading(false); });
+  }, []);
+
+  return { data, loading, error, lookup };
 }
 
 function useAllHistory(coinIds) {
@@ -958,6 +1029,385 @@ function MethodologyView({ mobile }) {
   );
 }
 
+const WALLET_COL_DESKTOP = "32px 180px 100px 68px 52px 80px 68px 80px";
+const WALLET_COL_MOBILE = "180px 90px 56px 48px";
+
+function WalletTableHeader({ mobile }) {
+  return (
+    <div style={{
+      display: "grid",
+      gridTemplateColumns: mobile ? WALLET_COL_MOBILE : WALLET_COL_DESKTOP,
+      padding: "8px 16px",
+      background: T.paper,
+      borderBottom: `3px solid ${T.ink}`,
+      fontFamily: T.mono, fontSize: 9, textTransform: "uppercase",
+      letterSpacing: 1.5, color: T.inkLight,
+    }}>
+      {mobile ? (
+        <>
+          <span>Address</span>
+          <span>Value</span>
+          <span>Risk</span>
+          <span>Grade</span>
+        </>
+      ) : (
+        <>
+          <span>#</span>
+          <span>Address</span>
+          <span>Value</span>
+          <span>Risk</span>
+          <span>Grade</span>
+          <span>Dominant</span>
+          <span>HHI</span>
+          <span>Coverage</span>
+        </>
+      )}
+    </div>
+  );
+}
+
+function WalletRow({ wallet, rank, mobile, lowScoreHighlight }) {
+  const [hovered, setHovered] = useState(false);
+  const scoreColor = lowScoreHighlight && wallet.risk_score < 75 ? T.accent : subScoreColor(wallet.risk_score);
+  return (
+    <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        display: "grid",
+        gridTemplateColumns: mobile ? WALLET_COL_MOBILE : WALLET_COL_DESKTOP,
+        padding: "12px 16px",
+        borderBottom: `1px dotted ${T.ruleMid}`,
+        background: hovered ? T.paperWarm : "transparent",
+        transition: "background 0.1s",
+        alignItems: "center",
+      }}
+    >
+      {mobile ? null : (
+        <span style={{ fontFamily: T.mono, fontSize: 11, color: T.inkFaint }}>{rank}</span>
+      )}
+      <span style={{ fontFamily: T.mono, fontSize: 11, color: T.inkMid, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {truncAddr(wallet.address)}
+      </span>
+      <span style={{ fontFamily: T.mono, fontSize: 11, color: T.ink }}>{fmtB(wallet.total_stablecoin_value)}</span>
+      <span style={{ fontFamily: T.mono, fontSize: 12, fontWeight: 600, color: scoreColor }}>
+        {wallet.risk_score != null ? fmt(wallet.risk_score, 1) : "—"}
+      </span>
+      <span style={{ fontFamily: T.sans, fontSize: mobile ? 16 : 20, fontWeight: 700, color: gradeColor(wallet.risk_grade) }}>
+        {wallet.risk_grade || "—"}
+      </span>
+      {!mobile && (
+        <>
+          <span style={{ fontFamily: T.mono, fontSize: 11, color: T.inkMid }}>{wallet.dominant_asset || "—"}</span>
+          <span style={{ fontFamily: T.mono, fontSize: 11, color: T.inkLight }}>{fmtHHI(wallet.concentration_hhi)}</span>
+          <span style={{ fontFamily: T.mono, fontSize: 11, color: coverageColor(wallet.coverage_quality), textTransform: "uppercase" }}>
+            {wallet.coverage_quality || "—"}
+          </span>
+        </>
+      )}
+    </div>
+  );
+}
+
+function WalletSearchPanel({ mobile }) {
+  const [input, setInput] = useState("");
+  const { data, loading, error, lookup } = useWalletDetail();
+
+  const handleLookup = () => {
+    const addr = input.trim();
+    if (addr.length >= 10) lookup(addr);
+  };
+
+  const w = data?.wallet;
+  const r = data?.risk;
+  const holdings = data?.holdings || [];
+
+  return (
+    <div style={{ marginBottom: 32 }}>
+      <div style={{ fontFamily: T.mono, fontSize: 9, textTransform: "uppercase", letterSpacing: 1.5, color: T.inkLight, marginBottom: 10 }}>
+        Wallet Search · Enter Ethereum Address
+      </div>
+
+      <div style={{ display: "flex", gap: 0, marginBottom: 16 }}>
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleLookup()}
+          placeholder="0x..."
+          style={{
+            flex: 1,
+            padding: "9px 12px",
+            border: `1px solid ${T.ruleMid}`,
+            borderRight: "none",
+            fontFamily: T.mono,
+            fontSize: 12,
+            color: T.ink,
+            background: T.paper,
+            outline: "none",
+          }}
+        />
+        <button
+          onClick={handleLookup}
+          style={{
+            padding: "9px 16px",
+            border: `1px solid ${T.ink}`,
+            background: T.ink,
+            color: T.paper,
+            fontFamily: T.mono,
+            fontSize: 11,
+            cursor: "pointer",
+            letterSpacing: 1,
+            textTransform: "uppercase",
+          }}
+        >
+          Lookup
+        </button>
+      </div>
+
+      {loading && (
+        <div style={{ fontFamily: T.mono, fontSize: 11, color: T.inkFaint }}>Fetching wallet data...</div>
+      )}
+      {error && (
+        <div style={{ fontFamily: T.mono, fontSize: 11, color: T.accent }}>Error: {error}</div>
+      )}
+
+      {data && w && r && (
+        <div style={{ border: `1px solid ${T.ruleMid}`, padding: mobile ? "12px" : "16px 20px", animation: "fadeIn 0.3s ease" }}>
+          <div style={{ fontFamily: T.mono, fontSize: 9, textTransform: "uppercase", letterSpacing: 1.5, color: T.inkLight, marginBottom: 12 }}>
+            Wallet Profile
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr" : "1fr 1fr", gap: mobile ? 8 : 24, marginBottom: 16 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {[
+                { label: "Address", value: w.address },
+                { label: "Value", value: fmtB(r.total_stablecoin_value || w.total_stablecoin_value) },
+                { label: "Size Tier", value: (w.size_tier || "—").toUpperCase() },
+                { label: "Source", value: w.source || "—" },
+                { label: "Contract", value: w.is_contract ? "Yes" : "No" },
+              ].map((item) => (
+                <div key={item.label} style={{ fontFamily: T.mono, fontSize: mobile ? 10 : 10.5 }}>
+                  <span style={{ color: T.inkFaint }}>{item.label}: </span>
+                  <span style={{ color: T.inkMid, wordBreak: "break-all" }}>{item.value}</span>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {[
+                { label: "Risk Score", value: fmt(r.risk_score, 1), valueStyle: { color: subScoreColor(r.risk_score), fontWeight: 600 } },
+                { label: "Grade", value: r.risk_grade || "—", valueStyle: { color: gradeColor(r.risk_grade), fontWeight: 700, fontSize: 14 } },
+                { label: "HHI", value: fmtHHI(r.concentration_hhi) },
+                { label: "Coverage", value: r.coverage_quality || "—", valueStyle: { color: coverageColor(r.coverage_quality), textTransform: "uppercase" } },
+                { label: "Dominant Asset", value: `${r.dominant_asset || "—"} (${r.dominant_asset_pct != null ? fmt(r.dominant_asset_pct, 1) + "%" : "—"})` },
+                { label: "Holdings", value: `${r.num_scored_holdings || 0} scored · ${r.num_unscored_holdings || 0} unscored` },
+              ].map((item) => (
+                <div key={item.label} style={{ fontFamily: T.mono, fontSize: mobile ? 10 : 10.5 }}>
+                  <span style={{ color: T.inkFaint }}>{item.label}: </span>
+                  <span style={{ color: T.inkMid, ...(item.valueStyle || {}) }}>{item.value}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {holdings.length > 0 && (
+            <>
+              <div style={{ height: 1, background: T.ruleLight, marginBottom: 12 }} />
+              <div style={{ fontFamily: T.mono, fontSize: 9, textTransform: "uppercase", letterSpacing: 1.5, color: T.inkLight, marginBottom: 8 }}>
+                Holdings · {holdings.length} assets
+              </div>
+              <div style={{ overflowX: "auto" }}>
+                <div style={{
+                  display: "grid",
+                  gridTemplateColumns: mobile ? "60px 1fr 80px 68px" : "60px 1fr 100px 80px 72px 52px",
+                  padding: "6px 0 6px 0",
+                  borderBottom: `1px solid ${T.ruleMid}`,
+                  fontFamily: T.mono, fontSize: 9, textTransform: "uppercase",
+                  letterSpacing: 1.5, color: T.inkFaint,
+                }}>
+                  <span>Symbol</span>
+                  <span>Value</span>
+                  <span>% Wallet</span>
+                  <span>SII</span>
+                  {!mobile && <><span>Grade</span><span>Scored</span></>}
+                </div>
+                {holdings.map((h, i) => (
+                  <div key={i} style={{
+                    display: "grid",
+                    gridTemplateColumns: mobile ? "60px 1fr 80px 68px" : "60px 1fr 100px 80px 72px 52px",
+                    padding: "7px 0",
+                    borderBottom: `1px dotted ${T.ruleLight}`,
+                    alignItems: "center",
+                  }}>
+                    <span style={{ fontFamily: T.mono, fontSize: 11, fontWeight: 600, color: T.ink }}>{h.symbol}</span>
+                    <span style={{ fontFamily: T.mono, fontSize: 11, color: T.inkMid }}>{fmtB(h.value_usd)}</span>
+                    <span style={{ fontFamily: T.mono, fontSize: 11, color: T.inkLight }}>
+                      {h.pct_of_wallet != null ? fmt(h.pct_of_wallet, 1) + "%" : "—"}
+                    </span>
+                    <span style={{ fontFamily: T.mono, fontSize: 11, color: h.sii_score != null ? subScoreColor(h.sii_score) : T.inkFaint, fontWeight: h.sii_score != null ? 600 : 400 }}>
+                      {h.sii_score != null ? fmt(h.sii_score, 1) : "—"}
+                    </span>
+                    {!mobile && (
+                      <>
+                        <span style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 700, color: gradeColor(h.sii_grade) }}>
+                          {h.sii_grade || "—"}
+                        </span>
+                        <span style={{ fontFamily: T.mono, fontSize: 9, color: h.is_scored ? "#2d6b45" : T.inkFaint, textTransform: "uppercase" }}>
+                          {h.is_scored ? "Yes" : "No"}
+                        </span>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WalletsView({ mobile }) {
+  const { data: topWallets, loading: topLoading } = useWalletTop(50);
+  const { data: riskyWallets, loading: riskyLoading } = useWalletRiskiest(50);
+  const { data: backlog, loading: backlogLoading } = useBacklog(50);
+
+  const queuedCount = (backlog || []).filter((a) => a.scoring_status === "queued" || a.scoring_status === "in_progress").length;
+
+  const statsItems = [
+    `${topWallets ? topWallets.length : "—"} WALLETS TRACKED`,
+    `${backlog ? backlog.length : "—"} BACKLOG ASSETS`,
+    `${queuedCount} QUEUED FOR SCORING`,
+    "FORM WRG-001 · BASIS PROTOCOL",
+  ];
+
+  return (
+    <div>
+      <div style={{ height: mobile ? 16 : 28 }} />
+
+      <div style={{ border: `1.5px solid ${T.ink}`, marginBottom: 24, padding: mobile ? "10px 12px" : "14px 20px" }}>
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: mobile ? 4 : 0 }}>
+          {statsItems.map((s, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "center" }}>
+              <span style={{ fontFamily: T.mono, fontSize: mobile ? 8 : 10, color: T.inkLight, textTransform: "uppercase", letterSpacing: mobile ? 0.5 : 1.5, padding: mobile ? "2px 6px" : "0 12px" }}>
+                {s}
+              </span>
+              {!mobile && i < statsItems.length - 1 && (
+                <div style={{ width: 1, height: 12, background: T.ruleMid }} />
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <WalletSearchPanel mobile={mobile} />
+
+      <div style={{ marginBottom: 32 }}>
+        <div style={{ fontFamily: T.mono, fontSize: 9, textTransform: "uppercase", letterSpacing: 1.5, color: T.inkLight, marginBottom: 10 }}>
+          Top Wallets · By Stablecoin Value
+        </div>
+        {topLoading ? (
+          <div style={{ padding: 24, fontFamily: T.mono, fontSize: 12, color: T.inkFaint }}>Loading wallets...</div>
+        ) : !topWallets || topWallets.length === 0 ? (
+          <div style={{ padding: 24, fontFamily: T.mono, fontSize: 12, color: T.inkFaint }}>No wallet data yet. Run the indexer pipeline first.</div>
+        ) : (
+          <div style={{ border: `1px solid ${T.ruleMid}` }}>
+            <WalletTableHeader mobile={mobile} />
+            {topWallets.map((w, i) => (
+              <WalletRow key={w.address} wallet={w} rank={i + 1} mobile={mobile} lowScoreHighlight={false} />
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div style={{ marginBottom: 32 }}>
+        <div style={{ fontFamily: T.mono, fontSize: 9, textTransform: "uppercase", letterSpacing: 1.5, color: T.inkLight, marginBottom: 10 }}>
+          Riskiest Wallets · Lowest Risk Score
+        </div>
+        {riskyLoading ? (
+          <div style={{ padding: 24, fontFamily: T.mono, fontSize: 12, color: T.inkFaint }}>Loading...</div>
+        ) : !riskyWallets || riskyWallets.length === 0 ? (
+          <div style={{ padding: 24, fontFamily: T.mono, fontSize: 12, color: T.inkFaint }}>No data.</div>
+        ) : (
+          <>
+            <div style={{ border: `1px solid ${T.ruleMid}` }}>
+              <WalletTableHeader mobile={mobile} />
+              {riskyWallets.map((w, i) => (
+                <WalletRow key={w.address} wallet={w} rank={i + 1} mobile={mobile} lowScoreHighlight={true} />
+              ))}
+            </div>
+            <div style={{ fontFamily: T.sans, fontSize: 10, color: T.inkFaint, marginTop: 8, padding: "0 2px" }}>
+              Sorted by ascending risk score. Low scores indicate high stablecoin concentration or unscored holdings.
+            </div>
+          </>
+        )}
+      </div>
+
+      <div style={{ marginBottom: 32 }}>
+        <div style={{ fontFamily: T.mono, fontSize: 9, textTransform: "uppercase", letterSpacing: 1.5, color: T.inkLight, marginBottom: 10 }}>
+          Scoring Backlog · Assets Pending Analysis
+        </div>
+        {backlogLoading ? (
+          <div style={{ padding: 24, fontFamily: T.mono, fontSize: 12, color: T.inkFaint }}>Loading backlog...</div>
+        ) : !backlog || backlog.length === 0 ? (
+          <div style={{ padding: 24, fontFamily: T.mono, fontSize: 12, color: T.inkFaint }}>No backlog assets.</div>
+        ) : (
+          <div style={{ border: `1px solid ${T.ruleMid}` }}>
+            <div style={{
+              display: "grid",
+              gridTemplateColumns: mobile ? "56px 1fr 90px 60px" : "32px 72px 1fr 100px 68px 80px",
+              padding: "8px 16px",
+              background: T.paper,
+              borderBottom: `3px solid ${T.ink}`,
+              fontFamily: T.mono, fontSize: 9, textTransform: "uppercase",
+              letterSpacing: 1.5, color: T.inkLight,
+            }}>
+              {mobile ? (
+                <><span>#</span><span>Name</span><span>Capital</span><span>Status</span></>
+              ) : (
+                <><span>#</span><span>Symbol</span><span>Name</span><span>Capital Held</span><span>Wallets</span><span>Status</span></>
+              )}
+            </div>
+            {backlog.map((asset, i) => (
+              <div key={asset.token_address} style={{
+                display: "grid",
+                gridTemplateColumns: mobile ? "56px 1fr 90px 60px" : "32px 72px 1fr 100px 68px 80px",
+                padding: "11px 16px",
+                borderBottom: `1px dotted ${T.ruleMid}`,
+                alignItems: "center",
+              }}>
+                {mobile ? null : (
+                  <span style={{ fontFamily: T.mono, fontSize: 11, color: T.inkFaint }}>{i + 1}</span>
+                )}
+                {mobile ? (
+                  <span style={{ fontFamily: T.mono, fontSize: 11, fontWeight: 700, color: T.ink }}>{asset.symbol}</span>
+                ) : (
+                  <span style={{ fontFamily: T.mono, fontSize: 11, fontWeight: 700, color: T.ink }}>{asset.symbol}</span>
+                )}
+                <span style={{ fontFamily: T.sans, fontSize: 11, color: T.inkMid }}>{asset.name || asset.symbol}</span>
+                <span style={{ fontFamily: T.mono, fontSize: 11, color: T.ink }}>{fmtB(asset.total_value_held)}</span>
+                {!mobile && (
+                  <span style={{ fontFamily: T.mono, fontSize: 11, color: T.inkLight }}>{asset.wallets_holding ?? "—"}</span>
+                )}
+                <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                  <div style={{
+                    width: 5, height: 5, borderRadius: "50%",
+                    background: statusColor(asset.scoring_status),
+                    flexShrink: 0,
+                  }} />
+                  <span style={{ fontFamily: T.mono, fontSize: 10, color: statusColor(asset.scoring_status), textTransform: "uppercase", letterSpacing: 0.5 }}>
+                    {asset.scoring_status || "—"}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function Footer() {
   return (
     <footer style={{
@@ -1023,6 +1473,7 @@ export default function App() {
             <nav style={{ display: "flex", gap: 16 }}>
               {[
                 { id: "rankings", label: "Rankings" },
+                { id: "wallets", label: "Wallets" },
                 { id: "methodology", label: "Methodology" },
               ].map((tab) => (
                 <button
@@ -1053,6 +1504,7 @@ export default function App() {
               {view === "detail" && selectedCoin && (
                 <DetailView coinId={selectedCoin} onBack={handleBack} mobile={mobile} />
               )}
+              {view === "wallets" && <WalletsView mobile={mobile} />}
               {view === "methodology" && <MethodologyView mobile={mobile} />}
             </main>
           </div>
