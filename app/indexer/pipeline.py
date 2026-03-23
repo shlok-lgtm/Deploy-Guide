@@ -171,6 +171,17 @@ def _track_unscored_holdings(holdings: list[dict]) -> None:
             )
 
 
+def _seed_from_known_holders() -> set:
+    """Seed from the curated known holder list in the Etherscan collector."""
+    from app.collectors.etherscan import KNOWN_HOLDERS
+    addresses = set()
+    for addr, label, category in KNOWN_HOLDERS:
+        if addr and addr.startswith("0x"):
+            addresses.add(addr)
+    logger.info(f"Seeded {len(addresses)} addresses from known holder list")
+    return addresses
+
+
 async def seed_wallets(
     client: httpx.AsyncClient,
     api_key: str,
@@ -178,6 +189,8 @@ async def seed_wallets(
 ) -> set:
     """
     Step 1: Seed wallet addresses from top holders of each scored stablecoin.
+    Tries Etherscan tokenholderlist API first (Pro), falls back to curated
+    known holder addresses from the Etherscan collector.
     Returns set of unique wallet addresses.
     """
     all_addresses = set()
@@ -197,6 +210,11 @@ async def seed_wallets(
                 all_addresses.add(addr)
 
         logger.info(f"  {sid}: {len(holders)} holders fetched")
+
+    # Fallback: if Pro API unavailable, seed from curated known holders
+    if not all_addresses:
+        logger.info("tokenholderlist API unavailable (requires Pro) — using known holder list")
+        all_addresses = _seed_from_known_holders()
 
     logger.info(f"Seeded {len(all_addresses)} unique wallet addresses")
     return all_addresses
