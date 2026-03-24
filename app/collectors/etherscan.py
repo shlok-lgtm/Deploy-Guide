@@ -25,7 +25,7 @@ from app.config import STABLECOIN_REGISTRY
 logger = logging.getLogger(__name__)
 
 ETHERSCAN_V2_BASE = "https://api.etherscan.io/v2/api"
-RATE_LIMIT_DELAY = 0.22  # ~4.5 req/sec (conservative under 5/sec Pro limit)
+RATE_LIMIT_DELAY = 0.12  # ~8 req/sec (safe under Standard tier 10/sec limit)
 
 
 # =============================================================================
@@ -152,6 +152,35 @@ async def fetch_token_balance(
 # Collector: Holder Distribution Components
 # =============================================================================
 
+async def fetch_token_holder_count(
+    client: httpx.AsyncClient,
+    contract_address: str,
+    api_key: str,
+) -> Optional[int]:
+    """Fetch live unique holder count for an ERC-20 token via Etherscan tokenholdercount."""
+    try:
+        resp = await client.get(
+            ETHERSCAN_V2_BASE,
+            params={
+                "chainid": 1,
+                "module": "token",
+                "action": "tokenholdercount",
+                "contractaddress": contract_address,
+                "apikey": api_key,
+            },
+            timeout=10.0,
+        )
+        data = resp.json()
+        if data.get("status") == "1":
+            return int(data["result"])
+        else:
+            logger.debug(f"tokenholdercount returned status 0: {data.get('result')}")
+            return None
+    except Exception as e:
+        logger.debug(f"tokenholdercount fetch error for {contract_address[:10]}...: {e}")
+        return None
+
+
 async def collect_holder_distribution(
     client: httpx.AsyncClient,
     stablecoin_id: str,
@@ -234,7 +263,15 @@ async def collect_holder_distribution(
     top_10_score = normalize_inverse_linear(top_10_pct, 10, 80)
 
     # --- Component 2: Unique Holders ---
-    holder_count = ESTIMATED_HOLDER_COUNTS.get(stablecoin_id, 50_000)
+    # Try live tokenholdercount API first (Standard tier+), fall back to static estimate
+    live_count = await fetch_token_holder_count(client, contract, api_key)
+    await asyncio.sleep(RATE_LIMIT_DELAY)
+    if live_count is not None and live_count > 0:
+        holder_count = live_count
+        holder_count_source = "etherscan_tokenholdercount"
+    else:
+        holder_count = ESTIMATED_HOLDER_COUNTS.get(stablecoin_id, 50_000)
+        holder_count_source = "static_estimate"
 
     from app.scoring import normalize_log
     holders_score = normalize_log(
@@ -281,9 +318,9 @@ async def collect_holder_distribution(
             "normalized_score": round(holders_score, 2),
             "data_source": "etherscan",
             "metadata": {
-                "description": f"Estimated {holder_count:,} unique holders",
-                "source": "block explorer estimate (tokenholdercount API Pro required for live data)",
-                "note": "Updated periodically from public block explorer data",
+                "description": f"{holder_count:,} unique holders",
+                "source": holder_count_source,
+                "live": holder_count_source == "etherscan_tokenholdercount",
             },
         },
         {
@@ -300,9 +337,10 @@ async def collect_holder_distribution(
         },
     ]
 
+    holder_source_tag = "live" if holder_count_source == "etherscan_tokenholdercount" else "est"
     logger.info(
         f"Etherscan {stablecoin_id}: top10={top_10_pct:.1f}% "
-        f"exchanges={exchange_pct:.1f}% holders≈{holder_count:,} "
+        f"exchanges={exchange_pct:.1f}% holders={holder_count:,} ({holder_source_tag}) "
         f"({len(holder_balances)} addresses with balance)"
     )
 
