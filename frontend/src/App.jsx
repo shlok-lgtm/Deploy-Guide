@@ -448,8 +448,9 @@ function RankingsView({ scores, loading, onSelect, ts, mobile }) {
     const distScore = typeof cats.distribution === "object" ? cats.distribution?.score : cats.distribution;
     const strScore = typeof cats.structural === "object" ? cats.structural?.score : cats.structural;
     const isExpanded = tappedRow === coin.id;
-    const mica = MICA_STATUS[coin.id] || "—";
-    const reserveType = RESERVE_TYPE[coin.id] || "—";
+    const isNew = !(coin.id in MICA_STATUS);
+    const mica = MICA_STATUS[coin.id] || "Pending";
+    const reserveType = RESERVE_TYPE[coin.id] || "Pending";
 
     return (
       <div key={coin.id} style={{ borderBottom: `1px dotted ${T.ruleMid}` }}>
@@ -460,6 +461,9 @@ function RankingsView({ scores, loading, onSelect, ts, mobile }) {
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
             <span style={{ fontFamily: T.mono, fontSize: 11, color: T.inkFaint, minWidth: 20 }}>{globalIdx}</span>
             <span style={{ fontFamily: T.mono, fontSize: 15, fontWeight: 700, color: T.ink }}>{coin.symbol}</span>
+            {isNew && (
+              <span style={{ fontFamily: T.mono, fontSize: 7, letterSpacing: 0.8, color: T.inkMid, border: `1px solid ${T.ruleMid}`, padding: "1px 3px", textTransform: "uppercase" }}>New</span>
+            )}
             <div style={{ width: 1, height: 12, background: T.ruleMid }} />
             <span style={{ fontFamily: T.mono, fontSize: 12, fontWeight: 500, color: T.inkLight }}>{fmt(coin.score, 1)}</span>
             <span style={{ fontFamily: T.sans, fontSize: 28, fontWeight: 700, color: gradeColor(coin.grade), marginLeft: "auto", lineHeight: 1 }}>
@@ -529,8 +533,9 @@ function RankingsView({ scores, loading, onSelect, ts, mobile }) {
 
     const attestation = coin.attestation || "—";
     const chains = coin.chains || "Ethereum";
-    const mica = MICA_STATUS[coin.id] || "—";
-    const reserveType = RESERVE_TYPE[coin.id] || "—";
+    const isNew = !(coin.id in MICA_STATUS);
+    const mica = MICA_STATUS[coin.id] || "Pending";
+    const reserveType = RESERVE_TYPE[coin.id] || "Pending";
 
     return (
       <div key={coin.id}>
@@ -553,6 +558,9 @@ function RankingsView({ scores, loading, onSelect, ts, mobile }) {
           <div>
             <div style={{ display: "flex", alignItems: "baseline", gap: 0 }}>
               <span style={{ fontFamily: T.mono, fontSize: 15, fontWeight: 700, color: T.ink }}>{coin.symbol}</span>
+              {isNew && (
+                <span style={{ fontFamily: T.mono, fontSize: 7, letterSpacing: 0.8, color: T.inkMid, border: `1px solid ${T.ruleMid}`, padding: "1px 3px", marginLeft: 6, alignSelf: "center", textTransform: "uppercase" }}>New</span>
+              )}
               <div style={{ width: 1, height: 12, background: T.ruleMid, margin: "0 10px", alignSelf: "center" }} />
               <span style={{ fontFamily: T.mono, fontSize: 12, fontWeight: 500, color: T.inkLight }}>{fmt(coin.score, 1)}</span>
             </div>
@@ -801,7 +809,7 @@ function DetailView({ coinId, onBack, mobile }) {
             </span>
           </div>
           <div style={{ fontSize: mobile ? 10 : 12, color: T.inkLight, marginTop: 6, fontFamily: T.sans, lineHeight: 1.5 }}>
-            Issued by {coin.issuer} · {coin.component_count || "—"} components · {RESERVE_TYPE[coin.id] || "—"} · MiCA: {MICA_STATUS[coin.id] || "—"}
+            Issued by {coin.issuer} · {coin.component_count || "—"} components · {RESERVE_TYPE[coin.id] || "Pending"} · MiCA: {MICA_STATUS[coin.id] || "Pending"}
           </div>
         </div>
 
