@@ -252,7 +252,7 @@ def register_wallet_routes(app: FastAPI) -> None:
     @app.post("/api/admin/index-wallets")
     async def admin_index_wallets(
         key: str = Query(..., description="Admin key"),
-        holders_per_coin: int = Query(1000, ge=10, le=1000),
+        holders_per_coin: int = Query(5000, ge=10, le=10000),
     ):
         """Manually trigger a wallet indexing run (admin-only)."""
         admin_key = os.environ.get("ADMIN_KEY", "")

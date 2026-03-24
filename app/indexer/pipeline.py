@@ -205,7 +205,7 @@ def _get_scored_stablecoins_from_db() -> list[dict]:
 async def seed_wallets(
     client: httpx.AsyncClient,
     api_key: str,
-    holders_per_coin: int = 5000,
+    holders_per_coin: int = None,
 ) -> set:
     """
     Step 1: Seed wallet addresses from multiple sources.
@@ -214,6 +214,12 @@ async def seed_wallets(
       1. tokenholderlist API (Standard tier — top holders per coin, paginated)
       2. Curated known holders (always available, baseline)
     """
+    if holders_per_coin is None:
+        try:
+            holders_per_coin = int(os.environ.get("INDEXER_HOLDERS_PER_COIN", "5000"))
+        except (ValueError, TypeError):
+            holders_per_coin = 5000
+
     all_addresses = set()
 
     # Load stablecoins from the database (not hardcoded SCORED_CONTRACTS)
@@ -320,7 +326,10 @@ async def run_pipeline(holders_per_coin: int = None) -> dict:
         Summary dict with counts and stats.
     """
     if holders_per_coin is None:
-        holders_per_coin = int(os.environ.get("INDEXER_HOLDERS_PER_COIN", "5000"))
+        try:
+            holders_per_coin = int(os.environ.get("INDEXER_HOLDERS_PER_COIN", "5000"))
+        except (ValueError, TypeError):
+            holders_per_coin = 5000
     api_key = os.environ.get("ETHERSCAN_API_KEY", "")
     if not api_key:
         logger.error("ETHERSCAN_API_KEY not set — cannot run wallet indexer")
