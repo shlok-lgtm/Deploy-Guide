@@ -240,8 +240,8 @@ def main():
     else:
         logger.info("Worker disabled (set WORKER_ENABLED=true to enable)")
 
-    # 3. Start API server
-    port = int(os.environ.get("PORT", os.environ.get("API_PORT", "5000")))
+    # 3. Start API server (always port 5000 — mapped to :80 by Replit)
+    port = 5000
     free_port(port)
     logger.info(f"Starting API on port {port}")
 
