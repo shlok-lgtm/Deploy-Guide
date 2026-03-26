@@ -1,13 +1,15 @@
 """
 Wallet Indexer — Pipeline
 =========================
-Orchestrator: seed wallets → scan holdings → score → store → update backlog.
+Orchestrator: seed wallets → batch-scan holdings → score → store → update backlog.
 
 Pipeline flow:
-  1. SEED: Fetch top holders for each scored stablecoin via Etherscan
-  2. SCAN: For each wallet, query balances across all known stablecoin contracts
-  3. SCORE: Compute wallet risk score, HHI, coverage
-  4. STORE: Upsert wallets, insert holdings + risk scores
+  1. SEED:    Fetch top holders for each scored stablecoin via Etherscan
+  2. SCAN:    Contract-first batch scan — tokenbalancemulti (20 wallets/call)
+             Old: 24 contracts × N wallets = ~1.07M calls (~48h for 44k wallets)
+             New: 24 contracts × ⌈N/20⌉ batches = ~53k calls (~2-3h for 44k wallets)
+  3. SCORE:   Compute wallet risk score, HHI, coverage (per-wallet, same as before)
+  4. STORE:   Upsert wallets, insert holdings + risk scores
   5. BACKLOG: Update demand signals for unscored assets
 """
 
@@ -20,7 +22,7 @@ import httpx
 
 from app.database import fetch_all, fetch_one, execute
 from app.indexer.config import ETHERSCAN_RATE_LIMIT_DELAY
-from app.indexer.scanner import scan_wallet_holdings, fetch_top_holders
+from app.indexer.scanner import batch_scan_all_holdings, scan_wallet_holdings, fetch_top_holders
 from app.indexer.scorer import compute_wallet_risk
 from app.indexer.backlog import (
     upsert_unscored_asset,
@@ -450,26 +452,66 @@ async def run_pipeline(holders_per_coin: int = None) -> dict:
         # Also include existing wallets for re-indexing
         existing = _get_existing_wallets()
         wallet_addresses |= existing
-        logger.info(f"Total wallets to index: {len(wallet_addresses)} ({len(existing)} existing)")
+        wallet_list = list(wallet_addresses)
+        logger.info(f"Total wallets to index: {len(wallet_list)} ({len(existing)} existing)")
 
-        # Steps 2-4: Scan → Score → Store (sequential to respect rate limits)
+        # Phase A: Batch-fetch all holdings across all contracts (contract-first)
+        # tokenbalancemulti: 24 contracts × ⌈N/20⌉ batches instead of 24 × N individual calls
+        logger.info("Phase A: Batch balance scan (tokenbalancemulti, contract-first)")
+        all_holdings = await batch_scan_all_holdings(client, wallet_list, api_key, sii_scores)
+
+        # Phase B: Upsert all wallets, then score + store those with holdings
+        logger.info(f"Phase B: Score and store — {len(all_holdings)} wallets with holdings")
         results = []
         indexed = 0
         errors = 0
 
-        for addr in wallet_addresses:
+        for addr in wallet_list:
             try:
+                addr_lower = addr.lower()
                 source = "known_holder" if addr in known_addrs else "top_holder"
-                result = await index_wallet(
-                    client, addr, api_key, sii_scores,
-                    source=source,
-                )
-                results.append(result)
+                _store_wallet(addr, source=source)
+
+                holdings = all_holdings.get(addr_lower, [])
+
+                if not holdings:
+                    _update_wallet_summary(addr, 0, "retail")
+                    results.append({"address": addr, "holdings": 0, "scored": False, "reason": "no_holdings"})
+                    indexed += 1
+                    if indexed % 500 == 0:
+                        logger.info(f"  Progress: {indexed}/{len(wallet_list)} wallets processed")
+                    continue
+
+                risk = compute_wallet_risk(holdings)
+                if not risk:
+                    logger.warning(f"Risk compute returned None for {addr} ({len(holdings)} holdings)")
+                    _update_wallet_summary(addr, 0, "retail")
+                    results.append({"address": addr, "holdings": len(holdings), "scored": False, "reason": "risk_compute_failed"})
+                    indexed += 1
+                    if indexed % 500 == 0:
+                        logger.info(f"  Progress: {indexed}/{len(wallet_list)} wallets processed")
+                    continue
+
+                _store_holdings(addr, holdings)
+                _store_risk_score(addr, risk)
+                _update_wallet_summary(addr, risk["total_stablecoin_value"], risk["size_tier"])
+                _track_unscored_holdings(holdings)
+
+                results.append({
+                    "address": addr,
+                    "holdings": len(holdings),
+                    "scored": True,
+                    "risk_score": risk.get("risk_score"),
+                    "risk_grade": risk.get("risk_grade"),
+                    "total_value": risk.get("total_stablecoin_value"),
+                    "size_tier": risk.get("size_tier"),
+                })
                 indexed += 1
-                if indexed % 50 == 0:
-                    logger.info(f"  Progress: {indexed}/{len(wallet_addresses)} wallets indexed")
+                if indexed % 500 == 0:
+                    logger.info(f"  Progress: {indexed}/{len(wallet_list)} wallets processed")
+
             except Exception as e:
-                logger.warning(f"Error indexing {addr}: {type(e).__name__}: {e}")
+                logger.warning(f"Error processing {addr}: {type(e).__name__}: {e}")
                 errors += 1
 
     # Step 5: Update backlog demand signals

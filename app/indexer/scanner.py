@@ -152,6 +152,167 @@ async def scan_wallet_holdings(
     return holdings
 
 
+TOKENBALANCEMULTI_BATCH_SIZE = 20  # Etherscan max addresses per tokenbalancemulti call
+
+
+async def fetch_token_balance_multi(
+    client: httpx.AsyncClient,
+    contract_address: str,
+    wallet_addresses: list[str],
+    api_key: str,
+) -> dict[str, int]:
+    """
+    Fetch ERC-20 token balances for up to 20 wallet addresses in a single call.
+    Uses Etherscan V2 tokenbalancemulti action.
+
+    Returns a dict of {wallet_address_lower: raw_balance_int} for non-zero balances.
+    Falls back to an empty dict on API error (caller should handle gracefully).
+    """
+    if not wallet_addresses:
+        return {}
+    if len(wallet_addresses) > TOKENBALANCEMULTI_BATCH_SIZE:
+        raise ValueError(f"tokenbalancemulti batch size capped at {TOKENBALANCEMULTI_BATCH_SIZE}")
+
+    try:
+        resp = await client.get(
+            ETHERSCAN_V2_BASE,
+            params={
+                "chainid": 1,
+                "module": "account",
+                "action": "tokenbalancemulti",
+                "contractaddress": contract_address,
+                "address": ",".join(wallet_addresses),
+                "tag": "latest",
+                "apikey": api_key,
+            },
+            timeout=15.0,
+        )
+        data = resp.json()
+        if data.get("status") == "1" and isinstance(data.get("result"), list):
+            result = {}
+            for entry in data["result"]:
+                addr = entry.get("account", "").lower()
+                try:
+                    balance = int(entry.get("balance", "0"))
+                except (ValueError, TypeError):
+                    balance = 0
+                if balance > 0:
+                    result[addr] = balance
+            return result
+
+        msg = data.get("result", "")
+        if "Max rate limit" in str(msg):
+            logger.warning(f"Etherscan rate limit hit (tokenbalancemulti for {contract_address[:10]}…), backing off")
+            await asyncio.sleep(1.0)
+        else:
+            logger.debug(f"tokenbalancemulti non-1 status for {contract_address[:10]}…: {data.get('message','')} — {msg}")
+        return {}
+    except Exception as e:
+        logger.warning(f"tokenbalancemulti error for {contract_address[:10]}…: {type(e).__name__}: {e}")
+        return {}
+
+
+async def batch_scan_all_holdings(
+    client: httpx.AsyncClient,
+    wallet_addresses: list[str],
+    api_key: str,
+    sii_scores: dict,
+) -> dict[str, list[dict]]:
+    """
+    Contract-first batch scan: for each known stablecoin contract, fetch balances
+    for all wallet addresses in batches of 20 via tokenbalancemulti.
+
+    Returns a dict of {wallet_address: [holding_dict, ...]} containing only wallets
+    with at least one non-zero balance. Wallets with zero holdings across all contracts
+    are omitted from the result.
+
+    This replaces the wallet-first scan_wallet_holdings approach:
+      Old: 24 contracts × 44k wallets ≈ 1.07M individual tokenbalance calls (~48h)
+      New: 24 contracts × ⌈44k/20⌉ batches ≈ 53k tokenbalancemulti calls (~2-3h)
+
+    Args:
+        client: httpx async client
+        wallet_addresses: list of 0x-prefixed Ethereum addresses to scan
+        api_key: Etherscan API key
+        sii_scores: dict of stablecoin_id → {overall_score, grade, current_price}
+    """
+    # wallet_address (lowercased) → list of holding dicts
+    holdings_by_wallet: dict[str, list[dict]] = {}
+    wallet_list = [addr.lower() for addr in wallet_addresses]
+    total_contracts = len(ALL_KNOWN_CONTRACTS)
+    total_batches = sum(
+        (len(wallet_list) + TOKENBALANCEMULTI_BATCH_SIZE - 1) // TOKENBALANCEMULTI_BATCH_SIZE
+        for _ in ALL_KNOWN_CONTRACTS
+    )
+
+    logger.info(
+        f"Batch scan: {len(wallet_list)} wallets × {total_contracts} contracts "
+        f"= {total_batches} tokenbalancemulti calls (batch size {TOKENBALANCEMULTI_BATCH_SIZE})"
+    )
+
+    contracts_done = 0
+    calls_made = 0
+
+    for contract_lower, info in ALL_KNOWN_CONTRACTS.items():
+        contracts_done += 1
+        decimals = info.get("decimals", 18)
+        is_scored = contract_lower in SCORED_CONTRACTS
+        sii_score = None
+        sii_grade = None
+        price = 1.0
+        if is_scored:
+            sid = SCORED_CONTRACTS[contract_lower]["stablecoin_id"]
+            score_data = sii_scores.get(sid)
+            if score_data:
+                sii_score = score_data.get("overall_score")
+                sii_grade = score_data.get("grade")
+                if score_data.get("current_price") is not None:
+                    price = score_data["current_price"]
+
+        symbol = info.get("symbol", "???")
+        name = info.get("name", "")
+
+        # Batch wallets in groups of TOKENBALANCEMULTI_BATCH_SIZE
+        nonzero_in_contract = 0
+        for i in range(0, len(wallet_list), TOKENBALANCEMULTI_BATCH_SIZE):
+            batch = wallet_list[i : i + TOKENBALANCEMULTI_BATCH_SIZE]
+            balances = await fetch_token_balance_multi(client, contract_lower, batch, api_key)
+            await asyncio.sleep(ETHERSCAN_RATE_LIMIT_DELAY)
+            calls_made += 1
+
+            for addr_lower, balance_raw in balances.items():
+                balance = balance_raw / (10 ** decimals)
+                value_usd = balance * price
+                holding = {
+                    "token_address": contract_lower,
+                    "symbol": symbol,
+                    "name": name,
+                    "decimals": decimals,
+                    "balance": balance,
+                    "value_usd": value_usd,
+                    "is_scored": is_scored,
+                    "sii_score": sii_score,
+                    "sii_grade": sii_grade,
+                }
+                if addr_lower not in holdings_by_wallet:
+                    holdings_by_wallet[addr_lower] = []
+                holdings_by_wallet[addr_lower].append(holding)
+                nonzero_in_contract += 1
+
+        logger.info(
+            f"  [{contracts_done}/{total_contracts}] {symbol}: "
+            f"{nonzero_in_contract} non-zero balances across {len(wallet_list)} wallets "
+            f"({calls_made} calls total so far)"
+        )
+
+    logger.info(
+        f"Batch scan complete: {calls_made} API calls, "
+        f"{len(holdings_by_wallet)} wallets with holdings "
+        f"out of {len(wallet_list)} total"
+    )
+    return holdings_by_wallet
+
+
 async def fetch_top_holders(
     client: httpx.AsyncClient,
     contract_address: str,
