@@ -96,25 +96,6 @@ if os.path.isdir(FRONTEND_DIR):
 
 
 # =============================================================================
-# Helper: registered stablecoin count (DB-aware, falls back to static registry)
-# =============================================================================
-
-def _get_registered_count() -> int:
-    """
-    Return the number of stablecoins registered in the DB.
-    Queries the stablecoins table so promoted coins are counted correctly.
-    Falls back to len(STABLECOIN_REGISTRY) if the query fails.
-    """
-    try:
-        row = fetch_one("SELECT COUNT(*) AS count FROM stablecoins")
-        if row and row.get("count") is not None:
-            return int(row["count"])
-    except Exception:
-        pass
-    return len(STABLECOIN_REGISTRY)
-
-
-# =============================================================================
 # 1. GET /api/health
 # =============================================================================
 
@@ -136,7 +117,7 @@ async def get_health():
         "database": db_status,
         "scores": {
             "stablecoins_scored": scored_count,
-            "stablecoins_registered": _get_registered_count(),
+            "stablecoins_registered": len(STABLECOIN_REGISTRY),
             "last_computed": latest_score.isoformat() if latest_score else None,
         },
         "formula_version": FORMULA_VERSION,
@@ -152,7 +133,7 @@ async def get_health():
 async def get_scores():
     """Get current SII scores for all stablecoins."""
     rows = fetch_all("""
-        SELECT s.*, st.name, st.symbol, st.issuer
+        SELECT s.*, st.name, st.symbol, st.issuer, st.contract AS token_contract
         FROM scores s
         JOIN stablecoins st ON st.id = s.stablecoin_id
         ORDER BY s.overall_score DESC
@@ -165,6 +146,7 @@ async def get_scores():
             "name": row["name"],
             "symbol": row["symbol"],
             "issuer": row["issuer"],
+            "token_contract": row.get("token_contract"),
             "score": float(row["overall_score"]),
             "grade": row["grade"],
             "price": float(row["current_price"]) if row.get("current_price") else None,
@@ -207,7 +189,7 @@ async def get_scores():
 async def get_score_detail(coin: str):
     """Get detailed SII score breakdown for a specific stablecoin."""
     row = fetch_one("""
-        SELECT s.*, st.name, st.symbol, st.issuer, st.attestation_config, st.regulatory_licenses
+        SELECT s.*, st.name, st.symbol, st.issuer, st.contract AS token_contract, st.attestation_config, st.regulatory_licenses
         FROM scores s
         JOIN stablecoins st ON st.id = s.stablecoin_id
         WHERE s.stablecoin_id = %s
@@ -234,6 +216,7 @@ async def get_score_detail(coin: str):
         "name": row["name"],
         "symbol": row["symbol"],
         "issuer": row["issuer"],
+        "token_contract": row.get("token_contract"),
         "score": float(row["overall_score"]),
         "grade": row["grade"],
         "price": float(row["current_price"]) if row.get("current_price") else None,
@@ -336,7 +319,7 @@ async def compare_scores(
     
     placeholders = ",".join(["%s"] * len(coin_list))
     rows = fetch_all(f"""
-        SELECT s.*, st.name, st.symbol, st.issuer
+        SELECT s.*, st.name, st.symbol, st.issuer, st.contract AS token_contract
         FROM scores s
         JOIN stablecoins st ON st.id = s.stablecoin_id
         WHERE s.stablecoin_id IN ({placeholders})
@@ -349,6 +332,7 @@ async def compare_scores(
                 "id": row["stablecoin_id"],
                 "name": row["name"],
                 "symbol": row["symbol"],
+                "token_contract": row.get("token_contract"),
                 "score": float(row["overall_score"]),
                 "grade": row["grade"],
                 "categories": {
@@ -422,7 +406,7 @@ async def get_config():
             }
             for sid, cfg in STABLECOIN_REGISTRY.items()
         },
-        "count": _get_registered_count(),
+        "count": len(STABLECOIN_REGISTRY),
     }
 
 
@@ -722,7 +706,7 @@ async def admin_health(request: Request):
         "database": db_status,
         "scores": {
             "stablecoins_scored": scored_count,
-            "stablecoins_registered": _get_registered_count(),
+            "stablecoins_registered": len(STABLECOIN_REGISTRY),
             "last_computed": latest_score.isoformat() if latest_score else None,
         },
         "formula_version": FORMULA_VERSION,
