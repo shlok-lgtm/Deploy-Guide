@@ -157,6 +157,100 @@ def _update_wallet_summary(wallet_address: str, total_value: float, size_tier: s
     )
 
 
+def get_coverage_diagnostic() -> dict:
+    """
+    Query coverage breakdown: how many wallets have holdings vs scores vs silent failures.
+    Returns a dict safe to log or include in API responses.
+    """
+    try:
+        row = fetch_one(
+            """
+            SELECT
+                COUNT(*) AS total_wallets,
+                COUNT(*) FILTER (WHERE last_indexed_at IS NOT NULL) AS indexed_wallets,
+                COUNT(*) FILTER (WHERE total_stablecoin_value > 0) AS wallets_with_value
+            FROM wallet_graph.wallets
+            """
+        )
+        holdings_row = fetch_one(
+            """
+            SELECT
+                COUNT(DISTINCT wallet_address) AS wallets_with_holdings
+            FROM wallet_graph.wallet_holdings
+            """
+        )
+        no_holdings_row = fetch_one(
+            """
+            SELECT COUNT(*) AS wallets_no_holdings
+            FROM wallet_graph.wallets w
+            WHERE NOT EXISTS (
+                SELECT 1 FROM wallet_graph.wallet_holdings wh
+                WHERE wh.wallet_address = w.address
+            )
+            """
+        )
+        holdings_no_score_row = fetch_one(
+            """
+            SELECT COUNT(DISTINCT wh.wallet_address) AS holdings_no_score
+            FROM wallet_graph.wallet_holdings wh
+            WHERE NOT EXISTS (
+                SELECT 1 FROM wallet_graph.wallet_risk_scores wrs
+                WHERE wrs.wallet_address = wh.wallet_address
+            )
+            """
+        )
+        zero_value_with_holdings_row = fetch_one(
+            """
+            SELECT COUNT(DISTINCT wh.wallet_address) AS zero_value_with_holdings
+            FROM wallet_graph.wallet_holdings wh
+            JOIN wallet_graph.wallets w ON w.address = wh.wallet_address
+            WHERE COALESCE(w.total_stablecoin_value, 0) = 0
+            """
+        )
+        scored_row = fetch_one(
+            """
+            SELECT COUNT(DISTINCT wrs.wallet_address) AS wallets_scored
+            FROM wallet_graph.wallet_risk_scores wrs
+            WHERE wrs.computed_at = (
+                SELECT MAX(wrs2.computed_at)
+                FROM wallet_graph.wallet_risk_scores wrs2
+                WHERE wrs2.wallet_address = wrs.wallet_address
+            )
+            AND wrs.risk_score IS NOT NULL
+            """
+        )
+
+        total = (row or {}).get("total_wallets", 0)
+        with_holdings = (holdings_row or {}).get("wallets_with_holdings", 0)
+        no_holdings = (no_holdings_row or {}).get("wallets_no_holdings", 0)
+        holdings_no_score = (holdings_no_score_row or {}).get("holdings_no_score", 0)
+        zero_value = (zero_value_with_holdings_row or {}).get("zero_value_with_holdings", 0)
+        scored = (scored_row or {}).get("wallets_scored", 0)
+
+        diagnostic = {
+            "total_wallets": total,
+            "wallets_with_holdings": with_holdings,
+            "wallets_no_holdings": no_holdings,
+            "wallets_scored_latest": scored,
+            "holdings_no_score": holdings_no_score,
+            "zero_value_with_holdings": zero_value,
+            "coverage_pct": round(scored / total * 100, 1) if total else 0,
+            "silent_failure_count": holdings_no_score,
+        }
+
+        logger.info(
+            f"Coverage diagnostic — total: {total}, with_holdings: {with_holdings}, "
+            f"no_holdings: {no_holdings}, scored: {scored}, "
+            f"holdings_no_score (silent failures): {holdings_no_score}, "
+            f"zero_value_with_holdings: {zero_value}, "
+            f"coverage: {diagnostic['coverage_pct']}%"
+        )
+        return diagnostic
+    except Exception as e:
+        logger.warning(f"Coverage diagnostic failed: {e}")
+        return {"error": str(e)}
+
+
 def _track_unscored_holdings(holdings: list[dict]) -> None:
     """Add any unscored holdings to the backlog."""
     for h in holdings:
@@ -374,7 +468,7 @@ async def run_pipeline(holders_per_coin: int = None) -> dict:
                 if indexed % 50 == 0:
                     logger.info(f"  Progress: {indexed}/{len(wallet_addresses)} wallets indexed")
             except Exception as e:
-                logger.warning(f"Error indexing {addr[:10]}…: {e}")
+                logger.warning(f"Error indexing {addr}: {type(e).__name__}: {e}")
                 errors += 1
 
     # Step 5: Update backlog demand signals
@@ -385,22 +479,32 @@ async def run_pipeline(holders_per_coin: int = None) -> dict:
 
     elapsed = (datetime.now(timezone.utc) - started_at).total_seconds()
     scored_count = sum(1 for r in results if r.get("scored"))
+    no_holdings_count = sum(1 for r in results if r.get("holdings") == 0)
+    scoring_failed_count = sum(1 for r in results if r.get("holdings", 0) > 0 and not r.get("scored"))
+
+    # Step 7: Run coverage diagnostic to surface any silent failure paths
+    coverage = get_coverage_diagnostic()
 
     summary = {
         "wallets_discovered": len(wallet_addresses),
         "wallets_indexed": indexed,
         "wallets_scored": scored_count,
+        "wallets_no_holdings": no_holdings_count,
+        "wallets_scoring_failed": scoring_failed_count,
         "errors": errors,
         "unscored_assets_tracked": backlog_count,
         "assets_promoted_to_scoring": promoted_count,
         "sii_scores_loaded": len(sii_scores),
         "elapsed_seconds": round(elapsed, 1),
         "started_at": started_at.isoformat(),
+        "coverage": coverage,
     }
 
     logger.info(
         f"=== Pipeline Complete: {indexed} wallets indexed, "
-        f"{scored_count} scored, {backlog_count} unscored assets tracked, "
+        f"{scored_count} scored, {no_holdings_count} no holdings, "
+        f"{scoring_failed_count} scoring failed, {errors} errors, "
+        f"{backlog_count} unscored assets tracked, "
         f"{promoted_count} promoted to scoring, "
         f"{elapsed:.0f}s elapsed ==="
     )

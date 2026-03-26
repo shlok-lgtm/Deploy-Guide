@@ -13,6 +13,7 @@ from fastapi import FastAPI, Query, HTTPException, BackgroundTasks
 
 from app.database import fetch_all, fetch_one
 from app.indexer.backlog import get_backlog, get_backlog_detail
+from app.indexer.pipeline import get_coverage_diagnostic
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +158,14 @@ def register_wallet_routes(app: FastAPI) -> None:
             **(score_stats or {}),
             **(backlog_stats or {}),
         }
+
+    @app.get("/api/wallets/coverage")
+    async def wallets_coverage():
+        """
+        Coverage diagnostic: breakdown of wallets by holdings vs scoring status.
+        Identifies silent failure paths (wallets with holdings but no risk score).
+        """
+        return get_coverage_diagnostic()
 
     @app.get("/api/wallets/{address}")
     async def wallet_profile(address: str):
