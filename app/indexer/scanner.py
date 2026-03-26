@@ -226,39 +226,70 @@ async def batch_scan_all_holdings(
     wallet_addresses: list[str],
     api_key: str,
     sii_scores: dict,
-) -> dict[str, list[dict]]:
+    contract_override: Optional[dict] = None,
+    wallet_override: Optional[list[str]] = None,
+) -> tuple[dict, int, int]:
     """
     Contract-first batch scan: for each known stablecoin contract, fetch balances
     for all wallet addresses in batches of 20 via tokenbalancemulti.
 
-    Returns a dict of {wallet_address: [holding_dict, ...]} containing only wallets
-    with at least one non-zero balance. Wallets with zero holdings across all contracts
-    are omitted from the result.
+    Returns a tuple of (holdings_by_wallet, batch_failures, calls_made):
+      holdings_by_wallet: {wallet_address_lower: [holding_dict, ...]} — only wallets
+        with at least one non-zero balance; wallets with zero holdings are omitted.
+      batch_failures: number of API calls that returned None (rate-limit/network error)
+      calls_made: exact number of tokenbalancemulti API calls executed
 
-    This replaces the wallet-first scan_wallet_holdings approach:
+    Normal usage (Phase A — full scan):
+      Builds contract list from DB at runtime via get_all_known_contracts() so promoted
+      coins are included automatically. Scans all of wallet_addresses.
+
       Old: 24 contracts × 44k wallets ≈ 1.07M individual tokenbalance calls (~48h)
       New: 24 contracts × ⌈44k/20⌉ batches ≈ 53k tokenbalancemulti calls (~2-3h)
+
+    Override usage (Phase 2 discovery tiered scan):
+      contract_override: if provided, use this dict instead of calling
+        get_all_known_contracts(). All contracts in the override are treated as
+        unscored (is_scored=False, value_usd=balance as 1:1 placeholder — price
+        unknown at discovery time; for stablecoins this is close to accurate,
+        for non-stablecoins it is a rough proxy for demand signal ranking).
+      wallet_override: if provided, use this list instead of wallet_addresses.
+        Useful when you want to scan only a subset of wallets (e.g. 200 sampled
+        whales) without touching the full wallet_addresses argument.
 
     Args:
         client: httpx async client
         wallet_addresses: list of 0x-prefixed Ethereum addresses to scan
         api_key: Etherscan API key
-        sii_scores: dict of stablecoin_id → {overall_score, grade, current_price}
+        sii_scores: dict of stablecoin_id → {overall_score, grade, current_price};
+                    ignored when contract_override is set (all override contracts are unscored)
+        contract_override: optional dict of contract_addr → {symbol, name, decimals, ...};
+                           when set, replaces the DB-built contract registry entirely
+        wallet_override: optional list of wallet addresses; when set, replaces
+                         wallet_addresses as the effective scan target
     """
-    # Build contract registry from DB at runtime — picks up promoted coins
-    scored_contracts, all_contracts = get_all_known_contracts()
+    # Build contract registry
+    if contract_override is not None:
+        scored_contracts: dict = {}   # all override contracts are unscored
+        all_contracts = contract_override
+    else:
+        # Build from DB at runtime — picks up promoted coins
+        scored_contracts, all_contracts = get_all_known_contracts()
+
+    # Determine effective wallet list
+    effective_wallets = wallet_override if wallet_override is not None else wallet_addresses
 
     # wallet_address (lowercased) → list of holding dicts
     holdings_by_wallet: dict[str, list[dict]] = {}
-    wallet_list = [addr.lower() for addr in wallet_addresses]
+    wallet_list = [addr.lower() for addr in effective_wallets]
     total_contracts = len(all_contracts)
     total_batches = sum(
         (len(wallet_list) + TOKENBALANCEMULTI_BATCH_SIZE - 1) // TOKENBALANCEMULTI_BATCH_SIZE
         for _ in all_contracts
     )
 
+    scan_label = "Tiered scan" if contract_override is not None else "Batch scan"
     logger.info(
-        f"Batch scan: {len(wallet_list)} wallets × {total_contracts} contracts "
+        f"{scan_label}: {len(wallet_list)} wallets × {total_contracts} contracts "
         f"= {total_batches} tokenbalancemulti calls (batch size {TOKENBALANCEMULTI_BATCH_SIZE})"
     )
 
@@ -332,12 +363,12 @@ async def batch_scan_all_holdings(
         )
 
     logger.info(
-        f"Batch scan complete: {calls_made} API calls, "
+        f"{scan_label} complete: {calls_made} API calls, "
         f"{batch_failures} failed batches, "
         f"{len(holdings_by_wallet)} wallets with holdings "
         f"out of {len(wallet_list)} total"
     )
-    return holdings_by_wallet, batch_failures
+    return holdings_by_wallet, batch_failures, calls_made
 
 
 async def fetch_top_holders(

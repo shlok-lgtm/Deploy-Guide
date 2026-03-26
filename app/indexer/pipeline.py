@@ -561,80 +561,6 @@ async def index_wallet(
     }
 
 
-async def _tiered_batch_scan(
-    client: httpx.AsyncClient,
-    new_contracts: dict,
-    wallet_addresses: list,
-    api_key: str,
-) -> tuple[dict, int, int]:
-    """
-    Targeted batch scan: check only `new_contracts` against `wallet_addresses`.
-    All holdings are stored as is_scored=False (none of these are in the SII registry).
-
-    This is structurally identical to batch_scan_all_holdings() but operates on
-    an explicit contract dict rather than calling get_all_known_contracts() from the DB.
-    value_usd is set to balance (1:1 placeholder — price unknown at discovery time).
-    For stablecoins this is close to accurate; for non-stablecoins it is a rough proxy
-    that drives update_demand_signals() priority ordering.
-
-    Returns:
-        (holdings_by_wallet, batch_failures, calls_made) where:
-          holdings_by_wallet: dict of wallet_address_lower → [holding_dict, ...]
-          batch_failures: number of API calls that returned None (rate-limit/network)
-          calls_made: exact number of tokenbalancemulti API calls executed
-    """
-    from app.indexer.scanner import fetch_token_balance_multi, TOKENBALANCEMULTI_BATCH_SIZE
-
-    holdings_by_wallet: dict[str, list[dict]] = {}
-    wallet_list = [addr.lower() for addr in wallet_addresses]
-    batch_failures = 0
-    calls_made = 0
-    contracts_done = 0
-    total_contracts = len(new_contracts)
-
-    for contract_lower, info in new_contracts.items():
-        contracts_done += 1
-        decimals = info.get("decimals", 18)
-        symbol = info.get("symbol", "???")
-        name = info.get("name", "")
-        nonzero_in_contract = 0
-
-        for i in range(0, len(wallet_list), TOKENBALANCEMULTI_BATCH_SIZE):
-            batch = wallet_list[i : i + TOKENBALANCEMULTI_BATCH_SIZE]
-            balances = await fetch_token_balance_multi(client, contract_lower, batch, api_key)
-            await asyncio.sleep(ETHERSCAN_RATE_LIMIT_DELAY)
-            calls_made += 1
-
-            if balances is None:
-                batch_failures += 1
-                continue
-
-            for addr_lower, balance_raw in balances.items():
-                balance = balance_raw / (10 ** decimals)
-                holding = {
-                    "token_address": contract_lower,
-                    "symbol": symbol,
-                    "name": name,
-                    "decimals": decimals,
-                    "balance": balance,
-                    "value_usd": balance,
-                    "is_scored": False,
-                    "sii_score": None,
-                    "sii_grade": None,
-                }
-                if addr_lower not in holdings_by_wallet:
-                    holdings_by_wallet[addr_lower] = []
-                holdings_by_wallet[addr_lower].append(holding)
-                nonzero_in_contract += 1
-
-        logger.info(
-            f"  Tiered [{contracts_done}/{total_contracts}] {symbol}: "
-            f"{nonzero_in_contract} non-zero holdings across {len(wallet_list)} wallets"
-        )
-
-    return holdings_by_wallet, batch_failures, calls_made
-
-
 async def run_pipeline(holders_per_coin: int = None) -> dict:
     """
     Full pipeline run: seed → scan → score → store → backlog update.
@@ -687,23 +613,24 @@ async def run_pipeline(holders_per_coin: int = None) -> dict:
         new_contracts, sampled_wallets = await discover_new_tokens(client, api_key)
         new_contracts_discovered = len(new_contracts)
 
-        # Step 1c: Tiered scan — batch-scan only new contracts against the 200 sampled wallets
+        # Step 1c: Tiered scan — batch-scan only new contracts against the 200 sampled wallets.
+        # Uses batch_scan_all_holdings() with contract_override so the batching logic
+        # is not duplicated. sii_scores={} because all override contracts are unscored.
         if new_contracts and sampled_wallets:
             logger.info(
                 f"Discovery Phase 2: tiered scan of {new_contracts_discovered} new contracts "
                 f"× {len(sampled_wallets)} sampled wallets"
             )
-            # _tiered_batch_scan operates only on the explicit new_contracts dict and
-            # the sampled wallets — not the full 44K wallet list or full contract registry.
-            # All discovered holdings are stored as is_scored=False.
-            tiered_holdings, tiered_failures, tiered_calls_actual = await _tiered_batch_scan(
-                client, new_contracts, sampled_wallets, api_key
+            tiered_holdings, tiered_failures, tiered_scan_api_calls = (
+                await batch_scan_all_holdings(
+                    client, sampled_wallets, api_key, {},
+                    contract_override=new_contracts,
+                )
             )
-            tiered_scan_api_calls = tiered_calls_actual
 
             # Store tiered holdings with ORIGINAL wallet casing (FK requires match
             # against wallets.address which may be checksum/mixed-case from Etherscan).
-            # _tiered_batch_scan keys by lowercased address; map back to original here.
+            # batch_scan_all_holdings keys by lowercased address; map back to original here.
             lower_to_original = {w.lower(): w for w in sampled_wallets}
             tiered_stored = 0
             for addr_lower, h_list in tiered_holdings.items():
@@ -714,7 +641,7 @@ async def run_pipeline(holders_per_coin: int = None) -> dict:
 
             logger.info(
                 f"Discovery Phase 2 complete: {tiered_stored} holdings stored, "
-                f"{tiered_failures} batch failures, ~{tiered_scan_api_calls} API calls"
+                f"{tiered_failures} batch failures, {tiered_scan_api_calls} API calls"
             )
 
             # Immediate demand signal update so backlog has real dollar values
@@ -723,7 +650,7 @@ async def run_pipeline(holders_per_coin: int = None) -> dict:
         # Phase A: Batch-fetch all holdings across all contracts (contract-first)
         # tokenbalancemulti: 24 contracts × ⌈N/20⌉ batches instead of 24 × N individual calls
         logger.info("Phase A: Batch balance scan (tokenbalancemulti, contract-first)")
-        all_holdings, scan_batch_failures = await batch_scan_all_holdings(client, wallet_list, api_key, sii_scores)
+        all_holdings, scan_batch_failures, _ = await batch_scan_all_holdings(client, wallet_list, api_key, sii_scores)
 
         # Phase B: Upsert all wallets, then score + store those with holdings
         logger.info(f"Phase B: Score and store — {len(all_holdings)} wallets with holdings")
