@@ -610,7 +610,12 @@ async def _tiered_batch_scan(
                     "name": name,
                     "decimals": decimals,
                     "balance": balance,
-                    "value_usd": balance,  # price unknown; use 1:1 as placeholder
+                    # value_usd intentionally uses 1:1 (balance as USD) for all
+                    # newly discovered tokens — price is unknown at discovery time.
+                    # For stablecoins this is close to accurate; for non-stablecoins
+                    # it is a placeholder. The field drives update_demand_signals()
+                    # priority ordering, so even an imprecise value helps ranking.
+                    "value_usd": balance,
                     "is_scored": False,
                     "sii_score": None,
                     "sii_grade": None,
@@ -698,11 +703,15 @@ async def run_pipeline(holders_per_coin: int = None) -> dict:
                 for _ in new_contracts
             )
 
-            # Store tiered holdings and update demand signals immediately
+            # Store tiered holdings with ORIGINAL wallet casing (FK requires match
+            # against wallets.address which may be checksum/mixed-case from Etherscan).
+            # _tiered_batch_scan keys by lowercased address; map back to original here.
+            lower_to_original = {w.lower(): w for w in sampled_wallets}
             tiered_stored = 0
             for addr_lower, h_list in tiered_holdings.items():
                 if h_list:
-                    _store_holdings(addr_lower, h_list)
+                    original_addr = lower_to_original.get(addr_lower, addr_lower)
+                    _store_holdings(original_addr, h_list)
                     tiered_stored += len(h_list)
 
             logger.info(
