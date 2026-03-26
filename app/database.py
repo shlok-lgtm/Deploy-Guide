@@ -25,8 +25,18 @@ def init_pool(database_url: Optional[str] = None, min_conn: int = 2, max_conn: i
         logger.error("DATABASE_URL not set — database unavailable")
         return
     try:
-        _pool = ThreadedConnectionPool(min_conn, max_conn, url)
-        logger.info(f"Database pool initialized (min={min_conn}, max={max_conn})")
+        # TCP keepalives: prevent the OS from silently dropping idle connections
+        # after PostgreSQL's idle-session timeout. Without this, connections that
+        # sit in the pool for >~30 min get closed server-side and the next caller
+        # gets a "connection already closed" error.
+        _pool = ThreadedConnectionPool(
+            min_conn, max_conn, url,
+            keepalives=1,
+            keepalives_idle=30,     # start probing after 30 s idle
+            keepalives_interval=10, # retry probe every 10 s
+            keepalives_count=5,     # drop after 5 failed probes
+        )
+        logger.info(f"Database pool initialized (min={min_conn}, max={max_conn}, keepalives=on)")
     except Exception as e:
         logger.error(f"Failed to initialize database pool: {e}")
         _pool = None
@@ -43,18 +53,39 @@ def close_pool():
 
 @contextmanager
 def get_conn():
-    """Get a database connection from the pool. Auto-returns on exit."""
+    """Get a database connection from the pool. Auto-returns on exit.
+
+    Validates the connection before yielding: if psycopg2 has already marked it
+    closed (conn.closed != 0) — which happens when PostgreSQL drops an idle
+    connection server-side — the dead connection is discarded and a fresh one is
+    obtained.  This prevents "connection already closed" errors in long-running
+    background tasks (e.g. the wallet indexer pipeline).
+    """
     if _pool is None:
         raise RuntimeError("Database pool not initialized. Call init_pool() first.")
     conn = _pool.getconn()
+    # conn.closed: 0 = open, 1 = closed cleanly, 2 = broken/lost
+    if conn.closed:
+        logger.warning("Stale connection in pool (closed=%d) — discarding and replacing", conn.closed)
+        try:
+            _pool.putconn(conn, close=True)
+        except Exception:
+            pass
+        conn = _pool.getconn()
     try:
         yield conn
         conn.commit()
     except Exception:
-        conn.rollback()
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         raise
     finally:
-        _pool.putconn(conn)
+        try:
+            _pool.putconn(conn)
+        except Exception:
+            pass
 
 
 @contextmanager
