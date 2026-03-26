@@ -225,6 +225,25 @@ def run_migrations():
         else:
             logger.warning(f"Migration file not found: {migration_path}")
 
+    try:
+        result = fetch_one("SELECT 1 FROM migrations WHERE name = '011_token_type_column'")
+        if result:
+            logger.info("Migration 011_token_type_column already applied ✓")
+    except Exception:
+        result = None
+
+    if not result:
+        logger.info("Applying migration 011: token_type column on unscored_assets...")
+        migration_path = os.path.join(os.path.dirname(__file__), "migrations", "011_token_type_column.sql")
+        if os.path.exists(migration_path):
+            success = run_migration(migration_path)
+            if success:
+                logger.info("Migration 011_token_type_column applied ✓")
+            else:
+                logger.error("Failed to apply migration 011_token_type_column")
+        else:
+            logger.warning(f"Migration file not found: {migration_path}")
+
 
 def main():
     # 1. Initialize database

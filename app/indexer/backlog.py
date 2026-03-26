@@ -23,22 +23,35 @@ def upsert_unscored_asset(
     name: str,
     decimals: int,
     coingecko_id: Optional[str] = None,
+    token_type: str = "unknown",
 ) -> None:
-    """Insert or update an unscored asset in the backlog."""
+    """Insert or update an unscored asset in the backlog.
+
+    token_type: 'stablecoin', 'non_stablecoin', or 'unknown'.
+      - Only 'stablecoin' rows are eligible for SII promotion.
+      - On conflict, token_type is only overwritten if the incoming value is
+        more specific than the stored value (unknown < stablecoin|non_stablecoin).
+    """
     execute(
         """
         INSERT INTO wallet_graph.unscored_assets
-            (token_address, symbol, name, decimals, coingecko_id, first_seen_at, last_seen_at, updated_at)
-        VALUES (%s, %s, %s, %s, %s, NOW(), NOW(), NOW())
+            (token_address, symbol, name, decimals, coingecko_id,
+             token_type, first_seen_at, last_seen_at, updated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, NOW(), NOW(), NOW())
         ON CONFLICT (token_address) DO UPDATE SET
             symbol = COALESCE(EXCLUDED.symbol, wallet_graph.unscored_assets.symbol),
             name = COALESCE(EXCLUDED.name, wallet_graph.unscored_assets.name),
             decimals = COALESCE(EXCLUDED.decimals, wallet_graph.unscored_assets.decimals),
             coingecko_id = COALESCE(EXCLUDED.coingecko_id, wallet_graph.unscored_assets.coingecko_id),
+            token_type = CASE
+                WHEN wallet_graph.unscored_assets.token_type = 'unknown'
+                    THEN EXCLUDED.token_type
+                ELSE wallet_graph.unscored_assets.token_type
+            END,
             last_seen_at = NOW(),
             updated_at = NOW()
         """,
-        (token_address.lower(), symbol, name, decimals, coingecko_id),
+        (token_address.lower(), symbol, name, decimals, coingecko_id, token_type),
     )
 
 
@@ -153,6 +166,7 @@ def seed_known_unscored() -> int:
             name=info["name"],
             decimals=info["decimals"],
             coingecko_id=info.get("coingecko_id"),
+            token_type="stablecoin",
         )
         count += 1
     logger.info(f"Seeded {count} known unscored assets into backlog")
@@ -182,6 +196,7 @@ def promote_eligible_assets() -> int:
         WHERE total_value_held >= %s
           AND scoring_status = 'unscored'
           AND coingecko_id IS NOT NULL
+          AND token_type = 'stablecoin'
         ORDER BY total_value_held DESC
         """,
         (threshold,),

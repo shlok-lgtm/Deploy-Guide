@@ -14,6 +14,7 @@ Pipeline flow:
 """
 
 import os
+import re
 import asyncio
 import logging
 from datetime import datetime, timezone
@@ -22,13 +23,22 @@ import httpx
 
 from app.database import fetch_all, fetch_one, execute
 from app.indexer.config import ETHERSCAN_RATE_LIMIT_DELAY
-from app.indexer.scanner import batch_scan_all_holdings, fetch_top_holders
+from app.indexer.scanner import batch_scan_all_holdings, fetch_top_holders, fetch_token_list
 from app.indexer.scorer import compute_wallet_risk
 from app.indexer.backlog import (
     upsert_unscored_asset,
     update_demand_signals,
     seed_known_unscored,
     promote_eligible_assets,
+)
+
+# ---------------------------------------------------------------------------
+# Stablecoin classification — symbol pattern match (fast, no external calls)
+# ---------------------------------------------------------------------------
+_STABLECOIN_PATTERN = re.compile(
+    r"(usd[ct]?|usdt|usdc|busd|gusd|dai|frax|eur[os]?|eurs|gbp|chf|jpy|cnh|"
+    r"tusd|usdp|susd|lusd|dola|mim|crvusd|gho|pyusd|usdd|fdusd|usdb|eurc)",
+    re.IGNORECASE,
 )
 
 logger = logging.getLogger(__name__)
@@ -298,6 +308,143 @@ def _get_scored_stablecoins_from_db() -> list[dict]:
     ]
 
 
+def _classify_token(symbol: str) -> str:
+    """Classify a token as 'stablecoin' or 'non_stablecoin' by symbol pattern."""
+    if symbol and _STABLECOIN_PATTERN.search(symbol):
+        return "stablecoin"
+    return "non_stablecoin"
+
+
+def _get_known_contract_addresses() -> set:
+    """
+    Return the full set of already-known contract addresses (lowercased)
+    from both the stablecoins table and wallet_graph.unscored_assets.
+    Used to filter out contracts we've already seen during discovery.
+    """
+    known = set()
+    try:
+        rows = fetch_all(
+            "SELECT LOWER(contract) AS addr FROM stablecoins WHERE contract IS NOT NULL AND contract != ''"
+        )
+        for r in rows:
+            if r["addr"]:
+                known.add(r["addr"])
+    except Exception as e:
+        logger.warning(f"Could not fetch known stablecoin contracts: {e}")
+
+    try:
+        rows = fetch_all("SELECT token_address FROM wallet_graph.unscored_assets")
+        for r in rows:
+            if r["token_address"]:
+                known.add(r["token_address"].lower())
+    except Exception as e:
+        logger.warning(f"Could not fetch known unscored_assets: {e}")
+
+    return known
+
+
+async def discover_new_tokens(
+    client: httpx.AsyncClient,
+    api_key: str,
+    sample_size: int = 200,
+) -> tuple[dict, list]:
+    """
+    Phase 1 of the discovery loop: sample top whale wallets and call
+    fetch_token_list() for each to find ERC-20 contracts not yet tracked.
+
+    Steps:
+      1. Query top `sample_size` wallets by total_stablecoin_value.
+      2. Call fetch_token_list() for each (rate-limited).
+      3. Extract unique contract addresses from the tokentx responses.
+         Metadata (symbol, name, decimals) comes directly from the response —
+         no extra API calls needed.
+      4. Filter out contracts already in stablecoins or unscored_assets.
+      5. Classify each new contract by symbol pattern.
+      6. Upsert into unscored_assets with token_type.
+
+    Returns:
+        (new_contracts, sampled_wallets) where:
+          new_contracts: dict of contract_addr → {symbol, name, decimals, token_type}
+          sampled_wallets: list of wallet addresses that were queried (reused in Phase 2)
+    """
+    # Step 1: Sample top whale wallets
+    rows = fetch_all(
+        """
+        SELECT address FROM wallet_graph.wallets
+        WHERE total_stablecoin_value IS NOT NULL
+        ORDER BY total_stablecoin_value DESC
+        LIMIT %s
+        """,
+        (sample_size,),
+    )
+    sampled_wallets = [r["address"] for r in rows]
+
+    if not sampled_wallets:
+        logger.info("Discovery: no wallets in graph yet — skipping")
+        return {}, []
+
+    logger.info(
+        f"Discovery Phase 1: fetching token lists for {len(sampled_wallets)} whale wallets"
+    )
+
+    # Step 2 + 3: Fetch token lists and collect unique contracts
+    known = _get_known_contract_addresses()
+    seen_this_run: dict[str, dict] = {}
+
+    for wallet in sampled_wallets:
+        txs = await fetch_token_list(client, wallet, api_key)
+        await asyncio.sleep(ETHERSCAN_RATE_LIMIT_DELAY)
+
+        if not txs:
+            continue
+
+        for tx in txs:
+            addr = tx.get("contractAddress", "").lower()
+            if not addr or addr in known or addr in seen_this_run:
+                continue
+            symbol = tx.get("tokenSymbol", "") or ""
+            name = tx.get("tokenName", "") or ""
+            try:
+                decimals = int(tx.get("tokenDecimal", "18"))
+            except (ValueError, TypeError):
+                decimals = 18
+
+            seen_this_run[addr] = {
+                "symbol": symbol,
+                "name": name,
+                "decimals": decimals,
+                "token_type": _classify_token(symbol),
+            }
+
+    if not seen_this_run:
+        logger.info("Discovery Phase 1: no new contracts found")
+        return {}, sampled_wallets
+
+    # Step 4 is already handled above (known set filter).
+    # Step 5+6: Upsert each new contract with its classified token_type
+    stablecoin_count = 0
+    non_stablecoin_count = 0
+    for addr, info in seen_this_run.items():
+        upsert_unscored_asset(
+            token_address=addr,
+            symbol=info["symbol"],
+            name=info["name"],
+            decimals=info["decimals"],
+            token_type=info["token_type"],
+        )
+        if info["token_type"] == "stablecoin":
+            stablecoin_count += 1
+        else:
+            non_stablecoin_count += 1
+
+    logger.info(
+        f"Discovery Phase 1 complete: {len(seen_this_run)} new contracts found "
+        f"({stablecoin_count} stablecoin, {non_stablecoin_count} non_stablecoin) "
+        f"from {len(sampled_wallets)} wallets"
+    )
+    return seen_this_run, sampled_wallets
+
+
 async def seed_wallets(
     client: httpx.AsyncClient,
     api_key: str,
@@ -414,6 +561,73 @@ async def index_wallet(
     }
 
 
+async def _tiered_batch_scan(
+    client: httpx.AsyncClient,
+    new_contracts: dict,
+    wallet_addresses: list,
+    api_key: str,
+) -> tuple[dict, int]:
+    """
+    Targeted batch scan: check only `new_contracts` against `wallet_addresses`.
+    All holdings are stored as is_scored=False (none of these are in the SII registry).
+
+    This is structurally identical to batch_scan_all_holdings() but operates on
+    an explicit contract dict rather than calling get_all_known_contracts() from the DB.
+
+    Returns:
+        (holdings_by_wallet, batch_failures)
+        holdings_by_wallet: dict of wallet_address → [holding_dict, ...]
+    """
+    from app.indexer.scanner import fetch_token_balance_multi, TOKENBALANCEMULTI_BATCH_SIZE
+
+    holdings_by_wallet: dict[str, list[dict]] = {}
+    wallet_list = [addr.lower() for addr in wallet_addresses]
+    batch_failures = 0
+    contracts_done = 0
+    total_contracts = len(new_contracts)
+
+    for contract_lower, info in new_contracts.items():
+        contracts_done += 1
+        decimals = info.get("decimals", 18)
+        symbol = info.get("symbol", "???")
+        name = info.get("name", "")
+        nonzero_in_contract = 0
+
+        for i in range(0, len(wallet_list), TOKENBALANCEMULTI_BATCH_SIZE):
+            batch = wallet_list[i : i + TOKENBALANCEMULTI_BATCH_SIZE]
+            balances = await fetch_token_balance_multi(client, contract_lower, batch, api_key)
+            await asyncio.sleep(ETHERSCAN_RATE_LIMIT_DELAY)
+
+            if balances is None:
+                batch_failures += 1
+                continue
+
+            for addr_lower, balance_raw in balances.items():
+                balance = balance_raw / (10 ** decimals)
+                holding = {
+                    "token_address": contract_lower,
+                    "symbol": symbol,
+                    "name": name,
+                    "decimals": decimals,
+                    "balance": balance,
+                    "value_usd": balance,  # price unknown; use 1:1 as placeholder
+                    "is_scored": False,
+                    "sii_score": None,
+                    "sii_grade": None,
+                }
+                if addr_lower not in holdings_by_wallet:
+                    holdings_by_wallet[addr_lower] = []
+                holdings_by_wallet[addr_lower].append(holding)
+                nonzero_in_contract += 1
+
+        logger.info(
+            f"  Tiered [{contracts_done}/{total_contracts}] {symbol}: "
+            f"{nonzero_in_contract} non-zero holdings across {len(wallet_list)} wallets"
+        )
+
+    return holdings_by_wallet, batch_failures
+
+
 async def run_pipeline(holders_per_coin: int = None) -> dict:
     """
     Full pipeline run: seed → scan → score → store → backlog update.
@@ -448,6 +662,9 @@ async def run_pipeline(holders_per_coin: int = None) -> dict:
     # Build known holder set for source tagging
     known_addrs = _seed_from_known_holders()
 
+    new_contracts_discovered = 0
+    tiered_scan_api_calls = 0
+
     async with httpx.AsyncClient() as client:
         # Step 1: Seed
         wallet_addresses = await seed_wallets(client, api_key, holders_per_coin)
@@ -457,6 +674,44 @@ async def run_pipeline(holders_per_coin: int = None) -> dict:
         wallet_addresses |= existing
         wallet_list = list(wallet_addresses)
         logger.info(f"Total wallets to index: {len(wallet_list)} ({len(existing)} existing)")
+
+        # Step 1b: Discovery — find new ERC-20 contracts from top whale wallets
+        logger.info("Discovery Phase 1: scanning whale wallets for new ERC-20 contracts")
+        new_contracts, sampled_wallets = await discover_new_tokens(client, api_key)
+        new_contracts_discovered = len(new_contracts)
+
+        # Step 1c: Tiered scan — batch-scan only new contracts against the 200 sampled wallets
+        if new_contracts and sampled_wallets:
+            logger.info(
+                f"Discovery Phase 2: tiered scan of {new_contracts_discovered} new contracts "
+                f"× {len(sampled_wallets)} sampled wallets"
+            )
+            # Build a minimal sii_scores-compatible dict for new (unscored) contracts
+            # All are unscored, so is_scored=False and no price data needed
+            # batch_scan_all_holdings will call get_all_known_contracts() internally, but
+            # we pass new_contracts directly by temporarily building a fake registry:
+            tiered_holdings, tiered_failures = await _tiered_batch_scan(
+                client, new_contracts, sampled_wallets, api_key
+            )
+            tiered_scan_api_calls = sum(
+                (len(sampled_wallets) + 19) // 20  # ceil batches per contract
+                for _ in new_contracts
+            )
+
+            # Store tiered holdings and update demand signals immediately
+            tiered_stored = 0
+            for addr_lower, h_list in tiered_holdings.items():
+                if h_list:
+                    _store_holdings(addr_lower, h_list)
+                    tiered_stored += len(h_list)
+
+            logger.info(
+                f"Discovery Phase 2 complete: {tiered_stored} holdings stored, "
+                f"{tiered_failures} batch failures, ~{tiered_scan_api_calls} API calls"
+            )
+
+            # Immediate demand signal update so backlog has real dollar values
+            update_demand_signals()
 
         # Phase A: Batch-fetch all holdings across all contracts (contract-first)
         # tokenbalancemulti: 24 contracts × ⌈N/20⌉ batches instead of 24 × N individual calls
@@ -542,6 +797,8 @@ async def run_pipeline(holders_per_coin: int = None) -> dict:
         "unscored_assets_tracked": backlog_count,
         "assets_promoted_to_scoring": promoted_count,
         "sii_scores_loaded": len(sii_scores),
+        "new_contracts_discovered": new_contracts_discovered,
+        "tiered_scan_api_calls": tiered_scan_api_calls,
         "elapsed_seconds": round(elapsed, 1),
         "started_at": started_at.isoformat(),
         "coverage": coverage,
@@ -554,6 +811,8 @@ async def run_pipeline(holders_per_coin: int = None) -> dict:
         f"{scan_batch_failures} scan batch failures, {errors} errors, "
         f"{backlog_count} unscored assets tracked, "
         f"{promoted_count} promoted to scoring, "
+        f"{new_contracts_discovered} new contracts discovered "
+        f"({tiered_scan_api_calls} tiered scan calls), "
         f"{elapsed:.0f}s elapsed ==="
     )
 
