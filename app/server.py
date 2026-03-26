@@ -74,9 +74,108 @@ async def startup():
         logger.info("Wallet indexer routes registered")
     except Exception as e:
         logger.warning(f"Wallet indexer not available: {e}")
+    # MCP HTTP endpoint
+    try:
+        from app.mcp_server import mcp as mcp_server
+        import asyncio
+
+        if hasattr(mcp_server, "streamable_http_app"):
+            mcp_asgi = mcp_server.streamable_http_app()
+            app.state.mcp_task = asyncio.get_event_loop().create_task(
+                _run_mcp_session_manager(mcp_server.session_manager)
+            )
+        elif hasattr(mcp_server, "asgi_app"):
+            mcp_asgi = mcp_server.asgi_app()
+            app.state.mcp_task = asyncio.get_event_loop().create_task(
+                _run_mcp_session_manager(mcp_server.session_manager)
+            )
+        else:
+            mcp_asgi = None
+
+        if mcp_asgi is not None:
+            @app.post("/mcp")
+            @app.get("/mcp")
+            @app.delete("/mcp")
+            async def mcp_endpoint(request: Request):
+                return await _delegate_to_asgi(mcp_asgi, request)
+
+            app.mount("/mcp", mcp_asgi)
+            logger.info("MCP HTTP endpoint registered at /mcp")
+        else:
+            from fastapi.responses import JSONResponse
+
+            @app.post("/mcp")
+            @app.get("/mcp")
+            @app.delete("/mcp")
+            async def mcp_endpoint_fallback(request: Request):
+                return JSONResponse(
+                    {"error": "MCP transport not available: SDK lacks streamable_http_app/asgi_app"},
+                    status_code=503,
+                )
+
+            logger.warning("MCP SDK has no ASGI app method; /mcp registered with 503 fallback")
+    except ImportError as e:
+        logger.warning(f"MCP endpoint not available: {e}")
+    except Exception as e:
+        logger.warning(f"MCP endpoint registration failed: {e}")
+
     # SPA catch-all must be registered LAST so it doesn't shadow dynamic routes
     _register_spa_catch_all(app)
     logger.info("Basis Protocol API started")
+
+
+async def _run_mcp_session_manager(session_manager):
+    """Keep the MCP session manager running via its public run() context manager."""
+    import asyncio
+    async with session_manager.run():
+        await asyncio.sleep(float("inf"))
+
+
+async def _delegate_to_asgi(asgi_app, request: Request):
+    """Forward a FastAPI request to an ASGI sub-app with a streaming response."""
+    from starlette.responses import StreamingResponse
+    import asyncio
+
+    body = await request.body()
+    send_queue: asyncio.Queue = asyncio.Queue()
+    _body_sent = False
+
+    async def receive():
+        nonlocal _body_sent
+        if not _body_sent:
+            _body_sent = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        await send_queue.put(message)
+
+    scope = dict(request.scope)
+    scope["path"] = "/"
+    scope["root_path"] = request.scope.get("root_path", "") + "/mcp"
+
+    asgi_task = asyncio.ensure_future(asgi_app(scope, receive, send))
+    asgi_task.add_done_callback(lambda _: send_queue.put_nowait({"type": "http.response.body", "body": b"", "more_body": False}))
+
+    start_message = await send_queue.get()
+    status_code = start_message.get("status", 200)
+    headers = {k.decode(): v.decode() for k, v in start_message.get("headers", [])}
+
+    async def body_generator():
+        while True:
+            msg = await send_queue.get()
+            if msg["type"] == "http.response.body":
+                chunk = msg.get("body", b"")
+                if chunk:
+                    yield chunk
+                if not msg.get("more_body", False):
+                    break
+
+    return StreamingResponse(
+        body_generator(),
+        status_code=status_code,
+        headers=headers,
+    )
 
 
 @app.on_event("shutdown")

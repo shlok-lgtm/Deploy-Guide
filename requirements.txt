@@ -11,3 +11,4 @@ psycopg2-binary
 python-dateutil
 python-dotenv
 uvicorn[standard]
+mcp[http]
