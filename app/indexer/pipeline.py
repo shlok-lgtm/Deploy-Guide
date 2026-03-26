@@ -377,13 +377,14 @@ async def index_wallet(
 
     if not holdings:
         _update_wallet_summary(wallet_address, 0, "retail")
-        return {"address": wallet_address, "holdings": 0, "scored": False}
+        return {"address": wallet_address, "holdings": 0, "scored": False, "reason": "no_holdings"}
 
     # Score
     risk = compute_wallet_risk(holdings)
     if not risk:
+        logger.warning(f"Risk compute returned None for {wallet_address} ({len(holdings)} holdings)")
         _update_wallet_summary(wallet_address, 0, "retail")
-        return {"address": wallet_address, "holdings": len(holdings), "scored": False}
+        return {"address": wallet_address, "holdings": len(holdings), "scored": False, "reason": "risk_compute_failed"}
 
     # Store
     _store_holdings(wallet_address, holdings)
@@ -479,8 +480,8 @@ async def run_pipeline(holders_per_coin: int = None) -> dict:
 
     elapsed = (datetime.now(timezone.utc) - started_at).total_seconds()
     scored_count = sum(1 for r in results if r.get("scored"))
-    no_holdings_count = sum(1 for r in results if r.get("holdings") == 0)
-    scoring_failed_count = sum(1 for r in results if r.get("holdings", 0) > 0 and not r.get("scored"))
+    no_holdings_count = sum(1 for r in results if r.get("reason") == "no_holdings")
+    scoring_failed_count = sum(1 for r in results if r.get("reason") == "risk_compute_failed")
 
     # Step 7: Run coverage diagnostic to surface any silent failure paths
     coverage = get_coverage_diagnostic()
