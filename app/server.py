@@ -58,13 +58,10 @@ async def rate_limit_and_track(request: Request, call_next):
     start_time = time.time()
     path = request.url.path
 
-    # Pass through: admin endpoints (own auth), static assets, non-API/MCP paths
-    if path.startswith("/api/admin"):
-        return await call_next(request)
+    # Only process /api/* and /mcp paths — pass everything else straight through
     if not path.startswith("/api") and not path.startswith("/mcp"):
         return await call_next(request)
 
-    # Lazy imports to avoid circular issues at module load time
     from app.rate_limiter import rate_limiter, PUBLIC_RATE_LIMIT, KEYED_RATE_LIMIT
     from app.usage_tracker import validate_api_key, hash_api_key, log_request
 
@@ -76,17 +73,37 @@ async def rate_limit_and_track(request: Request, call_next):
         api_key_id = validate_api_key(api_key_str)
         api_key_hash = hash_api_key(api_key_str)
 
+    ip = request.client.host if request.client else "unknown"
+    ua = request.headers.get("user-agent", "")[:500]
+
+    # Admin endpoints — exempt from rate limiting but still logged
+    if path.startswith("/api/admin"):
+        response = await call_next(request)
+        elapsed_ms = int((time.time() - start_time) * 1000)
+        log_request(
+            endpoint=path, method=request.method,
+            status_code=response.status_code, response_time_ms=elapsed_ms,
+            ip=ip, api_key_id=api_key_id, api_key_hash=api_key_hash, user_agent=ua,
+        )
+        return response
+
+    # Determine rate limit tier
     if api_key_id:
         identifier = f"key:{api_key_id}"
         limit = KEYED_RATE_LIMIT
     else:
-        ip = request.client.host if request.client else "unknown"
         identifier = f"ip:{ip}"
         limit = PUBLIC_RATE_LIMIT
 
     allowed, remaining = rate_limiter.is_allowed(identifier, limit)
 
     if not allowed:
+        elapsed_ms = int((time.time() - start_time) * 1000)
+        log_request(
+            endpoint=path, method=request.method,
+            status_code=429, response_time_ms=elapsed_ms,
+            ip=ip, api_key_id=api_key_id, api_key_hash=api_key_hash, user_agent=ua,
+        )
         origin = request.headers.get("origin", "")
         cors_header = "*" if (not origin or "*" in CORS_ORIGINS) else (origin if origin in CORS_ORIGINS else "")
         rl_headers = {
@@ -103,20 +120,12 @@ async def rate_limit_and_track(request: Request, call_next):
         )
 
     response = await call_next(request)
-
     elapsed_ms = int((time.time() - start_time) * 1000)
-    ip = request.client.host if request.client else "unknown"
     log_request(
-        endpoint=path,
-        method=request.method,
-        status_code=response.status_code,
-        response_time_ms=elapsed_ms,
-        ip=ip,
-        api_key_id=api_key_id,
-        api_key_hash=api_key_hash,
-        user_agent=request.headers.get("user-agent", "")[:500],
+        endpoint=path, method=request.method,
+        status_code=response.status_code, response_time_ms=elapsed_ms,
+        ip=ip, api_key_id=api_key_id, api_key_hash=api_key_hash, user_agent=ua,
     )
-
     response.headers["X-RateLimit-Remaining"] = str(remaining)
     response.headers["X-RateLimit-Limit"] = str(limit)
     return response

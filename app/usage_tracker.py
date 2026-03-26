@@ -19,6 +19,7 @@ import logging
 import secrets
 import threading
 import time
+from collections import Counter
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -220,18 +221,12 @@ def _flush_sync() -> None:
                     """,
                     batch
                 )
-                if batch:
-                    key_ids = [e["api_key_id"] for e in batch if e["api_key_id"]]
-                    if key_ids:
-                        cur.execute(
-                            """
-                            UPDATE api_keys
-                            SET total_requests = total_requests + %s,
-                                last_used_at = NOW()
-                            WHERE id = ANY(%s)
-                            """,
-                            (len(key_ids), key_ids)
-                        )
+                key_counts = Counter(e["api_key_id"] for e in batch if e["api_key_id"])
+                for key_id, count in key_counts.items():
+                    cur.execute(
+                        "UPDATE api_keys SET total_requests = total_requests + %s, last_used_at = NOW() WHERE id = %s",
+                        (count, key_id)
+                    )
                 conn.commit()
         logger.debug(f"Flushed {len(batch)} request log entries")
     except Exception as e:
