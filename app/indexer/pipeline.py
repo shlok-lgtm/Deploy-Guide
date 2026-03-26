@@ -566,23 +566,29 @@ async def _tiered_batch_scan(
     new_contracts: dict,
     wallet_addresses: list,
     api_key: str,
-) -> tuple[dict, int]:
+) -> tuple[dict, int, int]:
     """
     Targeted batch scan: check only `new_contracts` against `wallet_addresses`.
     All holdings are stored as is_scored=False (none of these are in the SII registry).
 
     This is structurally identical to batch_scan_all_holdings() but operates on
     an explicit contract dict rather than calling get_all_known_contracts() from the DB.
+    value_usd is set to balance (1:1 placeholder — price unknown at discovery time).
+    For stablecoins this is close to accurate; for non-stablecoins it is a rough proxy
+    that drives update_demand_signals() priority ordering.
 
     Returns:
-        (holdings_by_wallet, batch_failures)
-        holdings_by_wallet: dict of wallet_address → [holding_dict, ...]
+        (holdings_by_wallet, batch_failures, calls_made) where:
+          holdings_by_wallet: dict of wallet_address_lower → [holding_dict, ...]
+          batch_failures: number of API calls that returned None (rate-limit/network)
+          calls_made: exact number of tokenbalancemulti API calls executed
     """
     from app.indexer.scanner import fetch_token_balance_multi, TOKENBALANCEMULTI_BATCH_SIZE
 
     holdings_by_wallet: dict[str, list[dict]] = {}
     wallet_list = [addr.lower() for addr in wallet_addresses]
     batch_failures = 0
+    calls_made = 0
     contracts_done = 0
     total_contracts = len(new_contracts)
 
@@ -597,6 +603,7 @@ async def _tiered_batch_scan(
             batch = wallet_list[i : i + TOKENBALANCEMULTI_BATCH_SIZE]
             balances = await fetch_token_balance_multi(client, contract_lower, batch, api_key)
             await asyncio.sleep(ETHERSCAN_RATE_LIMIT_DELAY)
+            calls_made += 1
 
             if balances is None:
                 batch_failures += 1
@@ -610,11 +617,6 @@ async def _tiered_batch_scan(
                     "name": name,
                     "decimals": decimals,
                     "balance": balance,
-                    # value_usd intentionally uses 1:1 (balance as USD) for all
-                    # newly discovered tokens — price is unknown at discovery time.
-                    # For stablecoins this is close to accurate; for non-stablecoins
-                    # it is a placeholder. The field drives update_demand_signals()
-                    # priority ordering, so even an imprecise value helps ranking.
                     "value_usd": balance,
                     "is_scored": False,
                     "sii_score": None,
@@ -630,7 +632,7 @@ async def _tiered_batch_scan(
             f"{nonzero_in_contract} non-zero holdings across {len(wallet_list)} wallets"
         )
 
-    return holdings_by_wallet, batch_failures
+    return holdings_by_wallet, batch_failures, calls_made
 
 
 async def run_pipeline(holders_per_coin: int = None) -> dict:
@@ -694,15 +696,10 @@ async def run_pipeline(holders_per_coin: int = None) -> dict:
             # _tiered_batch_scan operates only on the explicit new_contracts dict and
             # the sampled wallets — not the full 44K wallet list or full contract registry.
             # All discovered holdings are stored as is_scored=False.
-            tiered_holdings, tiered_failures = await _tiered_batch_scan(
+            tiered_holdings, tiered_failures, tiered_calls_actual = await _tiered_batch_scan(
                 client, new_contracts, sampled_wallets, api_key
             )
-            # Estimated API call count: ceil(wallets/20) batches per contract.
-            # Actual call count may be lower if _tiered_batch_scan encountered batch failures.
-            tiered_scan_api_calls = sum(
-                (len(sampled_wallets) + 19) // 20
-                for _ in new_contracts
-            )
+            tiered_scan_api_calls = tiered_calls_actual
 
             # Store tiered holdings with ORIGINAL wallet casing (FK requires match
             # against wallets.address which may be checksum/mixed-case from Etherscan).
