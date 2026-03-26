@@ -160,13 +160,17 @@ async def fetch_token_balance_multi(
     contract_address: str,
     wallet_addresses: list[str],
     api_key: str,
-) -> dict[str, int]:
+) -> Optional[dict[str, int]]:
     """
     Fetch ERC-20 token balances for up to 20 wallet addresses in a single call.
     Uses Etherscan V2 tokenbalancemulti action.
 
-    Returns a dict of {wallet_address_lower: raw_balance_int} for non-zero balances.
-    Falls back to an empty dict on API error (caller should handle gracefully).
+    Returns:
+        dict[wallet_address_lower → raw_balance_int] for non-zero balances on success
+        {} (empty dict) if all wallets have zero balance (genuine zero, API success)
+        None if the API call failed (status != "1", rate-limit, or network error)
+
+    Callers should treat None as a batch failure and {} as a genuine zero-balance result.
     """
     if not wallet_addresses:
         return {}
@@ -205,11 +209,11 @@ async def fetch_token_balance_multi(
             logger.warning(f"Etherscan rate limit hit (tokenbalancemulti for {contract_address[:10]}…), backing off")
             await asyncio.sleep(1.0)
         else:
-            logger.debug(f"tokenbalancemulti non-1 status for {contract_address[:10]}…: {data.get('message','')} — {msg}")
-        return {}
+            logger.warning(f"tokenbalancemulti non-1 status for {contract_address[:10]}…: {data.get('message','')} — {msg}")
+        return None
     except Exception as e:
         logger.warning(f"tokenbalancemulti error for {contract_address[:10]}…: {type(e).__name__}: {e}")
-        return {}
+        return None
 
 
 async def batch_scan_all_holdings(
@@ -252,6 +256,7 @@ async def batch_scan_all_holdings(
 
     contracts_done = 0
     calls_made = 0
+    batch_failures = 0
 
     for contract_lower, info in ALL_KNOWN_CONTRACTS.items():
         contracts_done += 1
@@ -274,11 +279,23 @@ async def batch_scan_all_holdings(
 
         # Batch wallets in groups of TOKENBALANCEMULTI_BATCH_SIZE
         nonzero_in_contract = 0
+        contract_batch_failures = 0
         for i in range(0, len(wallet_list), TOKENBALANCEMULTI_BATCH_SIZE):
             batch = wallet_list[i : i + TOKENBALANCEMULTI_BATCH_SIZE]
+            batch_num = i // TOKENBALANCEMULTI_BATCH_SIZE + 1
             balances = await fetch_token_balance_multi(client, contract_lower, batch, api_key)
             await asyncio.sleep(ETHERSCAN_RATE_LIMIT_DELAY)
             calls_made += 1
+
+            if balances is None:
+                # API failure — None distinguishes this from genuine zero-balance ({})
+                contract_batch_failures += 1
+                batch_failures += 1
+                logger.warning(
+                    f"  Batch failure: {symbol} batch {batch_num} "
+                    f"({len(batch)} wallets) — treating as zero balance"
+                )
+                continue
 
             for addr_lower, balance_raw in balances.items():
                 balance = balance_raw / (10 ** decimals)
@@ -301,16 +318,18 @@ async def batch_scan_all_holdings(
 
         logger.info(
             f"  [{contracts_done}/{total_contracts}] {symbol}: "
-            f"{nonzero_in_contract} non-zero balances across {len(wallet_list)} wallets "
-            f"({calls_made} calls total so far)"
+            f"{nonzero_in_contract} non-zero balances across {len(wallet_list)} wallets"
+            + (f", {contract_batch_failures} batch failures" if contract_batch_failures else "")
+            + f" ({calls_made} calls total so far)"
         )
 
     logger.info(
         f"Batch scan complete: {calls_made} API calls, "
+        f"{batch_failures} failed batches, "
         f"{len(holdings_by_wallet)} wallets with holdings "
         f"out of {len(wallet_list)} total"
     )
-    return holdings_by_wallet
+    return holdings_by_wallet, batch_failures
 
 
 async def fetch_top_holders(

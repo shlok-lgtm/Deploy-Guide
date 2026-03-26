@@ -22,7 +22,7 @@ import httpx
 
 from app.database import fetch_all, fetch_one, execute
 from app.indexer.config import ETHERSCAN_RATE_LIMIT_DELAY
-from app.indexer.scanner import batch_scan_all_holdings, scan_wallet_holdings, fetch_top_holders
+from app.indexer.scanner import batch_scan_all_holdings, fetch_top_holders
 from app.indexer.scorer import compute_wallet_risk
 from app.indexer.backlog import (
     upsert_unscored_asset,
@@ -368,9 +368,12 @@ async def index_wallet(
     source: str = "top_holder",
 ) -> dict:
     """
-    Steps 2-4 for a single wallet: scan → score → store.
+    Single-wallet scan → score → store (used for ad-hoc re-scans, not the main pipeline).
+    The main pipeline now uses batch_scan_all_holdings + per-wallet scoring in run_pipeline.
     Returns summary dict.
     """
+    from app.indexer.scanner import scan_wallet_holdings
+
     # Ensure wallet exists in table
     _store_wallet(wallet_address, source=source)
 
@@ -458,7 +461,7 @@ async def run_pipeline(holders_per_coin: int = None) -> dict:
         # Phase A: Batch-fetch all holdings across all contracts (contract-first)
         # tokenbalancemulti: 24 contracts × ⌈N/20⌉ batches instead of 24 × N individual calls
         logger.info("Phase A: Batch balance scan (tokenbalancemulti, contract-first)")
-        all_holdings = await batch_scan_all_holdings(client, wallet_list, api_key, sii_scores)
+        all_holdings, scan_batch_failures = await batch_scan_all_holdings(client, wallet_list, api_key, sii_scores)
 
         # Phase B: Upsert all wallets, then score + store those with holdings
         logger.info(f"Phase B: Score and store — {len(all_holdings)} wallets with holdings")
@@ -534,6 +537,7 @@ async def run_pipeline(holders_per_coin: int = None) -> dict:
         "wallets_scored": scored_count,
         "wallets_no_holdings": no_holdings_count,
         "wallets_scoring_failed": scoring_failed_count,
+        "scan_batch_failures": scan_batch_failures,
         "errors": errors,
         "unscored_assets_tracked": backlog_count,
         "assets_promoted_to_scoring": promoted_count,
@@ -546,7 +550,8 @@ async def run_pipeline(holders_per_coin: int = None) -> dict:
     logger.info(
         f"=== Pipeline Complete: {indexed} wallets indexed, "
         f"{scored_count} scored, {no_holdings_count} no holdings, "
-        f"{scoring_failed_count} scoring failed, {errors} errors, "
+        f"{scoring_failed_count} scoring failed, "
+        f"{scan_batch_failures} scan batch failures, {errors} errors, "
         f"{backlog_count} unscored assets tracked, "
         f"{promoted_count} promoted to scoring, "
         f"{elapsed:.0f}s elapsed ==="
