@@ -95,6 +95,46 @@ FORMULA_VERSION = "wallet-v1.0.0"
 ETHERSCAN_RATE_LIMIT_DELAY = 0.11  # ~9 req/sec (Standard tier: 10/sec)
 
 
+def get_all_known_contracts() -> tuple[dict, dict]:
+    """
+    Build the contract registry at runtime from the database.
+
+    Queries the stablecoins table so newly promoted coins (not in the static
+    STABLECOIN_REGISTRY) are included in wallet balance scans.
+
+    Returns:
+        (scored_contracts, all_known_contracts) — same shape as the module-level
+        SCORED_CONTRACTS and ALL_KNOWN_CONTRACTS dicts. Falls back to the static
+        dicts if the DB query fails.
+    """
+    try:
+        from app.database import fetch_all
+        rows = fetch_all(
+            "SELECT id, symbol, name, contract, decimals "
+            "FROM stablecoins WHERE contract IS NOT NULL AND contract != ''"
+        )
+        db_scored: dict = {}
+        for row in rows:
+            contract = (row.get("contract") or "").lower().strip()
+            if not contract:
+                continue
+            db_scored[contract] = {
+                "stablecoin_id": row["id"],
+                "symbol": row.get("symbol", "???"),
+                "decimals": row.get("decimals") or 18,
+                "name": row.get("name", ""),
+            }
+        # Merge: DB-scored coins take precedence; unscored are always static
+        all_contracts = {**UNSCORED_CONTRACTS, **db_scored}
+        return db_scored, all_contracts
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(
+            f"get_all_known_contracts DB query failed, using static fallback: {e}"
+        )
+        return SCORED_CONTRACTS, ALL_KNOWN_CONTRACTS
+
+
 def classify_size_tier(total_value: float) -> str:
     """Classify wallet by total stablecoin value."""
     for threshold, tier in SIZE_TIER_THRESHOLDS:

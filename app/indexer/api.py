@@ -80,8 +80,8 @@ def register_wallet_routes(app: FastAPI) -> None:
             JOIN wallet_graph.wallets w ON w.address = wrs.wallet_address
             WHERE wrs.risk_score IS NOT NULL
               AND wrs.computed_at = (
-                  SELECT MAX(computed_at) FROM wallet_graph.wallet_risk_scores
-                  WHERE wallet_address = wrs.wallet_address
+                  SELECT MAX(wrs2.computed_at) FROM wallet_graph.wallet_risk_scores wrs2
+                  WHERE wrs2.wallet_address = wrs.wallet_address
               )
             ORDER BY wrs.risk_score ASC
             LIMIT %s

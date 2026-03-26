@@ -1,0 +1,13 @@
+The wallet scanner has a dynamic registry gap. The scoring engine and wallet seeder already query the database dynamically, but batch_scan_all_holdings() and scan_wallet_holdings() in app/indexer/scanner.py iterate over ALL_KNOWN_CONTRACTS, which is built at import time from hardcoded dicts in app/config.py and app/indexer/config.py. This means newly promoted stablecoins get scored by the worker but never get their wallet balances checked by the scanner.
+Fix this in three parts:
+Part 1: Dynamic contract list for the scanner
+Create a function get_all_known_contracts() in app/indexer/config.py that builds the contract list at runtime by:
+	1.	Querying SELECT id, symbol, name, contract, decimals FROM stablecoins WHERE contract IS NOT NULL AND contract != '' to get all scored/promoted coins from the DB
+	2.	Merging with UNSCORED_CONTRACTS (the static fallback list for known-but-not-yet-scored coins)
+	3.	Returning the same dict shape as ALL_KNOWN_CONTRACTS currently has, plus a SCORED_CONTRACTS-equivalent set so the scanner can determine is_scored
+Keep the existing static ALL_KNOWN_CONTRACTS and SCORED_CONTRACTS as fallbacks if the DB query fails. Call get_all_known_contracts() once at the start of batch_scan_all_holdings() and scan_wallet_holdings() instead of using the import-time constants.
+Part 2: Fix the riskiest endpoint
+In app/indexer/api.py, the wallets_riskiest endpoint (around line 82) has the same un-aliased correlated subquery bug that was just fixed in wallets_stats. The inner SELECT MAX(computed_at) FROM wallet_graph.wallet_risk_scores WHERE wallet_address = wrs.wallet_address references the outer alias wrs but the inner FROM has no alias. Add an alias to the inner subquery the same way the stats query was fixed.
+Part 3: Server registry endpoint
+In app/server.py, the /api/registry endpoint and the health check both use len(STABLECOIN_REGISTRY) for the registered count. These undercount when coins are promoted from the backlog. Change both to query SELECT COUNT(*) FROM stablecoins for the registered count, falling back to len(STABLECOIN_REGISTRY) if the query fails.
+Show me the plan before implementing. Do not change the scoring engine, worker, or pipeline — those already work dynamically.​​​​​​​​​​​​​​​​

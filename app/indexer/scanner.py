@@ -17,6 +17,7 @@ from app.indexer.config import (
     UNSCORED_CONTRACTS,
     ALL_KNOWN_CONTRACTS,
     ETHERSCAN_RATE_LIMIT_DELAY,
+    get_all_known_contracts,
 )
 
 logger = logging.getLogger(__name__)
@@ -99,6 +100,7 @@ async def scan_wallet_holdings(
     Scan a wallet for stablecoin holdings.
 
     For each known stablecoin contract (scored + unscored), queries the balance.
+    Contract list is built from the DB at runtime so promoted coins are included.
     Returns a list of holding dicts ready for storage.
 
     Args:
@@ -109,7 +111,10 @@ async def scan_wallet_holdings(
     """
     holdings = []
 
-    for contract_lower, info in ALL_KNOWN_CONTRACTS.items():
+    # Build contract registry from DB at runtime — picks up promoted coins
+    scored_contracts, all_contracts = get_all_known_contracts()
+
+    for contract_lower, info in all_contracts.items():
         balance_raw = await fetch_token_balance(
             client, contract_lower, wallet_address, api_key
         )
@@ -122,12 +127,12 @@ async def scan_wallet_holdings(
         balance = balance_raw / (10 ** decimals)
 
         # Check if this is a scored asset and get price + score data
-        is_scored = contract_lower in SCORED_CONTRACTS
+        is_scored = contract_lower in scored_contracts
         sii_score = None
         sii_grade = None
         price = 1.0  # default for unscored stablecoins
         if is_scored:
-            sid = SCORED_CONTRACTS[contract_lower]["stablecoin_id"]
+            sid = scored_contracts[contract_lower]["stablecoin_id"]
             score_data = sii_scores.get(sid)
             if score_data:
                 sii_score = score_data.get("overall_score")
@@ -240,13 +245,16 @@ async def batch_scan_all_holdings(
         api_key: Etherscan API key
         sii_scores: dict of stablecoin_id → {overall_score, grade, current_price}
     """
+    # Build contract registry from DB at runtime — picks up promoted coins
+    scored_contracts, all_contracts = get_all_known_contracts()
+
     # wallet_address (lowercased) → list of holding dicts
     holdings_by_wallet: dict[str, list[dict]] = {}
     wallet_list = [addr.lower() for addr in wallet_addresses]
-    total_contracts = len(ALL_KNOWN_CONTRACTS)
+    total_contracts = len(all_contracts)
     total_batches = sum(
         (len(wallet_list) + TOKENBALANCEMULTI_BATCH_SIZE - 1) // TOKENBALANCEMULTI_BATCH_SIZE
-        for _ in ALL_KNOWN_CONTRACTS
+        for _ in all_contracts
     )
 
     logger.info(
@@ -258,15 +266,15 @@ async def batch_scan_all_holdings(
     calls_made = 0
     batch_failures = 0
 
-    for contract_lower, info in ALL_KNOWN_CONTRACTS.items():
+    for contract_lower, info in all_contracts.items():
         contracts_done += 1
         decimals = info.get("decimals", 18)
-        is_scored = contract_lower in SCORED_CONTRACTS
+        is_scored = contract_lower in scored_contracts
         sii_score = None
         sii_grade = None
         price = 1.0
         if is_scored:
-            sid = SCORED_CONTRACTS[contract_lower]["stablecoin_id"]
+            sid = scored_contracts[contract_lower]["stablecoin_id"]
             score_data = sii_scores.get(sid)
             if score_data:
                 sii_score = score_data.get("overall_score")

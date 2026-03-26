@@ -96,6 +96,25 @@ if os.path.isdir(FRONTEND_DIR):
 
 
 # =============================================================================
+# Helper: registered stablecoin count (DB-aware, falls back to static registry)
+# =============================================================================
+
+def _get_registered_count() -> int:
+    """
+    Return the number of stablecoins registered in the DB.
+    Queries the stablecoins table so promoted coins are counted correctly.
+    Falls back to len(STABLECOIN_REGISTRY) if the query fails.
+    """
+    try:
+        row = fetch_one("SELECT COUNT(*) AS count FROM stablecoins")
+        if row and row.get("count") is not None:
+            return int(row["count"])
+    except Exception:
+        pass
+    return len(STABLECOIN_REGISTRY)
+
+
+# =============================================================================
 # 1. GET /api/health
 # =============================================================================
 
@@ -117,7 +136,7 @@ async def get_health():
         "database": db_status,
         "scores": {
             "stablecoins_scored": scored_count,
-            "stablecoins_registered": len(STABLECOIN_REGISTRY),
+            "stablecoins_registered": _get_registered_count(),
             "last_computed": latest_score.isoformat() if latest_score else None,
         },
         "formula_version": FORMULA_VERSION,
@@ -403,7 +422,7 @@ async def get_config():
             }
             for sid, cfg in STABLECOIN_REGISTRY.items()
         },
-        "count": len(STABLECOIN_REGISTRY),
+        "count": _get_registered_count(),
     }
 
 
@@ -703,7 +722,7 @@ async def admin_health(request: Request):
         "database": db_status,
         "scores": {
             "stablecoins_scored": scored_count,
-            "stablecoins_registered": len(STABLECOIN_REGISTRY),
+            "stablecoins_registered": _get_registered_count(),
             "last_computed": latest_score.isoformat() if latest_score else None,
         },
         "formula_version": FORMULA_VERSION,
