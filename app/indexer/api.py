@@ -131,16 +131,16 @@ def register_wallet_routes(app: FastAPI) -> None:
         score_stats = fetch_one(
             """
             SELECT
-                COUNT(DISTINCT wallet_address) AS wallets_scored,
-                AVG(risk_score) AS avg_risk_score,
-                MIN(risk_score) AS min_risk_score,
-                MAX(risk_score) AS max_risk_score
-            FROM wallet_graph.wallet_risk_scores
-            WHERE computed_at = (
-                SELECT MAX(computed_at) FROM wallet_graph.wallet_risk_scores
-                WHERE wallet_address = wallet_graph.wallet_risk_scores.wallet_address
+                COUNT(DISTINCT wrs.wallet_address) AS wallets_scored,
+                AVG(wrs.risk_score) AS avg_risk_score,
+                MIN(wrs.risk_score) AS min_risk_score,
+                MAX(wrs.risk_score) AS max_risk_score
+            FROM wallet_graph.wallet_risk_scores wrs
+            WHERE wrs.computed_at = (
+                SELECT MAX(wrs2.computed_at) FROM wallet_graph.wallet_risk_scores wrs2
+                WHERE wrs2.wallet_address = wrs.wallet_address
             )
-            AND risk_score IS NOT NULL
+            AND wrs.risk_score IS NOT NULL
             """
         )
         backlog_stats = fetch_one(
