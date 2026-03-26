@@ -5,6 +5,8 @@ Known stablecoin contracts: scored (from SII registry) and common unscored.
 Size tier and coverage quality thresholds.
 """
 
+import os
+
 from app.config import STABLECOIN_REGISTRY
 
 # =============================================================================
@@ -92,7 +94,13 @@ COVERAGE_QUALITY_THRESHOLDS = [
 
 FORMULA_VERSION = "wallet-v1.0.0"
 
-ETHERSCAN_RATE_LIMIT_DELAY = 0.11  # ~9 req/sec (Standard tier: 10/sec)
+BLOCK_EXPLORER_PROVIDER = os.environ.get("BLOCK_EXPLORER_PROVIDER", "blockscout").lower()
+
+if BLOCK_EXPLORER_PROVIDER == "etherscan":
+    EXPLORER_RATE_LIMIT_DELAY = 0.11  # ~9 req/sec (Etherscan Standard: 10/sec)
+else:
+    EXPLORER_RATE_LIMIT_DELAY = 0.22  # ~4.5 req/sec (Blockscout Free: 5/sec)
+    # Bump to 0.07 (~14 req/sec) if on Blockscout Builder ($49/mo, 15 RPS)
 
 
 def get_all_known_contracts() -> tuple[dict, dict]:

@@ -16,13 +16,20 @@ from app.indexer.config import (
     SCORED_CONTRACTS,
     UNSCORED_CONTRACTS,
     ALL_KNOWN_CONTRACTS,
-    ETHERSCAN_RATE_LIMIT_DELAY,
+    BLOCK_EXPLORER_PROVIDER,
+    EXPLORER_RATE_LIMIT_DELAY,
     get_all_known_contracts,
 )
 
 logger = logging.getLogger(__name__)
 
-ETHERSCAN_V2_BASE = "https://api.etherscan.io/v2/api"
+if BLOCK_EXPLORER_PROVIDER == "etherscan":
+    EXPLORER_BASE = "https://api.etherscan.io/v2/api"
+else:
+    EXPLORER_BASE = "https://api.blockscout.com/v2/api"
+
+_EXPLORER_CHAIN_KEY = "chainid" if BLOCK_EXPLORER_PROVIDER == "etherscan" else "chain_id"
+_TOP_HOLDERS_ACTION = "tokenholderlist" if BLOCK_EXPLORER_PROVIDER == "etherscan" else "getTokenHolders"
 
 
 async def fetch_token_balance(
@@ -31,12 +38,12 @@ async def fetch_token_balance(
     wallet_address: str,
     api_key: str,
 ) -> Optional[int]:
-    """Fetch ERC-20 token balance for one wallet via Etherscan V2 API."""
+    """Fetch ERC-20 token balance for one wallet via explorer API."""
     try:
         resp = await client.get(
-            ETHERSCAN_V2_BASE,
+            EXPLORER_BASE,
             params={
-                "chainid": 1,
+                _EXPLORER_CHAIN_KEY: 1,
                 "module": "account",
                 "action": "tokenbalance",
                 "contractaddress": contract_address,
@@ -51,7 +58,7 @@ async def fetch_token_balance(
             return int(data["result"])
         msg = data.get("result", "")
         if "Max rate limit" in str(msg):
-            logger.warning("Etherscan rate limit hit, backing off")
+            logger.warning("Explorer rate limit hit, backing off")
             await asyncio.sleep(1.0)
         return None
     except Exception as e:
@@ -68,9 +75,9 @@ async def fetch_token_list(
     Uses tokentx action with a limited page size, then deduplicates contract addresses."""
     try:
         resp = await client.get(
-            ETHERSCAN_V2_BASE,
+            EXPLORER_BASE,
             params={
-                "chainid": 1,
+                _EXPLORER_CHAIN_KEY: 1,
                 "module": "account",
                 "action": "tokentx",
                 "address": wallet_address,
@@ -118,7 +125,7 @@ async def scan_wallet_holdings(
         balance_raw = await fetch_token_balance(
             client, contract_lower, wallet_address, api_key
         )
-        await asyncio.sleep(ETHERSCAN_RATE_LIMIT_DELAY)
+        await asyncio.sleep(EXPLORER_RATE_LIMIT_DELAY)
 
         if balance_raw is None or balance_raw == 0:
             continue
@@ -184,9 +191,9 @@ async def fetch_token_balance_multi(
 
     try:
         resp = await client.get(
-            ETHERSCAN_V2_BASE,
+            EXPLORER_BASE,
             params={
-                "chainid": 1,
+                _EXPLORER_CHAIN_KEY: 1,
                 "module": "account",
                 "action": "tokenbalancemulti",
                 "contractaddress": contract_address,
@@ -211,7 +218,7 @@ async def fetch_token_balance_multi(
 
         msg = data.get("result", "")
         if "Max rate limit" in str(msg):
-            logger.warning(f"Etherscan rate limit hit (tokenbalancemulti for {contract_address[:10]}…), backing off")
+            logger.warning(f"Explorer rate limit hit (tokenbalancemulti for {contract_address[:10]}…), backing off")
             await asyncio.sleep(1.0)
         else:
             logger.warning(f"tokenbalancemulti non-1 status for {contract_address[:10]}…: {data.get('message','')} — {msg}")
@@ -323,7 +330,7 @@ async def batch_scan_all_holdings(
             batch = wallet_list[i : i + TOKENBALANCEMULTI_BATCH_SIZE]
             batch_num = i // TOKENBALANCEMULTI_BATCH_SIZE + 1
             balances = await fetch_token_balance_multi(client, contract_lower, batch, api_key)
-            await asyncio.sleep(ETHERSCAN_RATE_LIMIT_DELAY)
+            await asyncio.sleep(EXPLORER_RATE_LIMIT_DELAY)
             calls_made += 1
 
             if balances is None:
@@ -379,17 +386,19 @@ async def fetch_top_holders(
     offset: int = 100,
 ) -> list[str]:
     """
-    Fetch top token holders for a contract via Etherscan tokeholderlist.
+    Fetch top token holders for a contract via the explorer API.
     Returns list of holder addresses. Falls back to empty list on failure.
-    Note: requires Etherscan Pro plan.
+    Etherscan action: tokenholderlist (requires Pro plan).
+    Blockscout action: getTokenHolders (PRO API).
+    Response field: TokenHolderAddress (Etherscan) or address (Blockscout) — both handled.
     """
     try:
         resp = await client.get(
-            ETHERSCAN_V2_BASE,
+            EXPLORER_BASE,
             params={
-                "chainid": 1,
+                _EXPLORER_CHAIN_KEY: 1,
                 "module": "token",
-                "action": "tokenholderlist",
+                "action": _TOP_HOLDERS_ACTION,
                 "contractaddress": contract_address,
                 "page": page,
                 "offset": offset,
@@ -399,7 +408,12 @@ async def fetch_top_holders(
         )
         data = resp.json()
         if data.get("status") == "1" and isinstance(data.get("result"), list):
-            return [h.get("TokenHolderAddress", "") for h in data["result"] if h.get("TokenHolderAddress")]
+            addresses = []
+            for h in data["result"]:
+                addr = h.get("TokenHolderAddress") or h.get("address", "")
+                if addr:
+                    addresses.append(addr)
+            return addresses
         return []
     except Exception as e:
         logger.debug(f"Top holders fetch error for {contract_address[:10]}…: {e}")
@@ -427,9 +441,9 @@ async def fetch_large_transfers(
     for page in range(1, pages + 1):
         try:
             resp = await client.get(
-                ETHERSCAN_V2_BASE,
+                EXPLORER_BASE,
                 params={
-                    "chainid": 1,
+                    _EXPLORER_CHAIN_KEY: 1,
                     "module": "account",
                     "action": "tokentx",
                     "contractaddress": contract_address,
@@ -441,7 +455,7 @@ async def fetch_large_transfers(
                 timeout=15.0,
             )
             data = resp.json()
-            await asyncio.sleep(ETHERSCAN_RATE_LIMIT_DELAY)
+            await asyncio.sleep(EXPLORER_RATE_LIMIT_DELAY)
 
             if data.get("status") != "1" or not isinstance(data.get("result"), list):
                 break

@@ -263,6 +263,7 @@ def register_wallet_routes(app: FastAPI) -> None:
         background_tasks: BackgroundTasks,
         key: str = Query(..., description="Admin key"),
         holders_per_coin: int = Query(5000, ge=10, le=10000),
+        reseed: bool = Query(False, description="Force full re-seed of top holders (overrides resume logic)"),
     ):
         """Manually trigger a wallet indexing run (admin-only). Returns immediately; runs in background."""
         admin_key = os.environ.get("ADMIN_KEY", "")
@@ -273,10 +274,15 @@ def register_wallet_routes(app: FastAPI) -> None:
 
         async def _run():
             try:
-                await run_pipeline(holders_per_coin=holders_per_coin)
+                await run_pipeline(holders_per_coin=holders_per_coin, force_reseed=reseed)
             except Exception as e:
                 logger.error(f"Background wallet indexing failed: {e}")
                 logger.error(f"PIPELINE_COMPLETE status=error reason={type(e).__name__}: {e}")
 
         background_tasks.add_task(_run)
-        return {"status": "started", "holders_per_coin": holders_per_coin, "message": "Wallet indexing running in background — check /api/wallets/stats for progress"}
+        return {
+            "status": "started",
+            "holders_per_coin": holders_per_coin,
+            "reseed": reseed,
+            "message": "Wallet indexing running in background — check /api/wallets/stats for progress",
+        }

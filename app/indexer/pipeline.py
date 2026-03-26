@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 import httpx
 
 from app.database import fetch_all, fetch_one, execute
-from app.indexer.config import ETHERSCAN_RATE_LIMIT_DELAY
+from app.indexer.config import BLOCK_EXPLORER_PROVIDER, EXPLORER_RATE_LIMIT_DELAY
 from app.indexer.scanner import batch_scan_all_holdings, fetch_top_holders, fetch_token_list
 from app.indexer.scorer import compute_wallet_risk
 from app.indexer.backlog import (
@@ -393,7 +393,7 @@ async def discover_new_tokens(
 
     for wallet in sampled_wallets:
         txs = await fetch_token_list(client, wallet, api_key)
-        await asyncio.sleep(ETHERSCAN_RATE_LIMIT_DELAY)
+        await asyncio.sleep(EXPLORER_RATE_LIMIT_DELAY)
 
         if not txs:
             continue
@@ -483,7 +483,7 @@ async def seed_wallets(
                 client, contract, api_key,
                 page=page, offset=page_size,
             )
-            await asyncio.sleep(ETHERSCAN_RATE_LIMIT_DELAY)
+            await asyncio.sleep(EXPLORER_RATE_LIMIT_DELAY)
 
             if not holders:
                 break  # No more pages for this coin
@@ -561,13 +561,16 @@ async def index_wallet(
     }
 
 
-async def run_pipeline(holders_per_coin: int = None) -> dict:
+async def run_pipeline(holders_per_coin: int = None, force_reseed: bool = False) -> dict:
     """
     Full pipeline run: seed → scan → score → store → backlog update.
 
     Args:
         holders_per_coin: number of top holders to fetch per stablecoin.
                           Defaults to INDEXER_HOLDERS_PER_COIN env var (default 5000).
+        force_reseed: if True, always run a full top-holder seed even when the wallet
+                      table already has >1000 entries. Also overrides per-wallet resume
+                      filtering so every wallet is rescanned regardless of last_indexed_at.
 
     Returns:
         Summary dict with counts and stats.
@@ -577,10 +580,18 @@ async def run_pipeline(holders_per_coin: int = None) -> dict:
             holders_per_coin = int(os.environ.get("INDEXER_HOLDERS_PER_COIN", "5000"))
         except (ValueError, TypeError):
             holders_per_coin = 5000
-    api_key = os.environ.get("ETHERSCAN_API_KEY", "")
+
+    # Provider-sensitive API key selection
+    if BLOCK_EXPLORER_PROVIDER == "etherscan":
+        api_key = os.environ.get("ETHERSCAN_API_KEY", "")
+        api_key_name = "ETHERSCAN_API_KEY"
+    else:
+        api_key = os.environ.get("BLOCKSCOUT_API_KEY", "")
+        api_key_name = "BLOCKSCOUT_API_KEY"
+
     if not api_key:
-        logger.error("ETHERSCAN_API_KEY not set — cannot run wallet indexer")
-        return {"error": "ETHERSCAN_API_KEY not set", "wallets_indexed": 0}
+        logger.error(f"{api_key_name} not set — cannot run wallet indexer")
+        return {"error": f"{api_key_name} not set", "wallets_indexed": 0}
 
     started_at = datetime.now(timezone.utc)
     logger.info("=== Wallet Indexer Pipeline Starting ===")
@@ -607,15 +618,61 @@ async def run_pipeline(holders_per_coin: int = None) -> dict:
     new_contracts_discovered = 0
     tiered_scan_api_calls = 0
 
-    async with httpx.AsyncClient() as client:
-        # Step 1: Seed
-        wallet_addresses = await seed_wallets(client, api_key, holders_per_coin)
+    # Resume logic: determine whether to seed or use existing wallets only
+    existing = _get_existing_wallets()
+    do_seed = force_reseed or len(existing) < 1000
 
-        # Also include existing wallets for re-indexing
-        existing = _get_existing_wallets()
-        wallet_addresses |= existing
-        wallet_list = list(wallet_addresses)
-        logger.info(f"Total wallets to index: {len(wallet_list)} ({len(existing)} existing)")
+    async with httpx.AsyncClient() as client:
+        # Step 1: Seed (conditionally)
+        if do_seed:
+            logger.info(
+                f"{'Force-reseed' if force_reseed else 'Full seed'} run — "
+                f"fetching top holders from explorer ({len(existing)} existing wallets)"
+            )
+            wallet_addresses = await seed_wallets(client, api_key, holders_per_coin)
+            wallet_addresses |= existing
+        else:
+            logger.info(f"Incremental run — {len(existing)} existing wallets, skipping seed")
+            wallet_addresses = existing
+
+        # Resume filter: skip wallets already indexed today (unless force_reseed)
+        if force_reseed:
+            skipped = 0
+            wallet_list = list(wallet_addresses)
+        else:
+            try:
+                indexed_today_rows = fetch_all("""
+                    SELECT address FROM wallet_graph.wallets
+                    WHERE last_indexed_at IS NOT NULL
+                      AND last_indexed_at >= CURRENT_DATE
+                """)
+                already_indexed_today = {row["address"] for row in indexed_today_rows}
+            except Exception as e:
+                logger.warning(f"Could not query already-indexed wallets: {e} — scanning all")
+                already_indexed_today = set()
+
+            wallet_list = [w for w in wallet_addresses if w not in already_indexed_today]
+            skipped = len(wallet_addresses) - len(wallet_list)
+            if skipped > 0:
+                logger.info(
+                    f"Skipping {skipped} wallets already indexed today, "
+                    f"{len(wallet_list)} remaining"
+                )
+
+        if not wallet_list:
+            logger.info("All wallets already indexed today — nothing to do")
+            logger.info(
+                f"PIPELINE_COMPLETE status=success wallets=0 scored=0 "
+                f"skipped={skipped} duration=0s"
+            )
+            return {
+                "wallets_discovered": len(wallet_addresses),
+                "wallets_indexed": 0,
+                "wallets_skipped_today": skipped,
+                "message": "All wallets already indexed today",
+            }
+
+        logger.info(f"Total wallets to index: {len(wallet_list)} ({skipped} skipped as already indexed today)")
 
         # Step 1b: Discovery — find new ERC-20 contracts from top whale wallets
         logger.info("Discovery Phase 1: scanning whale wallets for new ERC-20 contracts")
@@ -680,7 +737,10 @@ async def run_pipeline(holders_per_coin: int = None) -> dict:
                     results.append({"address": addr, "holdings": 0, "scored": False, "reason": "no_holdings"})
                     indexed += 1
                     if indexed % 500 == 0:
-                        logger.info(f"  Progress: {indexed}/{len(wallet_list)} wallets processed")
+                        logger.info(
+                            f"  Checkpoint: {indexed}/{len(wallet_list)} wallets processed "
+                            f"({skipped} skipped as already indexed today)"
+                        )
                     continue
 
                 risk = compute_wallet_risk(holdings)
@@ -690,7 +750,10 @@ async def run_pipeline(holders_per_coin: int = None) -> dict:
                     results.append({"address": addr, "holdings": len(holdings), "scored": False, "reason": "risk_compute_failed"})
                     indexed += 1
                     if indexed % 500 == 0:
-                        logger.info(f"  Progress: {indexed}/{len(wallet_list)} wallets processed")
+                        logger.info(
+                            f"  Checkpoint: {indexed}/{len(wallet_list)} wallets processed "
+                            f"({skipped} skipped as already indexed today)"
+                        )
                     continue
 
                 _store_holdings(addr, holdings)
@@ -709,7 +772,10 @@ async def run_pipeline(holders_per_coin: int = None) -> dict:
                 })
                 indexed += 1
                 if indexed % 500 == 0:
-                    logger.info(f"  Progress: {indexed}/{len(wallet_list)} wallets processed")
+                    logger.info(
+                        f"  Checkpoint: {indexed}/{len(wallet_list)} wallets processed "
+                        f"({skipped} skipped as already indexed today)"
+                    )
 
             except Exception as e:
                 logger.warning(f"Error processing {addr}: {type(e).__name__}: {e}")
@@ -732,6 +798,7 @@ async def run_pipeline(holders_per_coin: int = None) -> dict:
     summary = {
         "wallets_discovered": len(wallet_addresses),
         "wallets_indexed": indexed,
+        "wallets_skipped_today": skipped,
         "wallets_scored": scored_count,
         "wallets_no_holdings": no_holdings_count,
         "wallets_scoring_failed": scoring_failed_count,
@@ -748,7 +815,7 @@ async def run_pipeline(holders_per_coin: int = None) -> dict:
     }
 
     logger.info(
-        f"=== Pipeline Complete: {indexed} wallets indexed, "
+        f"=== Pipeline Complete: {indexed} wallets indexed, {skipped} skipped today, "
         f"{scored_count} scored, {no_holdings_count} no holdings, "
         f"{scoring_failed_count} scoring failed, "
         f"{scan_batch_failures} scan batch failures, {errors} errors, "
@@ -759,8 +826,8 @@ async def run_pipeline(holders_per_coin: int = None) -> dict:
         f"{elapsed:.0f}s elapsed ==="
     )
     logger.info(
-        f"PIPELINE_COMPLETE status=success wallets={indexed} scored={scored_count} "
-        f"duration={elapsed:.0f}s"
+        f"PIPELINE_COMPLETE status=success wallets={indexed} skipped={skipped} "
+        f"scored={scored_count} duration={elapsed:.0f}s"
     )
 
     return summary
