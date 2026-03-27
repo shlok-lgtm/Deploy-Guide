@@ -117,13 +117,14 @@ def generate_assessment(
     for h in current_holdings:
         symbol = h.get("symbol", "").lower()
         sii = sii_scores.get(symbol, {})
+        raw_score = sii.get("score")
         holdings_snapshot.append({
             "symbol": h.get("symbol", "???"),
-            "value_usd": round(h.get("value_usd", 0), 2),
-            "pct_of_wallet": h.get("pct_of_wallet", 0),
-            "sii_score": sii.get("score"),
+            "value_usd": float(round(h.get("value_usd", 0) or 0, 2)),
+            "pct_of_wallet": float(h.get("pct_of_wallet", 0) or 0),
+            "sii_score": float(raw_score) if raw_score is not None else None,
             "sii_grade": sii.get("grade"),
-            "sii_7d_delta": deltas.get(symbol, 0),
+            "sii_7d_delta": float(deltas.get(symbol, 0)),
         })
 
     # Compute content hash from canonical payload

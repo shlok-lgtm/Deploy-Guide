@@ -49,9 +49,9 @@ def generate_daily_pulse(pulse_date: date | None = None) -> dict | None:
     for r in score_rows:
         scores.append({
             "symbol": r["stablecoin_id"],
-            "score": r["overall_score"],
+            "score": float(r["overall_score"]) if r["overall_score"] is not None else None,
             "grade": r["grade"],
-            "delta_24h": r.get("daily_change", 0),
+            "delta_24h": float(r["daily_change"]) if r.get("daily_change") is not None else 0.0,
         })
 
     # Wallet stats
@@ -88,17 +88,17 @@ def generate_daily_pulse(pulse_date: date | None = None) -> dict | None:
             "wallet": r["wallet_address"],
             "trigger": r["trigger_type"],
             "severity": r["severity"],
-            "risk_score": r["wallet_risk_score"],
+            "risk_score": float(r["wallet_risk_score"]) if r["wallet_risk_score"] is not None else None,
             "risk_grade": r["wallet_risk_grade"],
-            "value": r["total_stablecoin_value"],
+            "value": float(r["total_stablecoin_value"]) if r["total_stablecoin_value"] is not None else None,
         })
 
     summary = {
         "scores": scores,
-        "total_tracked": wallet_stats["total_tracked"] if wallet_stats else 0,
-        "wallets_indexed": wallet_stats["wallets_indexed"] if wallet_stats else 0,
-        "total_events": event_stats["total_events"] if event_stats else 0,
-        "alerts_today": event_stats["alerts_today"] if event_stats else 0,
+        "total_tracked": float(wallet_stats["total_tracked"]) if wallet_stats and wallet_stats["total_tracked"] is not None else 0.0,
+        "wallets_indexed": int(wallet_stats["wallets_indexed"]) if wallet_stats else 0,
+        "total_events": int(event_stats["total_events"]) if event_stats else 0,
+        "alerts_today": int(event_stats["alerts_today"]) if event_stats else 0,
         "notable_events": notable_events,
     }
 
