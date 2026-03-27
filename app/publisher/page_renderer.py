@@ -8,6 +8,7 @@ assessments, and daily pulses. Served on-demand from the database.
 import json
 import logging
 import os
+from decimal import Decimal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
@@ -15,6 +16,14 @@ from fastapi.responses import HTMLResponse
 from app.database import fetch_one, fetch_all
 
 logger = logging.getLogger(__name__)
+
+
+class _DecimalEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            return float(obj)
+        return super().default(obj)
+
 
 # Jinja2 setup — lazy import to avoid hard dependency at module level
 _jinja_env = None
@@ -108,10 +117,10 @@ def register_page_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=404, detail="Asset not found")
 
         history = fetch_all("""
-            SELECT scored_date, overall_score, grade
+            SELECT score_date, overall_score, grade
             FROM score_history
-            WHERE stablecoin_id = %s
-            ORDER BY scored_date DESC LIMIT 30
+            WHERE stablecoin = %s
+            ORDER BY score_date DESC LIMIT 30
         """, (symbol.lower(),))
 
         context = {
@@ -197,7 +206,7 @@ def _wallet_json_ld(address: str, risk: dict, holdings: list) -> str:
             {"@type": "PropertyValue", "name": "holdings_count", "value": len(holdings)},
         ],
     }
-    return json.dumps(ld)
+    return json.dumps(ld, cls=_DecimalEncoder)
 
 
 def _asset_json_ld(symbol: str, score: dict) -> str:
@@ -211,7 +220,7 @@ def _asset_json_ld(symbol: str, score: dict) -> str:
             {"@type": "PropertyValue", "name": "formula_version", "value": score.get("formula_version")},
         ],
     }
-    return json.dumps(ld)
+    return json.dumps(ld, cls=_DecimalEncoder)
 
 
 def _assessment_json_ld(row: dict) -> str:
@@ -227,7 +236,7 @@ def _assessment_json_ld(row: dict) -> str:
             {"@type": "PropertyValue", "name": "wallet_risk_score", "value": row.get("wallet_risk_score")},
         ],
     }
-    return json.dumps(ld)
+    return json.dumps(ld, cls=_DecimalEncoder)
 
 
 def _pulse_json_ld(pulse_date: str, summary: dict) -> str:
@@ -242,7 +251,7 @@ def _pulse_json_ld(pulse_date: str, summary: dict) -> str:
             {"@type": "PropertyValue", "name": "total_tracked", "value": summary.get("total_tracked")},
         ],
     }
-    return json.dumps(ld)
+    return json.dumps(ld, cls=_DecimalEncoder)
 
 
 # --- Fallback HTML (when Jinja2 templates not available) ---
