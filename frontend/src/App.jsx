@@ -2056,7 +2056,7 @@ function WitnessView({ mobile, onSelectIssuer }) {
 
   const truncHash = (h) => h ? `${h.slice(0, 10)}…${h.slice(-6)}` : "—";
 
-  const totalAttestations = coverageData?.fiat_backed?.covered || issuers.length;
+  const totalAttestations = coverageData?.total_attestations || issuers.length;
 
   if (issuersLoading) {
     return (
@@ -2131,7 +2131,7 @@ function WitnessView({ mobile, onSelectIssuer }) {
                 border: `1px solid ${T.ruleLight}`, padding: "2px 6px",
                 display: "inline-block",
               }}>
-                {iss.collection_method || "—"}
+                {iss.collection_method === "nav_oracle" ? "on-chain" : (iss.collection_method || "—")}
               </span>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>

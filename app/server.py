@@ -2206,6 +2206,8 @@ async def cda_coverage():
         if sym not in covered_symbols:
             gaps.append(f"{sym} — not yet in CDA pipeline")
 
+    attestation_count = fetch_one("SELECT COUNT(*) as cnt FROM cda_vendor_extractions")
+
     return {
         "fiat_backed": {
             "covered": len(fiat_covered),
@@ -2219,6 +2221,7 @@ async def cda_coverage():
         "collection_methods": method_counts,
         "update_frequency": "daily",
         "vendors": ["parallel.ai", "reducto", "firecrawl"],
+        "total_attestations": attestation_count["cnt"] if attestation_count else 0,
     }
 
 
