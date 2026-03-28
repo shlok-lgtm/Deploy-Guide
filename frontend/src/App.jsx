@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
 const API = "";
-const apiFetch = (url, opts = {}) => fetch(url, { ...opts, headers: { ...opts.headers, "X-Basis-Dashboard": "1" } });
+const _DK = "BF6KF2i34EslzTnvBXAjcLlDZBlQKLSTP9LdrAzxUHI";
+const apiFetch = (url, opts) => fetch(`${url}${url.includes("?") ? "&" : "?"}apikey=${_DK}`, opts);
 
 const T = {
   paper: "#f5f2ec",

@@ -33,7 +33,8 @@
       "Bash(find /home/runner/workspace -name *scheduler* -o -name *sched*)",
       "Bash(npm run:*)",
       "Bash(find /home/runner/workspace -type f \\\\\\(-name *migration* -o -name *schema* \\\\\\))",
-      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(''''count:'''', d.get\\(''''count''''\\), ''''first:'''', d.get\\(''''protocols'''',[]\\)[0].get\\(''''protocol_slug''''\\) if d.get\\(''''protocols''''\\) else ''''NONE''''\\)\")"
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(''''count:'''', d.get\\(''''count''''\\), ''''first:'''', d.get\\(''''protocols'''',[]\\)[0].get\\(''''protocol_slug''''\\) if d.get\\(''''protocols''''\\) else ''''NONE''''\\)\")",
+      "Bash(ls:*)"
     ]
   }
 }
