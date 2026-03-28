@@ -71,13 +71,18 @@ def run_daily_pulse():
     wallet_stats = fetch_one("""
         SELECT
             COUNT(DISTINCT wallet_address) as wallets_scored,
-            COALESCE(SUM(total_stablecoin_value), 0) as total_tracked,
             COALESCE(AVG(risk_score), 0) as avg_risk_score
         FROM wallet_graph.wallet_risk_scores
         WHERE computed_at > NOW() - INTERVAL '48 hours'
     """)
 
     wallets_total = fetch_one("SELECT COUNT(*) as count FROM wallet_graph.wallets")
+
+    wallet_value = fetch_one("""
+        SELECT COALESCE(SUM(total_stablecoin_value), 0) as total_tracked
+        FROM wallet_graph.wallets
+        WHERE total_stablecoin_value > 0
+    """)
 
     # 5. Event counts (assessment_events may be empty)
     event_counts = {"silent": 0, "notable": 0, "alert": 0, "critical": 0, "total": 0}
@@ -148,7 +153,7 @@ def run_daily_pulse():
         "network_state": {
             "wallets_indexed": wallets_total.get("count", 0) if wallets_total else 0,
             "wallets_scored": wallet_stats.get("wallets_scored", 0) if wallet_stats else 0,
-            "total_tracked_usd": float(wallet_stats.get("total_tracked", 0)) if wallet_stats else 0,
+            "total_tracked_usd": float(wallet_value.get("total_tracked", 0)) if wallet_value else 0,
             "avg_risk_score": round(float(wallet_stats.get("avg_risk_score", 0)), 2) if wallet_stats else 0,
             "stablecoins_scored": len(scores_list),
             "protocols_scored": len(psi_summary),
