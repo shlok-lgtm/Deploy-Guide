@@ -44,7 +44,7 @@ UNSCORED_CONTRACTS = {
     },
     "0x57ab1ec28d129707052df4df418d58a2d46d5f51": {
         "symbol": "sUSD", "name": "Synthetix USD", "decimals": 18,
-        "coingecko_id": "susd",
+        "coingecko_id": "nusd",
     },
     "0x865377367054516e17014ccded1e7d814edc9ce4": {
         "symbol": "DOLA", "name": "Dola USD", "decimals": 18,

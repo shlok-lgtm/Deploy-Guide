@@ -96,8 +96,21 @@ async def rate_limit_and_track(request: Request, call_next):
         return response
 
     # Determine rate limit tier
+    # Same-origin requests from the dashboard get the keyed tier — the dashboard
+    # is a first-party consumer served by this same FastAPI server and should
+    # never be subject to the 10/min public cap.
+    referer = request.headers.get("referer", "")
+    origin = request.headers.get("origin", "")
+    is_dashboard = any(
+        h and ("basisprotocol.xyz" in h or "localhost" in h or "127.0.0.1" in h)
+        for h in (referer, origin)
+    )
+
     if api_key_id:
         identifier = f"key:{api_key_id}"
+        limit = KEYED_RATE_LIMIT
+    elif is_dashboard:
+        identifier = f"dashboard:{ip}"
         limit = KEYED_RATE_LIMIT
     else:
         identifier = f"ip:{ip}"

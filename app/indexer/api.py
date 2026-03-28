@@ -248,6 +248,118 @@ def register_wallet_routes(app: FastAPI) -> None:
         )
         return {"address": address.strip(), "history": rows}
 
+    # -- Wallet edge/connection routes --
+
+    @app.get("/api/wallets/{address}/connections")
+    async def wallet_connections(address: str, limit: int = Query(default=20, ge=1, le=100)):
+        """Top counterparties for a wallet sorted by edge weight."""
+        addr = address.lower()
+        edges = fetch_all(
+            """
+            SELECT
+                CASE WHEN from_address = %s THEN to_address ELSE from_address END AS counterparty,
+                transfer_count, total_value_usd, first_transfer_at, last_transfer_at,
+                weight, tokens_transferred
+            FROM wallet_graph.wallet_edges
+            WHERE from_address = %s OR to_address = %s
+            ORDER BY weight DESC
+            LIMIT %s
+            """,
+            (addr, addr, addr, limit),
+        )
+
+        connections = []
+        for edge in edges:
+            cp_info = fetch_one(
+                "SELECT total_stablecoin_value, size_tier, label, is_contract FROM wallet_graph.wallets WHERE address = %s",
+                (edge["counterparty"],),
+            )
+            connections.append({
+                "counterparty": edge["counterparty"],
+                "transfer_count": edge["transfer_count"],
+                "total_value_usd": edge["total_value_usd"],
+                "first_transfer": edge["first_transfer_at"].isoformat() if edge.get("first_transfer_at") else None,
+                "last_transfer": edge["last_transfer_at"].isoformat() if edge.get("last_transfer_at") else None,
+                "weight": round(float(edge["weight"]), 4) if edge.get("weight") else 0,
+                "tokens": edge["tokens_transferred"],
+                "counterparty_value": cp_info["total_stablecoin_value"] if cp_info else None,
+                "counterparty_label": cp_info.get("label") if cp_info else None,
+                "counterparty_tier": cp_info.get("size_tier") if cp_info else None,
+            })
+
+        build = fetch_one(
+            "SELECT status, last_built_at FROM wallet_graph.edge_build_status WHERE wallet_address = %s",
+            (addr,),
+        )
+
+        return {
+            "wallet": addr,
+            "connections": connections,
+            "count": len(connections),
+            "edge_status": build["status"] if build else "not_built",
+            "edges_built_at": build["last_built_at"].isoformat() if build and build.get("last_built_at") else None,
+        }
+
+    @app.get("/api/wallets/{address}/contagion")
+    async def wallet_contagion(address: str, depth: int = Query(default=1, ge=1, le=2)):
+        """If this wallet's holdings depeg, who's exposed?"""
+        addr = address.lower()
+        direct = fetch_all(
+            """
+            SELECT
+                CASE WHEN from_address = %s THEN to_address ELSE from_address END AS counterparty,
+                weight, total_value_usd
+            FROM wallet_graph.wallet_edges
+            WHERE (from_address = %s OR to_address = %s)
+              AND weight > 0.1
+            ORDER BY weight DESC
+            LIMIT 50
+            """,
+            (addr, addr, addr),
+        )
+
+        counterparties = []
+        for edge in direct:
+            cp = edge["counterparty"]
+            risk = fetch_one(
+                """SELECT risk_score, risk_grade, total_stablecoin_value
+                FROM wallet_graph.wallet_risk_scores
+                WHERE wallet_address = %s ORDER BY computed_at DESC LIMIT 1""",
+                (cp,),
+            )
+            entry = {
+                "address": cp,
+                "edge_weight": round(float(edge["weight"]), 4) if edge.get("weight") else 0,
+                "transfer_value_usd": edge["total_value_usd"],
+                "risk_score": float(risk["risk_score"]) if risk and risk.get("risk_score") else None,
+                "risk_grade": risk["risk_grade"] if risk else None,
+                "holdings_value_usd": float(risk["total_stablecoin_value"]) if risk and risk.get("total_stablecoin_value") else None,
+            }
+
+            if depth >= 2:
+                secondary = fetch_all(
+                    """
+                    SELECT COUNT(*) AS cnt, COALESCE(SUM(total_value_usd), 0) AS exposure
+                    FROM wallet_graph.wallet_edges
+                    WHERE (from_address = %s OR to_address = %s)
+                      AND from_address != %s AND to_address != %s
+                      AND weight > 0.1
+                    """,
+                    (cp, cp, addr, addr),
+                )
+                entry["secondary_connections"] = secondary[0]["cnt"] if secondary else 0
+                entry["secondary_exposure_usd"] = float(secondary[0]["exposure"]) if secondary else 0
+
+            counterparties.append(entry)
+
+        return {
+            "source_wallet": addr,
+            "depth": depth,
+            "direct_counterparties": len(counterparties),
+            "direct_exposure_usd": sum(c["transfer_value_usd"] or 0 for c in counterparties),
+            "counterparties": counterparties,
+        }
+
     # -- Wallet profile routes --
 
     @app.get("/api/wallets/{address}/profile")
@@ -257,6 +369,32 @@ def register_wallet_routes(app: FastAPI) -> None:
         profile = generate_wallet_profile(address)
         if not profile:
             raise HTTPException(status_code=404, detail="Wallet not found in index")
+
+        addr = address.lower()
+        top_connections = fetch_all(
+            """
+            SELECT
+                CASE WHEN from_address = %s THEN to_address ELSE from_address END AS counterparty,
+                weight, total_value_usd
+            FROM wallet_graph.wallet_edges
+            WHERE from_address = %s OR to_address = %s
+            ORDER BY weight DESC
+            LIMIT 5
+            """,
+            (addr, addr, addr),
+        )
+        edge_count = fetch_one(
+            "SELECT COUNT(*) AS cnt FROM wallet_graph.wallet_edges WHERE from_address = %s OR to_address = %s",
+            (addr, addr),
+        )
+        profile["connections_summary"] = {
+            "total_connections": edge_count["cnt"] if edge_count else 0,
+            "top_counterparties": [
+                {"address": c["counterparty"], "weight": round(float(c["weight"]), 4) if c.get("weight") else 0, "value": c["total_value_usd"]}
+                for c in top_connections
+            ],
+        }
+
         return profile
 
     @app.get("/api/wallets/{address}/profile/hash")
@@ -318,3 +456,53 @@ def register_wallet_routes(app: FastAPI) -> None:
             "reseed": reseed,
             "message": "Wallet indexing running in background — check /api/wallets/stats for progress",
         }
+
+    @app.get("/api/graph/stats")
+    async def graph_stats():
+        """Edge graph statistics and build progress."""
+        edge_stats = fetch_one(
+            """
+            SELECT
+                COUNT(*) AS total_edges,
+                COALESCE(SUM(total_value_usd), 0) AS total_value,
+                COALESCE(AVG(weight), 0) AS avg_weight,
+                MAX(last_transfer_at) AS newest_edge
+            FROM wallet_graph.wallet_edges
+            """
+        )
+        build_stats = fetch_one(
+            """
+            SELECT
+                COUNT(*) FILTER (WHERE status = 'complete') AS built,
+                COUNT(*) FILTER (WHERE status = 'pending' OR status IS NULL) AS pending
+            FROM wallet_graph.edge_build_status
+            """
+        )
+        wallets_total = fetch_one("SELECT COUNT(*) AS cnt FROM wallet_graph.wallets")
+        return {
+            "edges": {
+                "total": edge_stats["total_edges"] if edge_stats else 0,
+                "total_value_transferred": float(edge_stats["total_value"]) if edge_stats else 0,
+                "avg_weight": round(float(edge_stats["avg_weight"]), 4) if edge_stats else 0,
+                "newest_edge": edge_stats["newest_edge"].isoformat() if edge_stats and edge_stats.get("newest_edge") else None,
+            },
+            "build_progress": {
+                "wallets_built": build_stats["built"] if build_stats else 0,
+                "wallets_pending": build_stats["pending"] if build_stats else 0,
+                "wallets_total": wallets_total["cnt"] if wallets_total else 0,
+            },
+        }
+
+    @app.post("/api/admin/build-edges")
+    async def trigger_edge_build(
+        key: str = Query(default=None),
+        max_wallets: int = Query(default=50, ge=1, le=500),
+        priority: str = Query(default="value"),
+    ):
+        """Trigger edge building for wallets (admin-only)."""
+        admin_key = os.environ.get("ADMIN_KEY", "")
+        if not admin_key or key != admin_key:
+            raise HTTPException(status_code=403, detail="Invalid admin key")
+        from app.indexer.edges import run_edge_builder
+        result = await run_edge_builder(max_wallets=max_wallets, priority=priority)
+        return result
