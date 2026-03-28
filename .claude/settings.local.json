@@ -7,7 +7,7 @@
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(git push:*)",
-      "WebFetch(domain:basis-deploy-guide.replit.app)",
+      "WebFetch(domain:basisprotocol.xyz)",
       "Bash(psql:*)",
       "Bash(python3:*)",
       "Bash(env)",

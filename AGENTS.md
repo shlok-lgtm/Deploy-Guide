@@ -57,7 +57,7 @@ of BOTH asset-level scores (SII) AND wallet-level risk profiles.
 
 ## API REFERENCE (for spoke developers)
 
-Base URL: https://basis-deploy-guide.replit.app
+Base URL: https://basisprotocol.xyz
 
 ### Stablecoin scores
 - GET /api/scores — ALL scored stablecoins (dynamic count, currently 14+)

@@ -41,7 +41,7 @@ def _get_jinja_env():
     return _jinja_env
 
 
-CANONICAL_BASE_URL = os.environ.get("CANONICAL_BASE_URL", "https://basis-deploy-guide.replit.app").rstrip("/")
+CANONICAL_BASE_URL = os.environ.get("CANONICAL_BASE_URL", "https://basisprotocol.xyz").rstrip("/")
 
 
 def _page_response(html_content: str) -> HTMLResponse:
