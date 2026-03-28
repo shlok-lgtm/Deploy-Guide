@@ -30,7 +30,9 @@
       "Read(//tmp/**)",
       "Read(//home/runner/**)",
       "Bash(npx vite:*)",
-      "Bash(find /home/runner/workspace -name *scheduler* -o -name *sched*)"
+      "Bash(find /home/runner/workspace -name *scheduler* -o -name *sched*)",
+      "Bash(npm run:*)",
+      "Bash(find /home/runner/workspace -type f \\\\\\(-name *migration* -o -name *schema* \\\\\\))"
     ]
   }
 }

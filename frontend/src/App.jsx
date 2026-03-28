@@ -1682,6 +1682,13 @@ function ProtocolsView({ mobile }) {
 
 function PulseView({ mobile }) {
   const { data: pulse, loading } = usePulse();
+  const [divergence, setDivergence] = useState(null);
+  useEffect(() => {
+    fetch(`${API}/api/divergence`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => setDivergence(d))
+      .catch(() => {});
+  }, []);
 
   if (loading) {
     return (
@@ -1882,6 +1889,41 @@ function PulseView({ mobile }) {
         </div>
       )}
 
+      {/* Divergence Signals */}
+      <div style={{ marginBottom: 24 }}>
+        <div style={{ fontFamily: T.mono, fontSize: 9, textTransform: "uppercase", letterSpacing: 1.5, color: T.inkLight, marginBottom: 10 }}>
+          Divergence Signals
+        </div>
+        {divergence && divergence.divergence_signals && divergence.divergence_signals.length > 0 ? (
+          <div style={{ border: `1px solid ${T.ruleMid}` }}>
+            {divergence.divergence_signals.slice(0, 10).map((sig, i) => (
+              <div key={i} style={{
+                padding: "10px 16px",
+                borderBottom: `1px dotted ${T.ruleMid}`,
+                display: "flex", alignItems: "center", gap: 12,
+              }}>
+                <div style={{
+                  width: 6, height: 6, borderRadius: "50%", flexShrink: 0,
+                  background: sig.severity === "critical" ? T.accent : sig.severity === "alert" ? "#c77b2a" : T.inkMid,
+                }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ fontFamily: T.mono, fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, color: T.inkLight }}>
+                    {sig.severity} · {sig.type === "asset_quality" ? "asset" : sig.type === "wallet_concentration" ? "wallet" : "flow"}
+                  </span>
+                  <div style={{ fontFamily: T.mono, fontSize: 11, color: T.ink, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {sig.signal}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={{ fontFamily: T.mono, fontSize: 11, color: T.inkFaint, padding: "10px 0" }}>
+            No divergence signals detected. Capital flows align with quality scores.
+          </div>
+        )}
+      </div>
+
       {/* Movers — biggest score changes */}
       {movers.length > 0 && (
         <div style={{ marginBottom: 24 }}>
@@ -1924,7 +1966,7 @@ function Footer() {
       fontSize: 10, color: T.inkFaint, fontFamily: T.mono,
     }}>
       <span>Basis Protocol · Stablecoin Integrity Index</span>
-      <span>Risk surfaces for on-chain finance · basisprotocol.xyz</span>
+      <span><a href="/developers" style={{ color: 'inherit', textDecoration: 'none', borderBottom: `1px solid ${T.ruleMid}` }}>API &amp; Pricing</a> · Risk surfaces for on-chain finance · basisprotocol.xyz</span>
     </footer>
   );
 }

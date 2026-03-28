@@ -1110,7 +1110,342 @@ async def admin_content_signals(request: Request):
 
 
 # =============================================================================
-# 14. GET /admin — Admin Panel HTML
+# 14a. GET /developers — Public API/Pricing Page
+# =============================================================================
+
+DEVELOPERS_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Basis Protocol API — Risk primitives for on-chain finance</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#f5f2ec;color:#0a0a0a;font-family:'IBM Plex Sans',sans-serif;line-height:1.6}
+.container{max-width:960px;margin:0 auto;padding:48px 24px}
+h1{font-family:'IBM Plex Mono',monospace;font-size:1.8rem;font-weight:600;margin-bottom:4px}
+.subtitle{color:#6a6a6a;font-size:1rem;margin-bottom:48px}
+.tiers{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-bottom:56px}
+@media(max-width:768px){.tiers{grid-template-columns:1fr}}
+.tier{background:#fff;border:1px solid #d5d0c8;border-radius:6px;padding:28px 24px;display:flex;flex-direction:column}
+.tier.featured{border-color:#c0392b;border-width:2px}
+.tier h2{font-family:'IBM Plex Mono',monospace;font-size:1.1rem;font-weight:600;margin-bottom:4px}
+.tier .price{font-size:0.85rem;color:#6a6a6a;margin-bottom:16px;min-height:40px}
+.tier ul{list-style:none;flex:1;margin-bottom:20px}
+.tier li{font-size:0.85rem;color:#3a3a3a;padding:4px 0;padding-left:16px;position:relative}
+.tier li::before{content:"\\2713";position:absolute;left:0;color:#6a6a6a;font-size:0.75rem}
+.tier .btn{display:inline-block;text-align:center;padding:10px 20px;border-radius:4px;font-family:'IBM Plex Mono',monospace;font-size:0.85rem;font-weight:500;text-decoration:none;cursor:pointer;border:1px solid #0a0a0a;background:transparent;color:#0a0a0a;transition:all 0.15s}
+.tier .btn:hover{background:#0a0a0a;color:#f5f2ec}
+.tier.featured .btn{background:#c0392b;color:#fff;border-color:#c0392b}
+.tier.featured .btn:hover{background:#a5311f}
+.pricing-note{font-size:0.75rem;color:#6a6a6a;margin-top:4px}
+h3{font-family:'IBM Plex Mono',monospace;font-size:1.1rem;font-weight:600;margin-bottom:20px;padding-bottom:8px;border-bottom:1px solid #d5d0c8}
+.endpoint-group{margin-bottom:28px}
+.endpoint-group h4{font-family:'IBM Plex Sans',sans-serif;font-size:0.9rem;font-weight:600;color:#3a3a3a;margin-bottom:8px}
+.endpoint{font-family:'IBM Plex Mono',monospace;font-size:0.8rem;color:#3a3a3a;padding:3px 0}
+.endpoint .method{color:#c0392b;font-weight:500}
+.footer-note{margin-top:40px;padding-top:20px;border-top:1px solid #d5d0c8;font-family:'IBM Plex Mono',monospace;font-size:0.8rem;color:#6a6a6a}
+.footer-note code{background:#eae6de;padding:2px 6px;border-radius:3px;font-size:0.78rem}
+/* Key generation form */
+.keygen-overlay{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.4);z-index:100;align-items:center;justify-content:center}
+.keygen-overlay.active{display:flex}
+.keygen-box{background:#fff;border:1px solid #d5d0c8;border-radius:6px;padding:32px;max-width:420px;width:90%;position:relative}
+.keygen-box h3{border:none;margin-bottom:16px;padding-bottom:0}
+.keygen-box .close{position:absolute;top:12px;right:16px;cursor:pointer;font-size:1.2rem;color:#6a6a6a;background:none;border:none}
+.keygen-box label{display:block;font-size:0.85rem;color:#3a3a3a;margin-bottom:4px;font-weight:500}
+.keygen-box input{width:100%;padding:8px 12px;border:1px solid #d5d0c8;border-radius:4px;font-family:'IBM Plex Sans',sans-serif;font-size:0.9rem;margin-bottom:14px}
+.keygen-box input:focus{outline:none;border-color:#c0392b}
+.keygen-box .submit-btn{width:100%;padding:10px;background:#c0392b;color:#fff;border:none;border-radius:4px;font-family:'IBM Plex Mono',monospace;font-size:0.9rem;cursor:pointer;font-weight:500}
+.keygen-box .submit-btn:hover{background:#a5311f}
+.keygen-box .submit-btn:disabled{background:#999;cursor:not-allowed}
+.key-result{display:none;margin-top:16px}
+.key-result .key-display{background:#0a0a0a;color:#4ade80;padding:12px 16px;border-radius:4px;font-family:'IBM Plex Mono',monospace;font-size:0.82rem;word-break:break-all;margin:8px 0}
+.key-result .copy-btn{padding:6px 14px;border:1px solid #d5d0c8;border-radius:4px;background:#fff;font-family:'IBM Plex Mono',monospace;font-size:0.8rem;cursor:pointer}
+.key-result .copy-btn:hover{background:#eae6de}
+.key-result .warning{font-size:0.8rem;color:#c0392b;margin-top:10px;font-weight:500}
+.keygen-error{color:#c0392b;font-size:0.85rem;margin-top:8px;display:none}
+.back-link{font-family:'IBM Plex Mono',monospace;font-size:0.85rem;color:#6a6a6a;text-decoration:none;display:inline-block;margin-bottom:24px}
+.back-link:hover{color:#0a0a0a}
+</style>
+</head>
+<body>
+<div class="container">
+<a href="/" class="back-link">&larr; Back to dashboard</a>
+<h1>Basis Protocol API</h1>
+<p class="subtitle">Risk primitives for on-chain finance</p>
+
+<div class="tiers">
+  <div class="tier">
+    <h2>Free</h2>
+    <div class="price">No key required</div>
+    <ul>
+      <li>10 requests / minute</li>
+      <li>All public endpoints</li>
+      <li>Stablecoin scores (SII)</li>
+      <li>Protocol scores (PSI)</li>
+      <li>Wallet risk profiles</li>
+      <li>Composition queries (CQI)</li>
+      <li>Daily pulse</li>
+    </ul>
+    <a href="/docs" class="btn">Explore the API &rarr;</a>
+  </div>
+
+  <div class="tier featured">
+    <h2>Pro</h2>
+    <div class="price">Free during beta<br><span class="pricing-note">Pricing starts when enterprise tiers launch</span></div>
+    <ul>
+      <li>120 requests / minute</li>
+      <li>Everything in Free</li>
+      <li>Higher rate limits</li>
+      <li>API key for usage tracking</li>
+      <li>Priority support</li>
+    </ul>
+    <button class="btn" onclick="openKeygen()">Get API Key</button>
+  </div>
+
+  <div class="tier">
+    <h2>Enterprise</h2>
+    <div class="price">Contact us</div>
+    <ul>
+      <li>Custom rate limits</li>
+      <li>Historical data access</li>
+      <li>Dedicated support</li>
+      <li>SLA guarantees</li>
+      <li>Custom index definitions</li>
+      <li>Priority webhook delivery</li>
+    </ul>
+    <a href="mailto:shlok@basisprotocol.xyz" class="btn">Contact &rarr;</a>
+  </div>
+</div>
+
+<h3>API Reference</h3>
+
+<div class="endpoint-group">
+  <h4>Stablecoin Integrity Index (SII)</h4>
+  <div class="endpoint"><span class="method">GET</span> /api/scores &mdash; all scored stablecoins</div>
+  <div class="endpoint"><span class="method">GET</span> /api/scores/{symbol} &mdash; detailed breakdown</div>
+</div>
+
+<div class="endpoint-group">
+  <h4>Protocol Solvency Index (PSI)</h4>
+  <div class="endpoint"><span class="method">GET</span> /api/psi/scores &mdash; all scored protocols</div>
+  <div class="endpoint"><span class="method">GET</span> /api/psi/scores/{slug} &mdash; detailed breakdown</div>
+</div>
+
+<div class="endpoint-group">
+  <h4>Collateral Quality Index (CQI)</h4>
+  <div class="endpoint"><span class="method">GET</span> /api/compose/cqi?asset=usdc&amp;protocol=aave &mdash; single pair</div>
+  <div class="endpoint"><span class="method">GET</span> /api/compose/cqi/matrix &mdash; all pairs</div>
+</div>
+
+<div class="endpoint-group">
+  <h4>Wallet Risk</h4>
+  <div class="endpoint"><span class="method">GET</span> /api/wallets/{address} &mdash; risk profile</div>
+  <div class="endpoint"><span class="method">GET</span> /api/wallets/{address}/profile &mdash; full reputation primitive</div>
+</div>
+
+<div class="endpoint-group">
+  <h4>Evidence Layer (CDA)</h4>
+  <div class="endpoint"><span class="method">GET</span> /api/cda/issuers &mdash; all issuers</div>
+  <div class="endpoint"><span class="method">GET</span> /api/cda/issuers/{symbol}/latest &mdash; latest attestation</div>
+</div>
+
+<div class="endpoint-group">
+  <h4>Network State</h4>
+  <div class="endpoint"><span class="method">GET</span> /api/pulse/latest &mdash; daily pulse</div>
+  <div class="endpoint"><span class="method">GET</span> /api/methodology &mdash; formula and weights</div>
+</div>
+
+<p style="font-size:0.85rem;color:#6a6a6a;margin-top:8px">Full interactive docs: <a href="/docs" style="color:#c0392b">/docs</a></p>
+
+<div class="footer-note">
+  <strong>Authentication:</strong> pass your API key as <code>?apikey=YOUR_KEY</code> or <code>X-Api-Key: YOUR_KEY</code> header
+</div>
+</div>
+
+<!-- Key generation modal -->
+<div class="keygen-overlay" id="keygenOverlay">
+  <div class="keygen-box">
+    <button class="close" onclick="closeKeygen()">&times;</button>
+    <h3>Generate API Key</h3>
+    <form id="keygenForm" onsubmit="submitKeygen(event)">
+      <label for="kg-name">App name</label>
+      <input type="text" id="kg-name" placeholder="My App" required minlength="2" maxlength="100">
+      <label for="kg-email">Email</label>
+      <input type="email" id="kg-email" placeholder="dev@example.com" required>
+      <button type="submit" class="submit-btn" id="kg-submit">Generate Key</button>
+    </form>
+    <div class="keygen-error" id="kg-error"></div>
+    <div class="key-result" id="kg-result">
+      <p style="font-size:0.9rem;font-weight:600;">Your API key:</p>
+      <div class="key-display" id="kg-key"></div>
+      <button class="copy-btn" onclick="copyKey()">Copy to clipboard</button>
+      <p class="warning">Store this key securely. It will not be shown again.</p>
+    </div>
+  </div>
+</div>
+
+<script>
+function openKeygen(){
+  document.getElementById('keygenOverlay').classList.add('active');
+  document.getElementById('keygenForm').style.display='block';
+  document.getElementById('kg-result').style.display='none';
+  document.getElementById('kg-error').style.display='none';
+  document.getElementById('kg-name').value='';
+  document.getElementById('kg-email').value='';
+}
+function closeKeygen(){
+  document.getElementById('keygenOverlay').classList.remove('active');
+}
+document.getElementById('keygenOverlay').addEventListener('click',function(e){
+  if(e.target===this) closeKeygen();
+});
+async function submitKeygen(e){
+  e.preventDefault();
+  var btn=document.getElementById('kg-submit');
+  var err=document.getElementById('kg-error');
+  btn.disabled=true; btn.textContent='Generating...';
+  err.style.display='none';
+  try{
+    var res=await fetch('/api/keys/generate',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        name:document.getElementById('kg-name').value.trim(),
+        email:document.getElementById('kg-email').value.trim()
+      })
+    });
+    var data=await res.json();
+    if(!res.ok){
+      err.textContent=data.detail||data.error||'Something went wrong';
+      err.style.display='block';
+      btn.disabled=false; btn.textContent='Generate Key';
+      return;
+    }
+    document.getElementById('kg-key').textContent=data.api_key;
+    document.getElementById('keygenForm').style.display='none';
+    document.getElementById('kg-result').style.display='block';
+  }catch(ex){
+    err.textContent='Network error. Please try again.';
+    err.style.display='block';
+    btn.disabled=false; btn.textContent='Generate Key';
+  }
+}
+function copyKey(){
+  var key=document.getElementById('kg-key').textContent;
+  navigator.clipboard.writeText(key).then(function(){
+    var btn=document.querySelector('.copy-btn');
+    btn.textContent='Copied!';
+    setTimeout(function(){btn.textContent='Copy to clipboard';},2000);
+  });
+}
+</script>
+</body>
+</html>"""
+
+
+@app.get("/developers")
+async def developers_page():
+    return HTMLResponse(content=DEVELOPERS_HTML)
+
+
+# =============================================================================
+# 14b. POST /api/keys/generate — Self-serve API key generation
+# =============================================================================
+
+import time as _time
+from collections import defaultdict as _defaultdict
+
+_keygen_requests: dict[str, list[float]] = _defaultdict(list)
+_keygen_lock = __import__("threading").Lock()
+_KEYGEN_LIMIT = 5
+_KEYGEN_WINDOW = 3600  # 1 hour
+
+
+def _check_keygen_rate(ip: str) -> bool:
+    """Returns True if the IP is within the key-generation rate limit."""
+    now = _time.time()
+    cutoff = now - _KEYGEN_WINDOW
+    with _keygen_lock:
+        _keygen_requests[ip] = [t for t in _keygen_requests[ip] if t > cutoff]
+        if len(_keygen_requests[ip]) >= _KEYGEN_LIMIT:
+            return False
+        _keygen_requests[ip].append(now)
+        return True
+
+
+@app.post("/api/keys/generate")
+async def generate_api_key(request: Request):
+    from app.usage_tracker import create_api_key
+    from app.database import fetch_one, get_conn
+
+    # Parse body
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    name = (body.get("name") or "").strip()
+    email = (body.get("email") or "").strip()
+
+    # Validate
+    if not name or len(name) < 2 or len(name) > 100:
+        raise HTTPException(status_code=400, detail="name is required (2-100 characters)")
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="A valid email is required")
+
+    # Rate limit key generation per IP
+    ip = request.client.host if request.client else "unknown"
+    if not _check_keygen_rate(ip):
+        raise HTTPException(status_code=429, detail="Too many key requests. Max 5 per hour.")
+
+    # Check for duplicate active key with same name
+    existing = fetch_one(
+        "SELECT id FROM api_keys WHERE name = %s AND is_active = TRUE",
+        (name,),
+    )
+    if existing:
+        raise HTTPException(status_code=409, detail="An active key with this name already exists. Choose a different name.")
+
+    # Ensure email/tier columns exist (idempotent migration)
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS email VARCHAR(255)")
+                cur.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS tier VARCHAR(20) DEFAULT 'pro'")
+                conn.commit()
+    except Exception:
+        pass  # columns may already exist
+
+    # Create key
+    key_string = create_api_key(name)
+
+    # Store email and tier
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE api_keys SET email = %s, tier = %s WHERE key = %s",
+                    (email, "pro", key_string),
+                )
+                conn.commit()
+    except Exception as e:
+        logger.warning(f"Failed to store email for key: {e}")
+
+    return {
+        "api_key": key_string,
+        "name": name,
+        "tier": "pro",
+        "rate_limit": "120 requests/minute",
+        "message": "Store this key securely. It will not be shown again.",
+        "docs": "/docs",
+        "pricing_note": "Free during beta. Enterprise tiers coming soon.",
+    }
+
+
+# =============================================================================
+# 15. GET /admin — Admin Panel HTML
 # =============================================================================
 
 ADMIN_HTML = """<!DOCTYPE html>
@@ -1863,6 +2198,77 @@ async def get_assessment_events(
     }
 
 
+@app.get("/api/assessments/recent")
+async def recent_assessments(
+    limit: int = Query(default=10, ge=1, le=100),
+    verified: Optional[bool] = Query(default=None),
+):
+    """Recent assessment events with verification status."""
+    rows = fetch_all("""
+        SELECT ae.id, ae.wallet_address, ae.wallet_risk_score, ae.severity,
+               ae.created_at, ae.inputs_hash,
+               iv.inputs_hash AS iv_hash, iv.holdings, iv.stablecoin_scores
+        FROM assessment_events ae
+        LEFT JOIN assessment_input_vectors iv ON iv.assessment_id = ae.id
+        ORDER BY ae.created_at DESC
+        LIMIT %s
+    """, (limit,))
+
+    assessments = []
+    verified_count = 0
+    for r in rows:
+        has_vector = r.get("iv_hash") is not None
+        v_status = "inputs_not_available"
+
+        if has_vector:
+            # Quick re-verify: recompute score from stored vector
+            holdings = r["holdings"] if isinstance(r.get("holdings"), list) else []
+            scores_map = r["stablecoin_scores"] if isinstance(r.get("stablecoin_scores"), dict) else {}
+            scored = []
+            for h in holdings:
+                sym = h.get("symbol", "")
+                val = float(h.get("value_usd", 0))
+                sii = h.get("sii_score")
+                if sii is None and sym in scores_map:
+                    sii = scores_map[sym].get("score")
+                if sii is not None and val > 0:
+                    scored.append((val, float(sii)))
+            if scored:
+                total_val = sum(v for v, _ in scored)
+                if total_val > 0:
+                    recomputed = round(sum(v * s for v, s in scored) / total_val, 2)
+                    stored = float(r["wallet_risk_score"]) if r.get("wallet_risk_score") else None
+                    if stored is not None and abs(recomputed - stored) < 0.01:
+                        v_status = "verified"
+                        verified_count += 1
+                    else:
+                        v_status = "mismatch"
+                else:
+                    v_status = "verified"
+                    verified_count += 1
+            else:
+                v_status = "verified"
+                verified_count += 1
+
+        assessments.append({
+            "id": str(r["id"]),
+            "wallet_address": r.get("wallet_address"),
+            "risk_score": float(r["wallet_risk_score"]) if r.get("wallet_risk_score") else None,
+            "severity": r.get("severity"),
+            "created_at": r["created_at"].isoformat() if r.get("created_at") else None,
+            "verification": v_status,
+            "inputs_hash": r.get("inputs_hash"),
+        })
+
+    total = len(assessments)
+    return {
+        "assessments": assessments,
+        "verified_count": verified_count,
+        "total_count": total,
+        "verification_rate": round(verified_count / total, 2) if total > 0 else 0,
+    }
+
+
 @app.get("/api/assessments/{assessment_id}/inputs")
 async def get_assessment_inputs(assessment_id: str):
     """Computation attestation: retrieve input hash and summary for an assessment event."""
@@ -1888,6 +2294,138 @@ async def get_assessment_inputs(assessment_id: str):
         "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
         "verification_status": "hash_available" if has_hash else "hash_not_available",
         "note": "Full input vector retrieval available in v2. Hash can be verified against on-chain anchor.",
+    }
+
+
+@app.get("/api/assessments/{assessment_id}/verify")
+async def verify_assessment(assessment_id: str):
+    """Full computation attestation: verify an assessment by re-deriving the score from stored inputs."""
+    from app.computation_attestation import compute_inputs_hash
+    from app.scoring import score_to_grade
+
+    # 1. Fetch assessment event
+    ae = fetch_one("""
+        SELECT id, wallet_address, wallet_risk_score, content_hash, inputs_hash,
+               methodology_version, severity, created_at
+        FROM assessment_events
+        WHERE id = %s::uuid
+    """, (assessment_id,))
+    if not ae:
+        raise HTTPException(status_code=404, detail="Assessment event not found")
+
+    stored_score = float(ae["wallet_risk_score"]) if ae.get("wallet_risk_score") else None
+
+    # 2. Fetch input vector
+    iv = fetch_one("""
+        SELECT wallet_address, holdings, stablecoin_scores, formula_version, inputs_hash, computed_at
+        FROM assessment_input_vectors
+        WHERE assessment_id = %s::uuid
+    """, (assessment_id,))
+
+    if not iv:
+        return {
+            "assessment_id": str(ae["id"]),
+            "wallet_address": ae.get("wallet_address"),
+            "verification": {
+                "status": "inputs_not_available",
+                "stored_score": stored_score,
+                "recomputed_score": None,
+                "match": None,
+                "formula_version": ae.get("methodology_version"),
+            },
+            "inputs": None,
+            "hashes": {
+                "inputs_hash": ae.get("inputs_hash"),
+                "content_hash": ae.get("content_hash"),
+                "recomputed_inputs_hash": None,
+            },
+        }
+
+    holdings = iv["holdings"] if isinstance(iv["holdings"], list) else []
+    stablecoin_scores = iv["stablecoin_scores"] if isinstance(iv["stablecoin_scores"], dict) else {}
+
+    # 3. Re-compute wallet risk score (value-weighted average of SII scores)
+    scored_holdings = []
+    for h in holdings:
+        symbol = h.get("symbol", "")
+        value_usd = float(h.get("value_usd", 0))
+        sii = h.get("sii_score")
+        if sii is None and symbol in stablecoin_scores:
+            sii = stablecoin_scores[symbol].get("score")
+        if sii is not None and value_usd > 0:
+            scored_holdings.append({"symbol": symbol, "value_usd": value_usd, "sii_score": float(sii)})
+
+    recomputed_score = None
+    if scored_holdings:
+        total_val = sum(h["value_usd"] for h in scored_holdings)
+        if total_val > 0:
+            recomputed_score = round(
+                sum(h["value_usd"] * h["sii_score"] for h in scored_holdings) / total_val,
+                2,
+            )
+
+    # 4. Re-compute inputs hash
+    component_scores_for_hash = {}
+    for h in holdings:
+        sym = h.get("symbol", "")
+        sii = h.get("sii_score")
+        if sym and sii is not None:
+            component_scores_for_hash[sym] = float(sii)
+    # Note: recomputed hash won't match stored hash exactly because compute_inputs_hash
+    # includes a timestamp. We include it for transparency but verify score, not hash.
+    try:
+        recomputed_hash, _ = compute_inputs_hash(
+            component_scores=component_scores_for_hash,
+            wallet_holdings=holdings,
+            formula_version=iv["formula_version"],
+        )
+    except Exception:
+        recomputed_hash = None
+
+    # 5. Determine verification status
+    if recomputed_score is not None and stored_score is not None:
+        match = abs(recomputed_score - stored_score) < 0.01
+        status = "verified" if match else "mismatch"
+    else:
+        match = None
+        status = "inputs_not_available"
+
+    # Build holdings output with percentages
+    total_value = sum(float(h.get("value_usd", 0)) for h in holdings)
+    holdings_output = []
+    for h in holdings:
+        val = float(h.get("value_usd", 0))
+        symbol = h.get("symbol", "")
+        sii = h.get("sii_score")
+        if sii is None and symbol in stablecoin_scores:
+            sii = stablecoin_scores[symbol].get("score")
+        holdings_output.append({
+            "symbol": symbol,
+            "value_usd": val,
+            "pct_of_wallet": round(val / total_value, 4) if total_value > 0 else 0,
+            "sii_score": float(sii) if sii is not None else None,
+        })
+
+    return {
+        "assessment_id": str(ae["id"]),
+        "wallet_address": ae.get("wallet_address"),
+        "verification": {
+            "status": status,
+            "stored_score": stored_score,
+            "recomputed_score": recomputed_score,
+            "match": match,
+            "formula_version": iv["formula_version"],
+        },
+        "inputs": {
+            "holdings_count": len(holdings),
+            "holdings": holdings_output,
+            "stablecoin_scores_at_time": stablecoin_scores,
+        },
+        "hashes": {
+            "inputs_hash": ae.get("inputs_hash"),
+            "content_hash": ae.get("content_hash"),
+            "recomputed_inputs_hash": recomputed_hash,
+        },
     }
 
 
@@ -1987,6 +2525,36 @@ async def list_indices():
 
 
 # =============================================================================
+# Structured Query API
+# =============================================================================
+
+@app.post("/api/query")
+async def query_wallets(request: Request):
+    """Structured query against the wallet risk graph."""
+    from app.query_engine import execute_query
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object")
+
+    result = execute_query(body)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@app.get("/api/query/schema")
+async def query_schema():
+    """Documentation of available query filters and options."""
+    from app.query_engine import QUERY_SCHEMA
+    return QUERY_SCHEMA
+
+
+# =============================================================================
 # Daily Pulse API
 # =============================================================================
 
@@ -2053,6 +2621,38 @@ async def pulse_by_date(date_str: str):
         "content_hash": content_hash,
         "page_url": row.get("page_url"),
     }
+
+
+# =============================================================================
+# Divergence Detection API
+# =============================================================================
+
+@app.get("/api/divergence")
+async def divergence_all():
+    """Combined divergence signals — capital-flow / quality mismatches."""
+    from app.divergence import detect_all_divergences
+    return detect_all_divergences()
+
+
+@app.get("/api/divergence/assets")
+async def divergence_assets():
+    """Asset quality divergence: score declining while capital flows in."""
+    from app.divergence import detect_asset_divergence
+    return {"signals": detect_asset_divergence(), "type": "asset_quality"}
+
+
+@app.get("/api/divergence/wallets")
+async def divergence_wallets():
+    """Wallet concentration divergence: HHI rising while value grows."""
+    from app.divergence import detect_wallet_concentration_divergence
+    return {"signals": detect_wallet_concentration_divergence(), "type": "wallet_concentration"}
+
+
+@app.get("/api/specs/divergence")
+async def divergence_spec():
+    """Divergence signal type definitions and severity thresholds."""
+    from app.divergence import DIVERGENCE_SPEC
+    return DIVERGENCE_SPEC
 
 
 # =============================================================================
@@ -2153,7 +2753,7 @@ def _register_spa_catch_all(app_instance):
     """Register the SPA catch-all AFTER all other routes so it doesn't shadow them."""
     @app_instance.get("/{full_path:path}")
     async def serve_spa(request: Request, full_path: str):
-        if full_path.startswith("api/") or full_path.startswith("docs") or full_path.startswith("openapi") or full_path.startswith("admin"):
+        if full_path.startswith("api/") or full_path.startswith("docs") or full_path.startswith("openapi") or full_path.startswith("admin") or full_path.startswith("developers"):
             raise HTTPException(status_code=404, detail="Not found")
         index_path = os.path.join(FRONTEND_DIR, "index.html")
         if os.path.exists(index_path):

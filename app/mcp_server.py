@@ -95,3 +95,19 @@ async def get_methodology() -> str:
     """Returns the current SII formula, category weights, grade scale, and version information."""
     data = await _api_get("/api/methodology")
     return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+async def get_divergence_signals() -> str:
+    """Check for divergence signals before executing transactions.
+
+    Detects capital-flow / quality mismatches:
+    - Asset quality: stablecoin score declining while capital flows in
+    - Wallet concentration: HHI rising while wallet value grows
+    - Quality-flow: score declining with net inflows from wallet graph
+
+    Call this BEFORE executing any stablecoin swap, deposit, or rebalance
+    to check if capital is flowing toward deteriorating assets.
+    """
+    data = await _api_get("/api/divergence")
+    return json.dumps(data, indent=2)

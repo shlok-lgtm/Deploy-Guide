@@ -44,8 +44,16 @@ def store_assessment(assessment: dict) -> str | None:
     inputs_hash = None
     inputs_summary = None
     try:
+        # Collect stablecoin scores for inputs hash
+        component_scores_for_hash = {}
+        for h in holdings_snapshot:
+            sym = h.get("symbol", "")
+            sii = h.get("sii_score")
+            if sym and sii is not None:
+                component_scores_for_hash[sym] = float(sii)
+
         inputs_hash, inputs_summary = compute_inputs_hash(
-            component_scores={},
+            component_scores=component_scores_for_hash,
             wallet_holdings=holdings_snapshot,
             formula_version=formula_ver,
         )
@@ -101,4 +109,37 @@ def store_assessment(assessment: dict) -> str | None:
             f"trigger={assessment['trigger_type']} | "
             f"severity={assessment.get('severity')}"
         )
+
+        # Store full input vector for computation attestation
+        try:
+            stablecoin_scores = {}
+            for h in holdings_snapshot:
+                symbol = h.get("symbol", "")
+                if symbol:
+                    score_row = fetch_one(
+                        "SELECT overall_score, grade FROM scores s JOIN stablecoins st ON st.id = s.stablecoin_id WHERE UPPER(st.symbol) = UPPER(%s)",
+                        (symbol,)
+                    )
+                    if score_row:
+                        stablecoin_scores[symbol] = {
+                            "score": float(score_row["overall_score"]) if score_row.get("overall_score") else None,
+                            "grade": score_row.get("grade")
+                        }
+
+            execute("""
+                INSERT INTO assessment_input_vectors
+                    (assessment_id, wallet_address, holdings, stablecoin_scores, formula_version, inputs_hash)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (assessment_id) DO NOTHING
+            """, (
+                event_id,
+                assessment["wallet_address"],
+                json.dumps(holdings_snapshot, default=str),
+                json.dumps(stablecoin_scores, default=str),
+                formula_ver,
+                inputs_hash,
+            ))
+        except Exception as e:
+            logger.debug(f"Could not store input vector: {e}")
+
     return event_id
