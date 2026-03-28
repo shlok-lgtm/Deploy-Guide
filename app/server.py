@@ -2798,5 +2798,5 @@ def _register_spa_catch_all(app_instance):
             raise HTTPException(status_code=404, detail="Not found")
         index_path = os.path.join(FRONTEND_DIR, "index.html")
         if os.path.exists(index_path):
-            return FileResponse(index_path)
+            return FileResponse(index_path, headers={"Cache-Control": "no-cache"})
         return {"name": "Basis Protocol API", "version": FORMULA_VERSION, "docs": "/docs"}

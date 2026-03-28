@@ -87,6 +87,7 @@ function useScores() {
     const load = async () => {
       try {
         const r = await apiFetch(`${API}/api/scores`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const d = await r.json();
         if (mounted) {
           setData(d.stablecoins || []);
@@ -113,7 +114,7 @@ function useCoinDetail(coinId) {
     if (!coinId) return;
     setLoading(true);
     apiFetch(`${API}/api/scores/${coinId}`)
-      .then((r) => r.json())
+      .then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then((d) => { setData(d); setLoading(false); })
       .catch(() => setLoading(false));
   }, [coinId]);
@@ -129,7 +130,7 @@ function useCoinHistory(coinId, days = 90) {
     if (!coinId) return;
     setLoading(true);
     apiFetch(`${API}/api/scores/${coinId}/history?days=${days}`)
-      .then((r) => r.json())
+      .then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then((d) => { setData(d.history || []); setLoading(false); })
       .catch(() => setLoading(false));
   }, [coinId, days]);
@@ -142,7 +143,7 @@ function useWalletTop(limit = 50) {
   const [loading, setLoading] = useState(true);
   useEffect(() => {
     apiFetch(`${API}/api/wallets/top?limit=${limit}`)
-      .then((r) => r.json())
+      .then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then((d) => { setData(d.wallets || []); setLoading(false); })
       .catch(() => setLoading(false));
   }, [limit]);
@@ -154,7 +155,7 @@ function useWalletRiskiest(limit = 50) {
   const [loading, setLoading] = useState(true);
   useEffect(() => {
     apiFetch(`${API}/api/wallets/riskiest?limit=${limit}`)
-      .then((r) => r.json())
+      .then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then((d) => { setData(d.wallets || []); setLoading(false); })
       .catch(() => setLoading(false));
   }, [limit]);
@@ -166,7 +167,7 @@ function useBacklog(limit = 50) {
   const [loading, setLoading] = useState(true);
   useEffect(() => {
     apiFetch(`${API}/api/backlog?limit=${limit}`)
-      .then((r) => r.json())
+      .then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then((d) => { setData(d.backlog || []); setLoading(false); })
       .catch(() => setLoading(false));
   }, [limit]);
@@ -202,7 +203,7 @@ function useAllHistory(coinIds) {
     if (!coinIds || coinIds.length === 0) return;
     coinIds.forEach((id) => {
       apiFetch(`${API}/api/scores/${id}/history?days=21`)
-        .then((r) => r.json())
+        .then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); })
         .then((d) => {
           setHistMap((prev) => ({ ...prev, [id]: d.history || [] }));
         })
@@ -218,7 +219,7 @@ function usePsiScores() {
   const [loading, setLoading] = useState(true);
   useEffect(() => {
     apiFetch(`${API}/api/psi/scores`)
-      .then(r => r.json())
+      .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then(d => { setData(d.protocols || d); setLoading(false); })
       .catch(() => setLoading(false));
   }, []);
@@ -230,7 +231,7 @@ function useCqiMatrix() {
   const [loading, setLoading] = useState(true);
   useEffect(() => {
     apiFetch(`${API}/api/compose/cqi/matrix`)
-      .then(r => r.json())
+      .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then(d => { setData(d); setLoading(false); })
       .catch(() => setLoading(false));
   }, []);
@@ -242,7 +243,7 @@ function usePulse() {
   const [loading, setLoading] = useState(true);
   useEffect(() => {
     apiFetch(`${API}/api/pulse/latest`)
-      .then(r => r.json())
+      .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then(d => { setData(d); setLoading(false); })
       .catch(() => setLoading(false));
   }, []);
@@ -254,7 +255,7 @@ function useWitnessIssuers() {
   const [loading, setLoading] = useState(true);
   useEffect(() => {
     apiFetch(`${API}/api/cda/issuers`)
-      .then(r => r.json())
+      .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then(d => { setData(d); setLoading(false); })
       .catch(() => setLoading(false));
   }, []);
@@ -266,7 +267,7 @@ function useWitnessCoverage() {
   const [loading, setLoading] = useState(true);
   useEffect(() => {
     apiFetch(`${API}/api/cda/coverage`)
-      .then(r => r.json())
+      .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then(d => { setData(d); setLoading(false); })
       .catch(() => setLoading(false));
   }, []);
@@ -280,7 +281,7 @@ function useIssuerHistory(symbol) {
     if (!symbol) return;
     setLoading(true);
     apiFetch(`${API}/api/cda/issuers/${symbol}/history?days=365`)
-      .then(r => r.json())
+      .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then(d => { setData(d); setLoading(false); })
       .catch(() => setLoading(false));
   }, [symbol]);
@@ -294,7 +295,7 @@ function useIssuerLatest(symbol) {
     if (!symbol) return;
     setLoading(true);
     apiFetch(`${API}/api/cda/issuers/${symbol}/latest`)
-      .then(r => r.json())
+      .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then(d => { setData(d); setLoading(false); })
       .catch(() => setLoading(false));
   }, [symbol]);
@@ -2023,7 +2024,7 @@ function WitnessView({ mobile, onSelectIssuer }) {
     issuers.forEach(iss => {
       if (!latestHashes[iss.asset_symbol]) {
         apiFetch(`${API}/api/cda/issuers/${iss.asset_symbol}/latest`)
-          .then(r => r.json())
+          .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
           .then(d => {
             setLatestHashes(prev => ({ ...prev, [iss.asset_symbol]: d.evidence_hash || null }));
           })

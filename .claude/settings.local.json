@@ -34,7 +34,10 @@
       "Bash(npm run:*)",
       "Bash(find /home/runner/workspace -type f \\\\\\(-name *migration* -o -name *schema* \\\\\\))",
       "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(''''count:'''', d.get\\(''''count''''\\), ''''first:'''', d.get\\(''''protocols'''',[]\\)[0].get\\(''''protocol_slug''''\\) if d.get\\(''''protocols''''\\) else ''''NONE''''\\)\")",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(KEY=\"BF6KF2i34EslzTnvBXAjcLlDZBlQKLSTP9LdrAzxUHI\" curl -s \"http://localhost:5000/api/cda/issuers?apikey=$KEY\")",
+      "Bash(KEY=\"BF6KF2i34EslzTnvBXAjcLlDZBlQKLSTP9LdrAzxUHI\" curl -s \"http://localhost:5000/api/cda/coverage?apikey=$KEY\")",
+      "Bash(KEY=\"BF6KF2i34EslzTnvBXAjcLlDZBlQKLSTP9LdrAzxUHI\" curl -s \"http://localhost:5000/api/cda/issuers/USDC/latest?apikey=$KEY\")"
     ]
   }
 }
