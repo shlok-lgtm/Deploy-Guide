@@ -37,7 +37,8 @@
       "Bash(ls:*)",
       "Bash(KEY=\"BF6KF2i34EslzTnvBXAjcLlDZBlQKLSTP9LdrAzxUHI\" curl -s \"http://localhost:5000/api/cda/issuers?apikey=$KEY\")",
       "Bash(KEY=\"BF6KF2i34EslzTnvBXAjcLlDZBlQKLSTP9LdrAzxUHI\" curl -s \"http://localhost:5000/api/cda/coverage?apikey=$KEY\")",
-      "Bash(KEY=\"BF6KF2i34EslzTnvBXAjcLlDZBlQKLSTP9LdrAzxUHI\" curl -s \"http://localhost:5000/api/cda/issuers/USDC/latest?apikey=$KEY\")"
+      "Bash(KEY=\"BF6KF2i34EslzTnvBXAjcLlDZBlQKLSTP9LdrAzxUHI\" curl -s \"http://localhost:5000/api/cda/issuers/USDC/latest?apikey=$KEY\")",
+      "Bash(echo:*)"
     ]
   }
 }
