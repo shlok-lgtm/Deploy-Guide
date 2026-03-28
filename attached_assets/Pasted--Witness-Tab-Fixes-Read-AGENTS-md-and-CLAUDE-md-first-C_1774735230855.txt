@@ -1,0 +1,95 @@
+# Witness Tab Fixes
+
+Read AGENTS.md and CLAUDE.md first.
+
+CRITICAL CONSTRAINTS:
+
+1. Do NOT modify the CDA collection pipeline (cda_collector.py, cda_scores.py, parallel_client.py, reducto_client.py, firecrawl_client.py).
+1. Do NOT refactor, rename, or reorganize any existing files.
+1. These are two small, surgical fixes. Do not over-engineer.
+
+-----
+
+## Fix 1: “attestations archived” count is wrong
+
+### Problem
+
+The Witness tab stats bar says “7 attestations archived.” This is wrong — it’s showing the number of **issuers with coverage**, not the total number of attestation records in the database. The actual archive should have dozens or hundreds of rows from the daily CDA pipeline.
+
+### Root cause
+
+`frontend/src/App.jsx` line ~2063:
+
+```javascript
+const totalAttestations = coverageData?.fiat_backed?.covered || issuers.length;
+```
+
+`coverageData.fiat_backed.covered` comes from `/api/cda/coverage` and counts distinct issuers, not attestation rows.
+
+### Backend fix — `app/server.py`
+
+In the `cda_coverage()` handler (the `@app.get("/api/cda/coverage")` function around line 2181), add a count query and include it in the response:
+
+1. Add this query near the top of the function, after the existing `issuers` query:
+
+```python
+attestation_count = fetch_one("SELECT COUNT(*) as cnt FROM cda_vendor_extractions")
+```
+
+1. Add this field to the returned dict (alongside the existing `fiat_backed`, `crypto_backed`, etc.):
+
+```python
+"total_attestations": attestation_count["cnt"] if attestation_count else 0,
+```
+
+### Frontend fix — `frontend/src/App.jsx`
+
+In the `WitnessView` component, find this line (around line 2063):
+
+```javascript
+const totalAttestations = coverageData?.fiat_backed?.covered || issuers.length;
+```
+
+Replace with:
+
+```javascript
+const totalAttestations = coverageData?.total_attestations || issuers.length;
+```
+
+No other changes needed. The stats bar template already uses `{totalAttestations}` correctly.
+
+-----
+
+## Fix 2: Show “on-chain” badge instead of “nav_oracle”
+
+### Problem
+
+Issuers with `collection_method: "nav_oracle"` (DAI, FRAX, USDD) show a badge that says `nav_oracle`. This is internal plumbing language. These issuers don’t need traditional disclosure because their reserve data is verifiable on-chain. The badge should say `on-chain` instead.
+
+### Frontend fix — `frontend/src/App.jsx`
+
+In the `WitnessView` component, find the badge rendering (around line 2134):
+
+```javascript
+{iss.collection_method || "—"}
+```
+
+Replace with:
+
+```javascript
+{iss.collection_method === "nav_oracle" ? "on-chain" : (iss.collection_method || "—")}
+```
+
+That’s it. Same styling, same badge, just a better label.
+
+-----
+
+## Verification
+
+After both fixes:
+
+1. The stats bar should say something like “X attestations archived” where X is the actual row count from `cda_vendor_extractions` (should be well above 7)
+1. DAI, FRAX, and USDD rows should show an `on-chain` badge instead of `nav_oracle`
+1. Everything else unchanged — hashes, relative timestamps, drill-down all stay the same
+
+git add, commit “fix: witness tab attestation count + on-chain badge”, push.
