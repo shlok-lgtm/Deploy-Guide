@@ -160,9 +160,42 @@ async def rate_limit_and_track(request: Request, call_next):
 # Lifecycle
 # =============================================================================
 
+def _seed_cda_issuer_registry():
+    """Ensure cda_issuer_registry has entries for all known stablecoins."""
+    from app.database import execute
+    ON_CHAIN_AUDITORS = {"N/A (on-chain)", "N/A (algorithmic)", "N/A"}
+    seeded = 0
+    for sid, cfg in STABLECOIN_REGISTRY.items():
+        auditor = cfg.get("attestation", {}).get("auditor", "")
+        category = "crypto-backed" if auditor in ON_CHAIN_AUDITORS else "fiat-backed"
+        method = "nav_oracle" if category == "crypto-backed" else "web_extract"
+        url = cfg.get("attestation", {}).get("transparency_url")
+        try:
+            execute(
+                """
+                INSERT INTO cda_issuer_registry
+                    (asset_symbol, issuer_name, coingecko_id, transparency_url,
+                     collection_method, asset_category)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (asset_symbol) DO NOTHING
+                """,
+                (cfg["symbol"], cfg.get("issuer", "Unknown"), cfg.get("coingecko_id"),
+                 url, method, category),
+            )
+            seeded += 1
+        except Exception as e:
+            logger.warning(f"CDA seed failed for {cfg['symbol']}: {e}")
+    logger.info(f"CDA issuer registry seeded ({seeded} upserts attempted)")
+
+
 @app.on_event("startup")
 async def startup():
     init_pool()
+    # Seed CDA issuer registry from config
+    try:
+        _seed_cda_issuer_registry()
+    except Exception as e:
+        logger.warning(f"CDA registry seed skipped: {e}")
     # Register governance intelligence routes
     try:
         from app.governance import register_gov_routes, apply_gov_migration
@@ -1952,6 +1985,17 @@ async def trigger_cda_collection(key: str = Query(default=None)):
     from app.services.cda_collector import run_collection
     _asyncio.create_task(run_collection())
     return {"status": "collection_started"}
+
+
+@app.post("/api/admin/seed-cda-registry")
+async def seed_cda_registry(key: str = Query(default=None)):
+    """Seed CDA issuer registry from STABLECOIN_REGISTRY config. Requires admin key."""
+    admin_key = os.environ.get("ADMIN_KEY", "")
+    if not admin_key or key != admin_key:
+        raise HTTPException(status_code=401, detail="Unauthorized — provide ?key=YOUR_ADMIN_KEY")
+    _seed_cda_issuer_registry()
+    count = fetch_one("SELECT COUNT(*) AS cnt FROM cda_issuer_registry WHERE is_active = TRUE")
+    return {"status": "seeded", "active_issuers": count["cnt"] if count else 0}
 
 
 @app.get("/api/cda/monitors")
