@@ -1,0 +1,178 @@
+# Mobile Responsiveness Pass
+
+Read AGENTS.md and CLAUDE.md first.
+
+CRITICAL CONSTRAINTS:
+
+1. Do NOT change any data fetching, API calls, or business logic.
+1. Do NOT change colors, typography, or the design language.
+1. These are layout/spacing fixes only. Keep all existing desktop styling intact — only adjust mobile breakpoints.
+1. The `mobile` prop is already threaded through every view component. The breakpoint is `window.innerWidth < 700` (line ~70 of `frontend/src/App.jsx`). Use the existing `mobile` prop everywhere.
+
+-----
+
+## Fix 1: Tab navigation overflow on mobile
+
+### Problem
+
+The nav bar has 6 tabs (“Rankings”, “Protocols”, “Wallets”, “Pulse”, “Witness”, “Methodology”) in a flex row with `gap: 16`. On small screens this overflows — “Methodology” either wraps awkwardly or gets cut off.
+
+### Fix
+
+In the nav `<div>` around line 2429, make the nav scrollable on mobile:
+
+Find:
+
+```javascript
+<nav style={{ display: "flex", gap: 16 }}>
+```
+
+Replace with:
+
+```javascript
+<nav style={{ display: "flex", gap: mobile ? 12 : 16, overflowX: mobile ? "auto" : "visible", WebkitOverflowScrolling: "touch" }}>
+```
+
+Also reduce mobile tab font size. Find the tab button style (around line 2443):
+
+```javascript
+fontSize: 12,
+```
+
+Replace with:
+
+```javascript
+fontSize: mobile ? 11 : 12,
+```
+
+And add `whiteSpace: "nowrap"` to the button style so tab labels don’t wrap mid-word:
+
+```javascript
+whiteSpace: "nowrap",
+```
+
+-----
+
+## Fix 2: Footer wraps badly on mobile
+
+### Problem
+
+The `Footer` component (line ~2365) is a flex row with two `<span>` elements. On mobile the right span (“API & Pricing · Risk surfaces for on-chain finance · basisprotocol.xyz”) overflows or crunches.
+
+### Fix
+
+The Footer doesn’t receive the `mobile` prop. Thread it through:
+
+1. Where Footer is rendered (around line 2475):
+
+```javascript
+<Footer />
+```
+
+Change to:
+
+```javascript
+<Footer mobile={mobile} />
+```
+
+1. Update the Footer component signature and styles:
+
+```javascript
+function Footer({ mobile }) {
+  return (
+    <footer style={{
+      padding: mobile ? "12px 12px" : "16px 24px",
+      borderTop: `1px solid ${T.ruleMid}`,
+      display: "flex",
+      flexDirection: mobile ? "column" : "row",
+      justifyContent: "space-between",
+      alignItems: mobile ? "flex-start" : "center",
+      gap: mobile ? 4 : 0,
+      fontSize: 10, color: T.inkFaint, fontFamily: T.mono,
+    }}>
+      <span>Basis Protocol · Stablecoin Integrity Index</span>
+      <span><a href="/developers" style={{ color: 'inherit', textDecoration: 'none', borderBottom: `1px solid ${T.ruleMid}` }}>API &amp; Pricing</a> · Risk surfaces for on-chain finance · basisprotocol.xyz</span>
+    </footer>
+  );
+}
+```
+
+-----
+
+## Fix 3: Witness overview hash column on mobile
+
+### Problem
+
+The Witness overview table uses a 5-column grid on desktop (`2fr 1.2fr 1fr 1.8fr 28px`). On mobile it switches to flex-column, which works, but the hash + copy button row has no label prefix like the other fields do.
+
+### Fix
+
+In the WitnessView issuer row (around line 2137), inside the hash display div, add a mobile label the same way the “LAST:” label works for timestamps. Find:
+
+```javascript
+<div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+  <span style={{ fontFamily: T.mono, fontSize: 11, color: T.inkMid }}>
+    {truncHash(latestHashes[iss.asset_symbol])}
+  </span>
+```
+
+Replace with:
+
+```javascript
+<div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+  {mobile && <span style={{ fontSize: 10, color: T.inkLight, fontFamily: T.mono, marginRight: 2 }}>HASH:</span>}
+  <span style={{ fontFamily: T.mono, fontSize: 11, color: T.inkMid }}>
+    {truncHash(latestHashes[iss.asset_symbol])}
+  </span>
+```
+
+-----
+
+## Fix 4: Witness detail structured data overflow
+
+### Problem
+
+In `WitnessDetailView`, the `renderStructuredData` function renders key-value pairs in a flex row with `justifyContent: "space-between"`. On mobile with long keys or large numbers, this can overflow or scrunch.
+
+### Fix
+
+In the `renderStructuredData` function (around line 2198), change the row style to stack on mobile. The function doesn’t have access to `mobile` directly because it’s a nested function.
+
+Simplest fix — change the flex row to wrap:
+
+```javascript
+display: "flex", justifyContent: "space-between", padding: "6px 0",
+```
+
+Add `flexWrap: "wrap"` and `gap: "2px 8px"`:
+
+```javascript
+display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: "2px 8px", padding: "6px 0",
+```
+
+-----
+
+## Fix 5: Pulse “big numbers” grid on mobile
+
+### Problem
+
+The Pulse view network state grid (around line 1800) uses `gridTemplateColumns: mobile ? "1fr 1fr" : "1fr 1fr 1fr 1fr 1fr"`. This is fine for 4 items, but the 5th item (“Events 24h”) sits alone on a 3rd row taking only half width. Minor but looks incomplete.
+
+### Fix
+
+This is already handling mobile reasonably — leave the grid as-is but make sure the last item spans full width when there’s an odd count. After the `.map()` call for the 5 items, no code change needed here actually — the visual is acceptable. **Skip this fix if the current rendering looks fine on a real phone.** Only fix if the 5th item visually breaks the layout.
+
+-----
+
+## Verification
+
+Test at 375px viewport width (iPhone SE) and 390px (iPhone 14). Check:
+
+1. All 6 tabs visible and scrollable without wrapping
+1. Footer stacks vertically, no horizontal overflow
+1. Witness overview rows show “HASH:” label on mobile
+1. Witness detail structured data wraps gracefully
+1. No horizontal scrollbar on any tab at 375px
+1. All existing desktop layouts unchanged
+
+git add, commit “fix: mobile responsiveness pass across all tabs”, push.

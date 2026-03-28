@@ -2135,6 +2135,7 @@ function WitnessView({ mobile, onSelectIssuer }) {
               </span>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              {mobile && <span style={{ fontSize: 10, color: T.inkLight, fontFamily: T.mono, marginRight: 2 }}>HASH:</span>}
               <span style={{ fontFamily: T.mono, fontSize: 11, color: T.inkMid }}>
                 {truncHash(latestHashes[iss.asset_symbol])}
               </span>
@@ -2195,7 +2196,7 @@ function WitnessDetailView({ symbol, onBack, mobile }) {
     const obj = typeof sd === "string" ? JSON.parse(sd) : sd;
     return Object.entries(obj).map(([key, val]) => (
       <div key={key} style={{
-        display: "flex", justifyContent: "space-between", padding: "6px 0",
+        display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: "2px 8px", padding: "6px 0",
         borderBottom: `1px dotted ${T.ruleLight}`, fontSize: 12,
       }}>
         <span style={{ fontFamily: T.sans, color: T.inkLight, textTransform: "capitalize" }}>
@@ -2362,12 +2363,16 @@ function WitnessDetailView({ symbol, onBack, mobile }) {
   );
 }
 
-function Footer() {
+function Footer({ mobile }) {
   return (
     <footer style={{
-      padding: "16px 24px",
+      padding: mobile ? "12px 12px" : "16px 24px",
       borderTop: `1px solid ${T.ruleMid}`,
-      display: "flex", justifyContent: "space-between", alignItems: "center",
+      display: "flex",
+      flexDirection: mobile ? "column" : "row",
+      justifyContent: "space-between",
+      alignItems: mobile ? "flex-start" : "center",
+      gap: mobile ? 4 : 0,
       fontSize: 10, color: T.inkFaint, fontFamily: T.mono,
     }}>
       <span>Basis Protocol · Stablecoin Integrity Index</span>
@@ -2426,7 +2431,7 @@ export default function App() {
           background: T.paper,
         }}>
           <div style={{ padding: mobile ? "10px 12px" : "12px 24px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <nav style={{ display: "flex", gap: 16 }}>
+            <nav style={{ display: "flex", gap: mobile ? 12 : 16, overflowX: mobile ? "auto" : "visible", WebkitOverflowScrolling: "touch" }}>
               {[
                 { id: "rankings", label: "Rankings" },
                 { id: "protocols", label: "Protocols" },
@@ -2440,8 +2445,8 @@ export default function App() {
                   onClick={() => handleSetView(tab.id)}
                   style={{
                     padding: "4px 0", border: "none", cursor: "pointer",
-                    fontSize: 12, fontWeight: view === tab.id ? 600 : 400,
-                    fontFamily: T.sans,
+                    fontSize: mobile ? 11 : 12, fontWeight: view === tab.id ? 600 : 400,
+                    fontFamily: T.sans, whiteSpace: "nowrap",
                     color: view === tab.id ? T.ink : T.inkLight,
                     background: "transparent",
                     borderBottom: view === tab.id ? `2px solid ${T.ink}` : "2px solid transparent",
@@ -2472,7 +2477,7 @@ export default function App() {
             </main>
           </div>
 
-          <Footer />
+          <Footer mobile={mobile} />
         </div>
 
         <div style={{ height: mobile ? 16 : 32 }} />
