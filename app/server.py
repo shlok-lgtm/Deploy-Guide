@@ -2123,6 +2123,29 @@ async def admin_list_keys(request: Request):
 
 
 # =============================================================================
+# Admin: API Budget Allocator
+# =============================================================================
+
+@app.get("/api/admin/budget")
+async def admin_budget_status(request: Request):
+    """Returns today's API budget allocation and usage."""
+    _check_admin_key(request)
+    from app.budget.manager import ApiBudgetManager
+    budget = ApiBudgetManager()
+    return budget.get_status()
+
+
+@app.post("/api/admin/run-daily-cycle")
+async def trigger_daily_cycle(request: Request):
+    """Trigger the full daily scoring + indexing cycle in background."""
+    _check_admin_key(request)
+    import asyncio
+    from app.budget.daily_cycle import run_daily_cycle
+    asyncio.create_task(run_daily_cycle())
+    return {"status": "started", "message": "Daily cycle triggered in background"}
+
+
+# =============================================================================
 # SPA Catch-All — registered at end of startup so dynamic routes take priority
 # =============================================================================
 
