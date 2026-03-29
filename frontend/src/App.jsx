@@ -600,7 +600,7 @@ function PageHeader({ ts, mobile, coinCount }) {
     <TabHeader
       title={<><span style={{ fontWeight: 700 }}>Stablecoin</span> Integrity <span style={{ fontWeight: 700 }}>Index</span></>}
       formId="FORM SII-001 · BASIS PROTOCOL"
-      stats={[`${coinCount || 14} STABLECOINS`, "28 SCORING COMPONENTS", "5 LIVE DATA SOURCES", "DETERMINISTIC METHODOLOGY", "UPDATED HOURLY"]}
+      stats={[`${coinCount || 14} STABLECOINS`, "37 SCORING COMPONENTS", "5 LIVE DATA SOURCES", "DETERMINISTIC METHODOLOGY", "UPDATED HOURLY"]}
       formulaLine="SII = 0.30×Peg + 0.25×Liq + 0.20×Struct + 0.15×Flow + 0.10×Dist"
       versionLabel={`Methodology v1.0 · ${timestamp}`}
       accent="#fc988f"

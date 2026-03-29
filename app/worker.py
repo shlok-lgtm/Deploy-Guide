@@ -43,6 +43,8 @@ from app.collectors.offline import (
 )
 from app.collectors.etherscan import collect_holder_distribution
 from app.collectors.flows import collect_flows_components
+from app.collectors.smart_contract import collect_smart_contract_components
+from app.collectors.derived import collect_derived_components
 
 logging.basicConfig(
     level=logging.INFO,
@@ -152,6 +154,7 @@ async def collect_all_components(
         safe_collect("curve", collect_curve_components(client, stablecoin_id)),
         safe_collect("etherscan", collect_holder_distribution(client, stablecoin_id)),
         safe_collect("flows", collect_flows_components(client, stablecoin_id)),
+        safe_collect("smart_contract", collect_smart_contract_components(client, stablecoin_id)),
     )
     
     for result in results:
@@ -165,6 +168,7 @@ async def collect_all_components(
         collect_governance_components,
         collect_reserve_components,
         collect_network_components,
+        collect_derived_components,
     ]:
         try:
             offline = collector(stablecoin_id)

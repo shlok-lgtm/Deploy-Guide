@@ -195,6 +195,7 @@ LEGACY_TO_V1_MAPPING = {
     "market_activity": "mint_burn_dynamics",
     "flows": "mint_burn_dynamics",
     "holder_distribution": "holder_distribution",
+    "smart_contract": "structural_risk_composite",
     # These all roll into structural_risk_composite:
     "governance": "structural_risk_composite",
     "transparency": "structural_risk_composite",
@@ -262,19 +263,19 @@ COMPONENT_NORMALIZATIONS = {
         "fn": normalize_inverse_linear,
         "params": {"perfect": 0, "threshold": 5},
         "category": "peg_stability",
-        "weight": 0.25,
+        "weight": 0.22,
     },
     "peg_24h_max_deviation": {
         "fn": normalize_inverse_linear,
         "params": {"perfect": 0, "threshold": 10},
         "category": "peg_stability",
-        "weight": 0.20,
+        "weight": 0.18,
     },
     "peg_7d_stddev": {
         "fn": normalize_inverse_linear,
         "params": {"perfect": 0, "threshold": 0.02},
         "category": "peg_stability",
-        "weight": 0.20,
+        "weight": 0.18,
     },
     "peg_30d_stability": {
         "fn": normalize_direct,
@@ -286,7 +287,7 @@ COMPONENT_NORMALIZATIONS = {
         "fn": normalize_inverse_linear,
         "params": {"perfect": 0, "threshold": 5},
         "category": "peg_stability",
-        "weight": 0.15,
+        "weight": 0.12,
     },
     "max_drawdown_30d": {
         "fn": normalize_inverse_linear,
@@ -302,7 +303,7 @@ COMPONENT_NORMALIZATIONS = {
         "fn": normalize_log,
         "params": {"thresholds": {1e6: 10, 1e8: 40, 1e9: 60, 1e10: 80, 1e11: 100}},
         "category": "liquidity",
-        "weight": 0.20,
+        "weight": 0.15,
     },
     "volume_24h": {
         "fn": normalize_log,
@@ -410,7 +411,77 @@ COMPONENT_NORMALIZATIONS = {
         "fn": normalize_linear,
         "params": {"min_val": 1, "max_val": 50},
         "category": "network",
-        "weight": 1.0,
+        "weight": 0.50,
+    },
+
+    # =========================================================================
+    # Smart Contract Risk (→ structural) (6 components, weights sum to 1.0)
+    # =========================================================================
+    "contract_verified": {
+        "fn": normalize_direct,
+        "params": {},
+        "category": "smart_contract",
+        "weight": 0.15,
+    },
+    "pausability": {
+        "fn": normalize_direct,
+        "params": {},
+        "category": "smart_contract",
+        "weight": 0.10,
+    },
+    "blacklist_capability": {
+        "fn": normalize_direct,
+        "params": {},
+        "category": "smart_contract",
+        "weight": 0.10,
+    },
+    "admin_key_risk": {
+        "fn": normalize_direct,
+        "params": {},
+        "category": "smart_contract",
+        "weight": 0.30,
+    },
+    "bug_bounty_score": {
+        "fn": normalize_direct,
+        "params": {},
+        "category": "smart_contract",
+        "weight": 0.20,
+    },
+    "exploit_history": {
+        "fn": normalize_direct,
+        "params": {},
+        "category": "smart_contract",
+        "weight": 0.15,
+    },
+
+    # =========================================================================
+    # Peg Stability additions
+    # =========================================================================
+    "arbitrage_efficiency": {
+        "fn": normalize_linear,
+        "params": {"min_val": 0.2, "max_val": 0.9},
+        "category": "peg_stability",
+        "weight": 0.10,
+    },
+
+    # =========================================================================
+    # Network additions
+    # =========================================================================
+    "gas_resilience": {
+        "fn": normalize_direct,
+        "params": {},
+        "category": "network",
+        "weight": 0.50,
+    },
+
+    # =========================================================================
+    # Liquidity additions
+    # =========================================================================
+    "bid_ask_spread": {
+        "fn": normalize_inverse_linear,
+        "params": {"perfect": 0.05, "threshold": 1.0},
+        "category": "liquidity",
+        "weight": 0.05,
     },
 
     # =========================================================================

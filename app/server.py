@@ -703,7 +703,7 @@ async def get_methodology(methodology_version: Optional[str] = Query(default=Non
             for comp_id, spec in COMPONENT_NORMALIZATIONS.items()
         },
         "scoring_components": len(COMPONENT_NORMALIZATIONS),
-        "diagnostic_components": 23,
+        "diagnostic_components": 14,
         "data_sources": [
             "CoinGecko Pro", "DeFiLlama", "Etherscan", "Curve Finance",
             "Issuer attestation reports", "On-chain contract analysis",
@@ -3123,7 +3123,7 @@ def _render_rankings_html() -> str:
         "@context": "https://schema.org",
         "@type": "Dataset",
         "name": "Basis Protocol — Stablecoin Integrity Index",
-        "description": "Standardized risk scores for on-chain stablecoins. SII scores 28 components across 6 categories with 23 diagnostic signals.",
+        "description": "Standardized risk scores for on-chain stablecoins. SII scores 37 components across 7 categories.",
         "url": f"{CANONICAL_BASE_URL}/",
         "dateModified": datetime.now(timezone.utc).isoformat(),
         "creator": {"@type": "Organization", "name": "Basis Protocol", "url": CANONICAL_BASE_URL},
@@ -3177,7 +3177,7 @@ def _render_rankings_html() -> str:
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Basis Protocol — Stablecoin Integrity Index</title>
-    <meta name="description" content="Standardized risk scores for {count} on-chain stablecoins. Updated hourly. 28 scoring components, 23 diagnostic signals, 5 live data sources.">
+    <meta name="description" content="Standardized risk scores for {count} on-chain stablecoins. Updated hourly. 37 scoring components across 7 categories, 5 live data sources.">
     <meta property="og:title" content="Basis Protocol — Stablecoin Integrity Index">
     <meta property="og:description" content="Live SII scores for {count} stablecoins. Deterministic methodology. Updated hourly.">
     <meta property="og:type" content="website">
