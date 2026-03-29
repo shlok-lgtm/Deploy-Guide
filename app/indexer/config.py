@@ -103,6 +103,55 @@ else:
     # Bump to 0.07 (~14 req/sec) if on Blockscout Builder ($49/mo, 15 RPS)
 
 
+# =============================================================================
+# Multi-chain configuration — Blockscout instances + stablecoin contracts
+# =============================================================================
+# Ethereum contracts come from get_all_known_contracts() (dynamic from DB).
+# L2 contracts are hardcoded until the stablecoins table gains a chain column.
+# TODO: query L2 contracts from DB once stablecoins table supports multi-chain
+
+CHAIN_CONFIGS = {
+    "ethereum": {
+        "explorer_base": "https://eth.blockscout.com/api",
+        "chain_id": 1,
+        # stablecoin_contracts populated dynamically via get_chain_contracts()
+    },
+    "base": {
+        "explorer_base": "https://base.blockscout.com/api",
+        "chain_id": 8453,
+        "stablecoin_contracts": {
+            "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": {"symbol": "USDC", "decimals": 6, "stablecoin_id": "usdc"},
+            "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca": {"symbol": "USDbC", "decimals": 6, "stablecoin_id": "usdc"},
+            "0x50c5725949a6f0c72e6c4a641f24049a917db0cb": {"symbol": "DAI", "decimals": 18, "stablecoin_id": "dai"},
+        },
+    },
+    "arbitrum": {
+        "explorer_base": "https://arbitrum.blockscout.com/api",
+        "chain_id": 42161,
+        "stablecoin_contracts": {
+            "0xaf88d065e77c8cc2239327c5edb3a432268e5831": {"symbol": "USDC", "decimals": 6, "stablecoin_id": "usdc"},
+            "0xff970a61a04b1ca14834a43f5de4533ebddb5cc8": {"symbol": "USDC.e", "decimals": 6, "stablecoin_id": "usdc"},
+            "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9": {"symbol": "USDT", "decimals": 6, "stablecoin_id": "usdt"},
+            "0xda10009cbd5d07dd0cecc66161fc93d7c9000da1": {"symbol": "DAI", "decimals": 18, "stablecoin_id": "dai"},
+        },
+    },
+}
+
+SUPPORTED_CHAINS = list(CHAIN_CONFIGS.keys())
+
+
+def get_chain_contracts(chain: str) -> dict:
+    """
+    Get stablecoin contracts for a specific chain.
+    Ethereum: dynamic from DB. L2s: static config.
+    """
+    if chain == "ethereum":
+        scored, all_known = get_all_known_contracts()
+        return scored
+    cfg = CHAIN_CONFIGS.get(chain, {})
+    return cfg.get("stablecoin_contracts", {})
+
+
 def get_all_known_contracts() -> tuple[dict, dict]:
     """
     Build the contract registry at runtime from the database.

@@ -11,7 +11,7 @@ import logging
 
 from typing import Optional
 
-from fastapi import FastAPI, Query, HTTPException, BackgroundTasks
+from fastapi import FastAPI, Query, HTTPException, BackgroundTasks, Request
 
 from app.database import fetch_all, fetch_one
 from app.indexer.backlog import get_backlog, get_backlog_detail
@@ -251,22 +251,39 @@ def register_wallet_routes(app: FastAPI) -> None:
     # -- Wallet edge/connection routes --
 
     @app.get("/api/wallets/{address}/connections")
-    async def wallet_connections(address: str, limit: int = Query(default=20, ge=1, le=100)):
-        """Top counterparties for a wallet sorted by edge weight."""
+    async def wallet_connections(
+        address: str,
+        limit: int = Query(default=20, ge=1, le=100),
+        chain: Optional[str] = Query(default=None),
+    ):
+        """Top counterparties for a wallet sorted by edge weight. Optional ?chain= filter."""
         addr = address.lower()
-        edges = fetch_all(
-            """
-            SELECT
-                CASE WHEN from_address = %s THEN to_address ELSE from_address END AS counterparty,
-                transfer_count, total_value_usd, first_transfer_at, last_transfer_at,
-                weight, tokens_transferred
-            FROM wallet_graph.wallet_edges
-            WHERE from_address = %s OR to_address = %s
-            ORDER BY weight DESC
-            LIMIT %s
-            """,
-            (addr, addr, addr, limit),
-        )
+        if chain:
+            edges = fetch_all(
+                """
+                SELECT
+                    CASE WHEN from_address = %s THEN to_address ELSE from_address END AS counterparty,
+                    chain, transfer_count, total_value_usd, first_transfer_at, last_transfer_at,
+                    weight, tokens_transferred
+                FROM wallet_graph.wallet_edges
+                WHERE (from_address = %s OR to_address = %s) AND chain = %s
+                ORDER BY weight DESC LIMIT %s
+                """,
+                (addr, addr, addr, chain, limit),
+            )
+        else:
+            edges = fetch_all(
+                """
+                SELECT
+                    CASE WHEN from_address = %s THEN to_address ELSE from_address END AS counterparty,
+                    chain, transfer_count, total_value_usd, first_transfer_at, last_transfer_at,
+                    weight, tokens_transferred
+                FROM wallet_graph.wallet_edges
+                WHERE from_address = %s OR to_address = %s
+                ORDER BY weight DESC LIMIT %s
+                """,
+                (addr, addr, addr, limit),
+            )
 
         connections = []
         for edge in edges:
@@ -276,6 +293,7 @@ def register_wallet_routes(app: FastAPI) -> None:
             )
             connections.append({
                 "counterparty": edge["counterparty"],
+                "chain": edge.get("chain", "ethereum"),
                 "transfer_count": edge["transfer_count"],
                 "total_value_usd": edge["total_value_usd"],
                 "first_transfer": edge["first_transfer_at"].isoformat() if edge.get("first_transfer_at") else None,
@@ -301,10 +319,15 @@ def register_wallet_routes(app: FastAPI) -> None:
         }
 
     @app.get("/api/wallets/{address}/contagion")
-    async def wallet_contagion(address: str, depth: int = Query(default=2, ge=1, le=3)):
+    async def wallet_contagion(
+        address: str,
+        depth: int = Query(default=2, ge=1, le=3),
+        chain: Optional[str] = Query(default=None),
+    ):
         """
         Recursive contagion traversal: if this wallet's holdings depeg, who's exposed?
         Uses recursive CTE to follow edges up to `depth` hops (max 3).
+        Optional ?chain= filter (ethereum, base, arbitrum). Default: all chains.
         """
         if depth > 3:
             raise HTTPException(status_code=400, detail="Maximum depth is 3")
@@ -312,10 +335,16 @@ def register_wallet_routes(app: FastAPI) -> None:
         addr = address.lower()
         MAX_NODES = 500
 
-        rows = fetch_all(
-            """
+        # Build chain filter clause
+        if chain:
+            chain_clause = "AND chain = %s"
+            base_params = (addr, addr, addr, addr, addr, chain, depth, chain, MAX_NODES + 1)
+        else:
+            chain_clause = ""
+            base_params = (addr, addr, addr, addr, addr, depth, MAX_NODES + 1)
+
+        query = f"""
             WITH RECURSIVE contagion_path AS (
-                -- Base case: direct counterparties (depth 1)
                 SELECT
                     CASE WHEN from_address = %s THEN to_address ELSE from_address END AS node,
                     weight,
@@ -326,11 +355,11 @@ def register_wallet_routes(app: FastAPI) -> None:
                     ] AS path
                 FROM wallet_graph.wallet_edges
                 WHERE (from_address = %s OR to_address = %s)
+                  {chain_clause}
                   AND weight > 0.05
 
                 UNION ALL
 
-                -- Recursive case: follow outbound edges from discovered nodes
                 SELECT
                     CASE WHEN e.from_address = cp.node THEN e.to_address ELSE e.from_address END,
                     e.weight,
@@ -340,6 +369,7 @@ def register_wallet_routes(app: FastAPI) -> None:
                 FROM wallet_graph.wallet_edges e
                 JOIN contagion_path cp ON (e.from_address = cp.node OR e.to_address = cp.node)
                 WHERE cp.depth < %s
+                  {chain_clause}
                   AND NOT (CASE WHEN e.from_address = cp.node THEN e.to_address ELSE e.from_address END) = ANY(cp.path)
                   AND e.weight > 0.05
             )
@@ -352,9 +382,9 @@ def register_wallet_routes(app: FastAPI) -> None:
             FROM contagion_path
             ORDER BY node, depth ASC, weight DESC
             LIMIT %s
-            """,
-            (addr, addr, addr, addr, addr, depth, MAX_NODES + 1),
-        )
+        """
+
+        rows = fetch_all(query, base_params)
 
         truncated = len(rows) > MAX_NODES
         if truncated:
@@ -525,12 +555,23 @@ def register_wallet_routes(app: FastAPI) -> None:
             """
         )
         wallets_total = fetch_one("SELECT COUNT(*) AS cnt FROM wallet_graph.wallets")
+
+        # Per-chain breakdown
+        chain_rows = fetch_all(
+            """
+            SELECT chain, COUNT(*) AS cnt, COALESCE(SUM(total_value_usd), 0) AS value
+            FROM wallet_graph.wallet_edges GROUP BY chain ORDER BY cnt DESC
+            """
+        )
+        by_chain = {r["chain"]: {"edges": r["cnt"], "value": float(r["value"])} for r in chain_rows}
+
         return {
             "edges": {
                 "total": edge_stats["total_edges"] if edge_stats else 0,
                 "total_value_transferred": float(edge_stats["total_value"]) if edge_stats else 0,
                 "avg_weight": round(float(edge_stats["avg_weight"]), 4) if edge_stats else 0,
                 "newest_edge": edge_stats["newest_edge"].isoformat() if edge_stats and edge_stats.get("newest_edge") else None,
+                "by_chain": by_chain,
             },
             "build_progress": {
                 "wallets_built": build_stats["built"] if build_stats else 0,
@@ -541,14 +582,25 @@ def register_wallet_routes(app: FastAPI) -> None:
 
     @app.post("/api/admin/build-edges")
     async def trigger_edge_build(
+        request: Request,
         key: str = Query(default=None),
         max_wallets: int = Query(default=50, ge=1, le=500),
         priority: str = Query(default="value"),
+        chain: str = Query(default="ethereum"),
     ):
-        """Trigger edge building for wallets (admin-only)."""
+        """Trigger edge building for wallets on a specific chain (admin-only)."""
         admin_key = os.environ.get("ADMIN_KEY", "")
-        if not admin_key or key != admin_key:
+        provided = key or request.headers.get("x-admin-key", "")
+        if not admin_key or provided != admin_key:
             raise HTTPException(status_code=403, detail="Invalid admin key")
         from app.indexer.edges import run_edge_builder
-        result = await run_edge_builder(max_wallets=max_wallets, priority=priority)
+        from app.indexer.config import SUPPORTED_CHAINS
+        if chain != "all" and chain not in SUPPORTED_CHAINS:
+            raise HTTPException(status_code=400, detail=f"Unsupported chain. Use: {SUPPORTED_CHAINS} or 'all'")
+        if chain == "all":
+            results = {}
+            for c in SUPPORTED_CHAINS:
+                results[c] = await run_edge_builder(max_wallets=max_wallets, priority=priority, chain=c)
+            return {"chains": results}
+        result = await run_edge_builder(max_wallets=max_wallets, priority=priority, chain=chain)
         return result

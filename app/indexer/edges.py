@@ -22,6 +22,9 @@ from app.indexer.config import (
     BLOCK_EXPLORER_PROVIDER,
     EXPLORER_RATE_LIMIT_DELAY,
     get_all_known_contracts,
+    get_chain_contracts,
+    CHAIN_CONFIGS,
+    SUPPORTED_CHAINS,
 )
 
 logger = logging.getLogger(__name__)
@@ -42,13 +45,16 @@ async def _fetch_tokentx_page(
     api_key: str,
     page: int = 1,
     offset: int = 100,
+    explorer_base: str = None,
+    chain_id: int = 1,
 ) -> list[dict] | None:
     """Fetch one page of ERC-20 token transfer events for a wallet."""
+    base_url = explorer_base or EXPLORER_BASE
     try:
         resp = await client.get(
-            EXPLORER_BASE,
+            base_url,
             params={
-                _EXPLORER_CHAIN_KEY: 1,
+                "chain_id" if "blockscout" in base_url else "chainid": chain_id,
                 "module": "account",
                 "action": "tokentx",
                 "address": wallet_address,
@@ -87,12 +93,16 @@ async def build_edges_for_wallet(
     wallet_address: str,
     api_key: str,
     max_pages: int = 10,
+    chain: str = "ethereum",
 ) -> dict:
     """
     Fetch token transfer history for a wallet and upsert stablecoin transfer
     edges into wallet_graph.wallet_edges.
     """
-    scored_contracts, all_contracts = get_all_known_contracts()
+    chain_cfg = CHAIN_CONFIGS.get(chain, CHAIN_CONFIGS["ethereum"])
+    explorer_base = chain_cfg["explorer_base"]
+    chain_id = chain_cfg.get("chain_id", 1)
+    scored_contracts = get_chain_contracts(chain)
     wallet_lower = wallet_address.lower()
 
     # Accumulate edges: (from, to) -> {count, total_value, first_ts, last_ts, tokens}
@@ -101,7 +111,10 @@ async def build_edges_for_wallet(
     pages_fetched = 0
 
     for page in range(1, max_pages + 1):
-        transfers = await _fetch_tokentx_page(client, wallet_lower, api_key, page=page)
+        transfers = await _fetch_tokentx_page(
+            client, wallet_lower, api_key, page=page,
+            explorer_base=explorer_base, chain_id=chain_id,
+        )
         await asyncio.sleep(EXPLORER_RATE_LIMIT_DELAY)
         pages_fetched += 1
 
@@ -172,10 +185,10 @@ async def build_edges_for_wallet(
         execute(
             """
             INSERT INTO wallet_graph.wallet_edges
-                (from_address, to_address, transfer_count, total_value_usd,
+                (from_address, to_address, chain, transfer_count, total_value_usd,
                  first_transfer_at, last_transfer_at, tokens_transferred, weight)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (from_address, to_address) DO UPDATE SET
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (from_address, to_address, chain) DO UPDATE SET
                 transfer_count = wallet_graph.wallet_edges.transfer_count + EXCLUDED.transfer_count,
                 total_value_usd = wallet_graph.wallet_edges.total_value_usd + EXCLUDED.total_value_usd,
                 first_transfer_at = LEAST(wallet_graph.wallet_edges.first_transfer_at, EXCLUDED.first_transfer_at),
@@ -184,7 +197,7 @@ async def build_edges_for_wallet(
                 weight = EXCLUDED.weight,
                 updated_at = NOW()
             """,
-            (from_addr, to_addr, edge["count"], edge["total_value"],
+            (from_addr, to_addr, chain, edge["count"], edge["total_value"],
              edge["first_ts"], edge["last_ts"], tokens_json, weight),
         )
         edges_upserted += 1
@@ -193,16 +206,16 @@ async def build_edges_for_wallet(
     execute(
         """
         INSERT INTO wallet_graph.edge_build_status
-            (wallet_address, last_built_at, transfers_processed, edges_created, pages_fetched, status)
-        VALUES (%s, NOW(), %s, %s, %s, 'complete')
-        ON CONFLICT (wallet_address) DO UPDATE SET
+            (wallet_address, chain, last_built_at, transfers_processed, edges_created, pages_fetched, status)
+        VALUES (%s, %s, NOW(), %s, %s, %s, 'complete')
+        ON CONFLICT (wallet_address, chain) DO UPDATE SET
             last_built_at = NOW(),
             transfers_processed = EXCLUDED.transfers_processed,
             edges_created = EXCLUDED.edges_created,
             pages_fetched = EXCLUDED.pages_fetched,
             status = 'complete'
         """,
-        (wallet_lower, total_transfers, edges_upserted, pages_fetched),
+        (wallet_lower, chain, total_transfers, edges_upserted, pages_fetched),
     )
 
     return {
@@ -216,6 +229,7 @@ async def run_edge_builder(
     max_wallets: int = 100,
     max_pages_per_wallet: int = 10,
     priority: str = "value",
+    chain: str = "ethereum",
 ) -> dict:
     """
     Batch edge builder. Queries wallets needing edge building and processes them.
@@ -228,19 +242,20 @@ async def run_edge_builder(
         f"""
         SELECT w.address, w.total_stablecoin_value
         FROM wallet_graph.wallets w
-        LEFT JOIN wallet_graph.edge_build_status e ON w.address = e.wallet_address
+        LEFT JOIN wallet_graph.edge_build_status e
+            ON w.address = e.wallet_address AND e.chain = %s
         WHERE e.wallet_address IS NULL OR e.status = 'pending'
         ORDER BY {order_clause}
         LIMIT %s
         """,
-        (max_wallets,),
+        (chain, max_wallets),
     )
 
     if not wallets:
-        logger.info("No wallets need edge building")
-        return {"wallets_processed": 0, "total_edges_created": 0, "total_transfers": 0}
+        logger.info(f"No wallets need edge building on {chain}")
+        return {"chain": chain, "wallets_processed": 0, "total_edges_created": 0, "total_transfers": 0}
 
-    api_key = os.environ.get("ETHERSCAN_API_KEY", "")
+    api_key = os.environ.get("ETHERSCAN_API_KEY", "") if chain == "ethereum" else ""
     total_edges = 0
     total_transfers = 0
     wallets_processed = 0
@@ -251,6 +266,7 @@ async def run_edge_builder(
                 result = await build_edges_for_wallet(
                     client, w["address"], api_key,
                     max_pages=max_pages_per_wallet,
+                    chain=chain,
                 )
                 total_edges += result["edges_upserted"]
                 total_transfers += result["transfers_processed"]
@@ -265,19 +281,20 @@ async def run_edge_builder(
                 logger.error(f"Edge build failed for {w['address'][:10]}…: {e}")
                 execute(
                     """
-                    INSERT INTO wallet_graph.edge_build_status (wallet_address, status)
-                    VALUES (%s, 'pending')
-                    ON CONFLICT (wallet_address) DO UPDATE SET status = 'pending'
+                    INSERT INTO wallet_graph.edge_build_status (wallet_address, chain, status)
+                    VALUES (%s, %s, 'pending')
+                    ON CONFLICT (wallet_address, chain) DO UPDATE SET status = 'pending'
                     """,
-                    (w["address"],),
+                    (w["address"], chain),
                 )
 
     logger.info(
-        f"Edge builder complete: {wallets_processed} wallets, "
+        f"Edge builder [{chain}] complete: {wallets_processed} wallets, "
         f"{total_edges} edges, {total_transfers} transfers"
     )
 
     return {
+        "chain": chain,
         "wallets_processed": wallets_processed,
         "total_edges_created": total_edges,
         "total_transfers": total_transfers,
