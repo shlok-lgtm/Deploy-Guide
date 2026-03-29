@@ -39,7 +39,10 @@
       "Bash(KEY=\"BF6KF2i34EslzTnvBXAjcLlDZBlQKLSTP9LdrAzxUHI\" curl -s \"http://localhost:5000/api/cda/coverage?apikey=$KEY\")",
       "Bash(KEY=\"BF6KF2i34EslzTnvBXAjcLlDZBlQKLSTP9LdrAzxUHI\" curl -s \"http://localhost:5000/api/cda/issuers/USDC/latest?apikey=$KEY\")",
       "Bash(echo:*)",
-      "Bash(kill 10458)"
+      "Bash(kill 10458)",
+      "Bash(head -c 200 /home/runner/workspace/frontend/dist/assets/*.js)",
+      "Bash(git -C /home/runner/workspace log --oneline -5 -- frontend/dist/assets/index-BptLoetl.js)",
+      "Bash(git ls-tree:*)"
     ]
   }
 }
