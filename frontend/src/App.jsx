@@ -19,14 +19,14 @@ const T = {
 };
 
 const TAB_ACCENT = {
-  rankings: "#fc988f",
-  protocols: "#7BA3A8",
-  wallets: "#8B7B9E",
-  pulse: "#C4A882",
-  witness: "#fc988f",
-  methodology: "#7BA3A8",
-  detail: "#fc988f",
-  "witness-detail": "#fc988f",
+  rankings:       "#fc988f",  // coral
+  protocols:      "#7BA3A8",  // slate teal
+  wallets:        "#8B7B9E",  // muted plum
+  pulse:          "#C4A882",  // warm sand
+  witness:        "#A8C4A0",  // sage green
+  methodology:    "#B8937A",  // warm clay
+  detail:         "#fc988f",
+  "witness-detail": "#A8C4A0",
 };
 
 function BasisLogo({ accent = "#fc988f", size = 28 }) {
@@ -524,7 +524,7 @@ function CategoryBar({ label, score, weight, useBlue }) {
   );
 }
 
-function PageHeader({ ts, mobile }) {
+function PageHeader({ ts, mobile, coinCount }) {
   const [now, setNow] = useState(new Date());
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 60000);
@@ -539,7 +539,7 @@ function PageHeader({ ts, mobile }) {
     hour: "2-digit", minute: "2-digit", timeZoneName: "short",
   });
 
-  const stats = ["10 STABLECOINS", "48 COMPONENTS", "6 DATA SOURCES", "DETERMINISTIC METHODOLOGY", "UPDATED HOURLY"];
+  const stats = [`${coinCount || 14} STABLECOINS`, "102 COMPONENTS", "6 DATA SOURCES", "DETERMINISTIC METHODOLOGY", "UPDATED HOURLY"];
 
   return (
     <div style={{ border: `1.5px solid ${T.ink}`, marginBottom: 0 }}>
@@ -838,7 +838,7 @@ function RankingsView({ scores, loading, onSelect, ts, mobile }) {
 
   return (
     <div>
-      <PageHeader ts={ts} mobile={mobile} />
+      <PageHeader ts={ts} mobile={mobile} coinCount={scores.length} />
 
       <div style={{ height: mobile ? 16 : 32 }} />
 
