@@ -111,3 +111,26 @@ async def get_divergence_signals() -> str:
     """
     data = await _api_get("/api/divergence")
     return json.dumps(data, indent=2)
+
+
+@mcp.tool()
+async def query_template(template_name: str, params: dict = None) -> str:
+    """Run a pre-built query template against the Basis risk database.
+
+    Available templates:
+    - high_risk_whales: Wallets with high value AND poor risk grades
+    - contagion_hotspots: Wallets with the most counterparty connections
+    - stablecoin_concentration: Per-stablecoin holder concentration
+    - score_movers: Assets whose SII score changed most over N days
+    - disclosure_gaps: Issuers with the oldest attestation documents
+    - cross_chain_exposure: Wallets active on multiple chains
+
+    Call GET /api/query/templates for full parameter documentation.
+    """
+    body = {"template": template_name}
+    if params:
+        body["params"] = params
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(f"{API_BASE}/api/query/template", json=body, timeout=15.0)
+        resp.raise_for_status()
+        return json.dumps(resp.json(), indent=2)

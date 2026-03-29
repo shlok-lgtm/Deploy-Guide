@@ -2906,6 +2906,37 @@ async def query_wallets(request: Request):
     return result
 
 
+@app.get("/api/query/templates")
+async def query_templates_list():
+    """List available query templates with descriptions and default params."""
+    from app.query_templates import list_templates
+    return {"templates": list_templates()}
+
+
+@app.post("/api/query/template")
+async def query_template_execute(request: Request):
+    """Execute a named query template with optional parameter overrides."""
+    from app.query_templates import execute_template
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    template_name = body.get("template")
+    if not template_name:
+        raise HTTPException(status_code=400, detail="Missing 'template' field")
+
+    params = body.get("params", {})
+    if not isinstance(params, dict):
+        raise HTTPException(status_code=400, detail="'params' must be a JSON object")
+
+    result = execute_template(template_name, params)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
 @app.get("/api/query/schema")
 async def query_schema():
     """Documentation of available query filters and options."""
