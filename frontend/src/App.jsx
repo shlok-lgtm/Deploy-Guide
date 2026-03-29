@@ -953,7 +953,7 @@ function Footnotes({ mobile }) {
           Disclosure
         </div>
         <p style={{ fontFamily: T.sans, fontSize: 10, color: T.inkFaint, lineHeight: 1.6, margin: 0 }}>
-          SII scores are informational and do not constitute financial advice. Methodology is deterministic and version-controlled. No issuer can pay to influence scores, weights, or thresholds. Data sourced from CoinGecko, DeFiLlama, Etherscan, Curve Finance, issuer attestations, and on-chain analysis. Scores update hourly.
+          SII scores are informational and do not constitute financial advice. Methodology is deterministic and version-controlled. No issuer can pay to influence scores, weights, or thresholds. Scores update hourly.
         </p>
       </div>
 
@@ -2338,7 +2338,20 @@ function WitnessView({ mobile, onSelectIssuer }) {
               </span>
               {iss.collection_method === "nav_oracle" && (
                 <div style={{ fontFamily: T.sans, fontSize: 11, color: T.inkLight, fontStyle: "italic", marginTop: 4 }}>
-                  Reserves verifiable on-chain — no attestation needed
+                  Reserves verifiable on-chain —{" "}
+                  {iss.transparency_url ? (
+                    <a
+                      href={iss.transparency_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      style={{ color: T.inkMid, textDecoration: "none", borderBottom: `1px solid ${T.ruleMid}` }}
+                    >
+                      verify directly ↗
+                    </a>
+                  ) : (
+                    "no attestation needed"
+                  )}
                 </div>
               )}
             </div>
