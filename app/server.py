@@ -2182,6 +2182,15 @@ async def cda_issuers():
 
 
 @app.get("/api/cda/issuers/{symbol}/latest")
+def _extract_value(val):
+    """Extract a simple value from potentially nested structures."""
+    if isinstance(val, dict):
+        return val.get("value", val.get("amount", val.get("percentage", str(val))))
+    if isinstance(val, list):
+        return str(val)
+    return val
+
+
 def _classify_attestation_quality(att: dict) -> dict:
     """Add human-readable quality classification to an attestation."""
     sd = att.get("structured_data")
@@ -2209,26 +2218,30 @@ def _classify_attestation_quality(att: dict) -> dict:
 
     display = []
     if has_reserves:
-        display.append({"label": "Total Reserves", "value": sd["total_reserves_usd"], "type": "currency"})
+        display.append({"label": "Total Reserves", "value": _extract_value(sd["total_reserves_usd"]), "type": "currency"})
     if has_supply:
-        display.append({"label": "Total Supply", "value": sd["total_supply"], "type": "number"})
+        display.append({"label": "Total Supply", "value": _extract_value(sd["total_supply"]), "type": "number"})
     if has_reserves and has_supply:
         try:
-            ratio = float(sd["total_reserves_usd"]) / float(sd["total_supply"])
+            res_val = _extract_value(sd["total_reserves_usd"])
+            sup_val = _extract_value(sd["total_supply"])
+            ratio = float(res_val) / float(sup_val)
             display.append({"label": "Reserve Ratio", "value": round(ratio, 4), "type": "ratio"})
         except (ValueError, ZeroDivisionError, TypeError):
             pass
     if has_date:
-        display.append({"label": "Report Date", "value": sd["attestation_date"], "type": "text"})
+        display.append({"label": "Report Date", "value": _extract_value(sd["attestation_date"]), "type": "text"})
     if has_auditor:
-        display.append({"label": "Auditor", "value": sd.get("auditor") or sd.get("auditor_name"), "type": "text"})
+        display.append({"label": "Auditor", "value": _extract_value(sd.get("auditor") or sd.get("auditor_name")), "type": "text"})
     if has_composition:
         comp = sd.get("reserve_composition", {})
         if isinstance(comp, dict):
             for k, v in comp.items():
                 if v is not None:
                     label = k.replace("_pct", "").replace("_", " ").title()
-                    display.append({"label": label, "value": v, "type": "percent"})
+                    extracted = _extract_value(v)
+                    if extracted is not None:
+                        display.append({"label": label, "value": extracted, "type": "percent"})
 
     if has_reserves or (has_date and has_auditor):
         att["quality"] = "full"

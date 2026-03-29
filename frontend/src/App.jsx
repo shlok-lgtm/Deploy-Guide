@@ -22,7 +22,6 @@ const TAB_ACCENT = {
   rankings:       "#fc988f",  // coral
   protocols:      "#7BA3A8",  // slate teal
   wallets:        "#8B7B9E",  // muted plum
-  pulse:          "#C4A882",  // warm sand
   witness:        "#A8C4A0",  // sage green
   methodology:    "#B8937A",  // warm clay
   detail:         "#fc988f",
@@ -386,7 +385,6 @@ const DOMAIN_DEPS = {
   rankings: ["sii"],
   protocols: ["psi"],
   wallets: ["wallets"],
-  pulse: ["pulse", "sii", "wallets", "events"],
   witness: ["cda"],
 };
 
@@ -612,6 +610,7 @@ function PageHeader({ ts, mobile, coinCount }) {
 }
 
 function RankingsView({ scores, loading, onSelect, ts, mobile }) {
+  const { data: pulse } = usePulse();
   const [hoveredRow, setHoveredRow] = useState(null);
   const [tappedRow, setTappedRow] = useState(null);
   const hoverTimeout = useRef(null);
@@ -957,6 +956,71 @@ function Footnotes({ mobile }) {
           SII scores are informational and do not constitute financial advice. Methodology is deterministic and version-controlled. No issuer can pay to influence scores, weights, or thresholds. Data sourced from CoinGecko, DeFiLlama, Etherscan, Curve Finance, issuer attestations, and on-chain analysis. Scores update hourly.
         </p>
       </div>
+
+      {/* Daily State Commitment */}
+      {pulse && pulse.summary && (() => {
+        const s = typeof pulse.summary === "string" ? JSON.parse(pulse.summary) : pulse.summary;
+        const net = s.network_state || {};
+        const pScores = s.scores || [];
+        const movers = pScores.filter(c => c.delta_24h != null && Math.abs(c.delta_24h) >= 0.5)
+          .sort((a, b) => Math.abs(b.delta_24h) - Math.abs(a.delta_24h));
+
+        return (
+          <div style={{ marginTop: 24, border: `1px solid ${T.ruleMid}` }}>
+            <div style={{ padding: mobile ? "10px 12px" : "12px 20px", borderBottom: `1px solid ${T.ruleLight}`, display: "flex", justifyContent: "space-between", alignItems: mobile ? "flex-start" : "center", flexDirection: mobile ? "column" : "row", gap: mobile ? 4 : 0 }}>
+              <div style={{ fontFamily: T.mono, fontSize: 10, fontWeight: 600, color: T.inkLight, textTransform: "uppercase", letterSpacing: 1.5 }}>
+                Daily State Commitment
+              </div>
+              <div style={{ fontFamily: T.mono, fontSize: 9, color: T.inkFaint }}>
+                {s.pulse_date || pulse.pulse_date || "—"}
+              </div>
+            </div>
+
+            <div style={{
+              display: "grid",
+              gridTemplateColumns: mobile ? "1fr 1fr" : "1fr 1fr 1fr 1fr",
+              borderBottom: `1px solid ${T.ruleLight}`,
+            }}>
+              {[
+                { label: "Tracked", value: fmtB(net.total_tracked_usd) },
+                { label: "Wallets", value: net.wallets_active != null ? net.wallets_active.toLocaleString() : "—" },
+                { label: "Avg Risk", value: net.avg_risk_score != null ? fmt(net.avg_risk_score, 1) : "—" },
+                { label: "Data Points", value: (pScores.length * 102).toLocaleString() },
+              ].map((item, i) => (
+                <div key={i} style={{
+                  padding: mobile ? "10px 12px" : "12px 20px",
+                  borderRight: (!mobile || i % 2 === 0) ? `1px solid ${T.ruleLight}` : "none",
+                  borderBottom: mobile && i < 2 ? `1px solid ${T.ruleLight}` : "none",
+                }}>
+                  <div style={{ fontFamily: T.mono, fontSize: 8, textTransform: "uppercase", letterSpacing: 1.5, color: T.inkFaint, marginBottom: 2 }}>{item.label}</div>
+                  <div style={{ fontFamily: T.mono, fontSize: mobile ? 16 : 18, fontWeight: 700, color: T.ink }}>{item.value}</div>
+                </div>
+              ))}
+            </div>
+
+            {movers.length > 0 && (
+              <div style={{ padding: mobile ? "8px 12px" : "10px 20px", borderBottom: `1px solid ${T.ruleLight}`, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <span style={{ fontFamily: T.mono, fontSize: 9, color: T.inkFaint, textTransform: "uppercase", letterSpacing: 1 }}>Movers</span>
+                {movers.slice(0, 5).map(m => (
+                  <span key={m.symbol} style={{
+                    fontFamily: T.mono, fontSize: 11, padding: "2px 8px",
+                    border: `1px solid ${T.ruleLight}`,
+                    color: m.delta_24h > 0 ? "#2d6b45" : T.accent,
+                  }}>
+                    {m.symbol} {m.delta_24h > 0 ? "+" : ""}{fmt(m.delta_24h, 2)}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {pulse.content_hash && (
+              <div style={{ padding: mobile ? "6px 12px" : "6px 20px", fontFamily: T.mono, fontSize: 9, color: T.inkFaint }}>
+                Content hash: {pulse.content_hash}
+              </div>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -2344,11 +2408,12 @@ function WitnessDetailView({ symbol, onBack, mobile }) {
       }}>
         <span style={{ fontFamily: T.sans, color: T.inkLight }}>{f.label}</span>
         <span style={{ fontFamily: T.mono, color: T.ink }}>
-          {f.type === "currency" ? `$${fmtB(f.value)}` :
-           f.type === "percent" ? `${f.value}%` :
-           f.type === "ratio" ? `${f.value}\u00d7` :
-           f.type === "number" ? fmtB(f.value) :
-           String(f.value)}
+          {(() => { const v = typeof f.value === "object" && f.value !== null ? (f.value.value ?? f.value.amount ?? "—") : f.value;
+           return f.type === "currency" ? `$${fmtB(v)}` :
+           f.type === "percent" ? `${v}%` :
+           f.type === "ratio" ? `${v}×` :
+           f.type === "number" ? fmtB(v) :
+           String(v); })()}
         </span>
       </div>
     ));
@@ -2588,7 +2653,6 @@ export default function App() {
                 { id: "rankings", label: "Stablecoins" },
                 { id: "protocols", label: "Protocols" },
                 { id: "wallets", label: "Wallets" },
-                { id: "pulse", label: "Pulse" },
                 { id: "witness", label: "Witness" },
                 { id: "methodology", label: "Methodology" },
               ].map((tab) => (
@@ -2623,7 +2687,6 @@ export default function App() {
               )}
               {view === "wallets" && <WalletsView mobile={mobile} />}
               {view === "protocols" && <ProtocolsView mobile={mobile} />}
-              {view === "pulse" && <PulseView mobile={mobile} integrity={integrity} />}
               {view === "witness" && <WitnessView mobile={mobile} onSelectIssuer={(sym) => { setWitnessSymbol(sym); setView("witness-detail"); window.scrollTo(0, 0); }} />}
               {view === "witness-detail" && witnessSymbol && <WitnessDetailView symbol={witnessSymbol} onBack={() => { setView("witness"); setWitnessSymbol(null); }} mobile={mobile} />}
               {view === "methodology" && <MethodologyView mobile={mobile} />}
