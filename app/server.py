@@ -391,14 +391,32 @@ def check_methodology_version(requested_version, current_version="v1.0.0"):
 @app.get("/api/health")
 async def get_health():
     """System health check — powered by the integrity layer."""
-    from app.integrity import check_all
-    result = check_all()
     db_status = db_health_check()
+    db_ok = db_status.get("status") == "healthy"
+
+    try:
+        from app.integrity import check_all
+        result = check_all()
+    except Exception:
+        # DB down or integrity module failed — return structured unhealthy
+        return {
+            "status": "unhealthy",
+            "database": db_status,
+            "domains": {},
+            "formula_version": FORMULA_VERSION,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+    # If DB itself is unhealthy, override to unhealthy regardless of domain checks
+    overall = result["status"] if db_ok else "unhealthy"
+
     return {
-        "status": result["status"],
+        "status": overall,
         "database": db_status,
         "domains": result["domains"],
         "checked_at": result["checked_at"],
+        "formula_version": FORMULA_VERSION,
+        "timestamp": result["checked_at"],
     }
 
 

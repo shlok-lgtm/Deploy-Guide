@@ -8,9 +8,8 @@ Answers two questions per domain: "Is the data fresh?" and "Does the data make s
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Optional
 
-from app.database import fetch_one, fetch_all
+from app.database import fetch_one
 
 logger = logging.getLogger(__name__)
 
@@ -129,8 +128,8 @@ def _cda_active_without_extractions():
         row = fetch_one("""
             SELECT COUNT(*) AS cnt FROM cda_issuer_registry
             WHERE is_active = TRUE
-              AND id NOT IN (
-                  SELECT DISTINCT issuer_id FROM cda_vendor_extractions
+              AND asset_symbol NOT IN (
+                  SELECT DISTINCT asset_symbol FROM cda_vendor_extractions
                   WHERE extracted_at > NOW() - INTERVAL '7 days'
               )
         """)
@@ -257,7 +256,7 @@ DOMAINS = {
         "coherence_rules": [_cda_active_without_extractions],
     },
     "events": {
-        "freshness_query": "SELECT COUNT(*) AS cnt, MAX(created_at) AS latest FROM assessment_events WHERE created_at > NOW() - INTERVAL '24 hours'",
+        "freshness_query": "SELECT COUNT(*) AS cnt, MAX(created_at) AS latest FROM assessment_events",
         "max_age_hours": 3,
         "coherence_rules": [_events_severity_consistency],
     },
