@@ -311,6 +311,18 @@ function useIntegrity() {
   return data;
 }
 
+function useIndices() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    apiFetch(`${API}/api/indices`)
+      .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(d => { setData(d); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, []);
+  return { data, loading };
+}
+
 const DOMAIN_DEPS = {
   rankings: ["sii"],
   protocols: ["psi"],
@@ -1094,121 +1106,131 @@ function DetailView({ coinId, onBack, mobile }) {
 }
 
 function MethodologyView({ mobile }) {
+  const { data: indicesData, loading } = useIndices();
+
+  if (loading) {
+    return (
+      <div style={{ padding: 40, display: "flex", justifyContent: "center" }}>
+        <div style={{ color: T.inkFaint, fontFamily: T.mono, fontSize: 12 }}>Loading methodology...</div>
+      </div>
+    );
+  }
+
+  const indices = indicesData?.indices || [];
+  const gradeScale = indicesData?.grade_scale || {};
+  const principles = indicesData?.principles || [];
+  const dataSources = indicesData?.data_sources || [];
+
   return (
     <div style={{ padding: mobile ? "16px 0 32px" : "24px 0 64px", maxWidth: 780 }}>
-      <h1 style={{ margin: "0 0 8px", fontSize: 22, fontWeight: 600, color: T.ink, fontFamily: T.sans, letterSpacing: -0.3 }}>
-        Methodology
-      </h1>
-      <p style={{ margin: "0 0 28px", fontSize: 12, color: T.inkLight, fontFamily: T.sans }}>
-        SII v1.0.0 — Deterministic, versioned, reproducible
-      </p>
 
+      {/* Intro */}
       <section style={{ marginBottom: 28 }}>
         <div style={{ border: `1px solid ${T.ruleMid}`, padding: "20px 24px" }}>
           <h2 style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 600, color: T.ink, fontFamily: T.sans }}>
-            What is the Stablecoin Integrity Index?
+            Basis Scoring Methodology
           </h2>
           <p style={{ margin: 0, fontSize: 13, color: T.inkMid, fontFamily: T.sans, lineHeight: 1.7 }}>
-            SII is a standardized risk surface that normalizes fragmented data about stablecoin health
-            into a single comparable score. It measures peg stability, liquidity depth, mint/burn dynamics,
-            holder distribution, and structural risk across multiple data sources. The methodology is
-            deterministic — the same inputs always produce the same outputs — and version-controlled
-            so changes are announced in advance and retroactively reproducible.
+            Basis produces {indices.length} composable risk indices. All use the same deterministic scoring engine — the same inputs always produce the same outputs. Methodologies are version-controlled, changes announced in advance, and all scores retroactively reproducible. New indices are JSON configurations against the generic engine — no code changes required.
           </p>
         </div>
       </section>
 
-      <section style={{ marginBottom: 28 }}>
-        <div style={{ border: `1px solid ${T.ruleMid}`, padding: "20px 24px" }}>
-          <div style={{ fontSize: 10, fontWeight: 600, color: T.inkLight, textTransform: "uppercase", letterSpacing: 1.5, marginBottom: 14, fontFamily: T.mono }}>
-            Formula
-          </div>
-          <div style={{ fontFamily: T.mono, fontSize: 14, color: T.ink, lineHeight: 2.2, padding: "8px 0" }}>
-            SII = <span style={{ fontWeight: 700 }}>0.30</span>×Peg + <span style={{ fontWeight: 700 }}>0.25</span>×Liquidity + <span style={{ fontWeight: 700 }}>0.15</span>×Flows + <span style={{ fontWeight: 700 }}>0.10</span>×Distribution + <span style={{ fontWeight: 700 }}>0.20</span>×Structural
-          </div>
-          <div style={{ fontFamily: T.mono, fontSize: 12, color: T.inkLight, lineHeight: 2.2, borderTop: `1px solid ${T.ruleLight}`, paddingTop: 8, marginTop: 4 }}>
-            Structural = 0.30×Reserves + 0.20×Contract + 0.15×Oracle + 0.20×Governance + 0.15×Network
-          </div>
-        </div>
-      </section>
-
-      <section style={{ marginBottom: 28 }}>
-        <div style={{ border: `1px solid ${T.ruleMid}`, padding: "20px 24px" }}>
-          <div style={{ fontSize: 10, fontWeight: 600, color: T.inkLight, textTransform: "uppercase", letterSpacing: 1.5, marginBottom: 16, fontFamily: T.mono }}>
-            Categories
-          </div>
-          {[
-            { name: "Peg Stability", weight: 30, desc: "Current deviation, 24h max, 7d volatility, price floor/ceiling, cross-exchange variance, DEX/CEX spread, arbitrage efficiency", components: 10 },
-            { name: "Liquidity Depth", weight: 25, desc: "Market cap, volume ratios, DEX pool depth, Curve 3pool balance, cross-chain liquidity, lending protocol TVL, exchange listing breadth", components: 12 },
-            { name: "Mint/Burn Flows", weight: 15, desc: "Supply changes, turnover ratio, market cap stability, volume consistency, trading pair diversity", components: 9 },
-            { name: "Holder Distribution", weight: 10, desc: "Top 10 wallet concentration, unique holder count, exchange address concentration", components: 3 },
-            { name: "Structural Risk", weight: 20, desc: "Reserve quality, smart contract audits, oracle integrity, governance model, network deployment, regulatory compliance", components: 16 },
-          ].map((cat, i) => (
-            <div key={i} style={{ display: "flex", gap: 16, padding: "14px 0", borderBottom: i < 4 ? `1px solid ${T.ruleLight}` : "none" }}>
-              <div style={{ minWidth: 44, textAlign: "right", fontFamily: T.mono, fontWeight: 700, fontSize: 18, color: T.ink }}>{cat.weight}%</div>
-              <div>
-                <div style={{ fontWeight: 600, fontSize: 13, color: T.ink, fontFamily: T.sans }}>{cat.name}</div>
-                <div style={{ fontSize: 12, color: T.inkLight, marginTop: 3, lineHeight: 1.5, fontFamily: T.sans }}>{cat.desc}</div>
-                <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 3, fontFamily: T.mono }}>{cat.components} components</div>
-              </div>
+      {/* Each index */}
+      {indices.map((idx) => (
+        <section key={idx.index_id} style={{ marginBottom: 28 }}>
+          <div style={{ border: `1px solid ${T.ruleMid}`, padding: "20px 24px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: mobile ? "flex-start" : "baseline", flexDirection: mobile ? "column" : "row", gap: mobile ? 4 : 0, marginBottom: 12 }}>
+              <h2 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: T.ink, fontFamily: T.sans }}>
+                {idx.name} ({idx.index_id.toUpperCase()})
+              </h2>
+              <span style={{ fontFamily: T.mono, fontSize: 10, color: T.inkFaint }}>{idx.version}</span>
             </div>
-          ))}
-        </div>
-      </section>
+            <p style={{ margin: "0 0 16px", fontSize: 13, color: T.inkMid, fontFamily: T.sans, lineHeight: 1.7 }}>
+              {idx.description}
+            </p>
 
+            {/* Formula */}
+            <div style={{ fontSize: 10, fontWeight: 600, color: T.inkLight, textTransform: "uppercase", letterSpacing: 1.5, marginBottom: 8, fontFamily: T.mono }}>
+              Formula
+            </div>
+            <div style={{ fontFamily: T.mono, fontSize: mobile ? 12 : 14, color: T.ink, lineHeight: 2.2, padding: "8px 0", marginBottom: 14, borderBottom: idx.categories.length > 0 ? `1px solid ${T.ruleLight}` : "none" }}>
+              {idx.formula}
+            </div>
+
+            {/* Categories (only for scored indices, not compositions) */}
+            {idx.categories.length > 0 && (
+              <>
+                <div style={{ fontSize: 10, fontWeight: 600, color: T.inkLight, textTransform: "uppercase", letterSpacing: 1.5, marginBottom: 14, fontFamily: T.mono }}>
+                  Categories
+                </div>
+                {idx.categories.map((cat, i) => (
+                  <div key={cat.id} style={{ display: "flex", gap: 16, padding: "14px 0", borderBottom: i < idx.categories.length - 1 ? `1px solid ${T.ruleLight}` : "none" }}>
+                    <div style={{ minWidth: 44, textAlign: "right", fontFamily: T.mono, fontWeight: 700, fontSize: 18, color: T.ink }}>
+                      {Math.round(cat.weight * 100)}%
+                    </div>
+                    <div>
+                      <div style={{ fontWeight: 600, fontSize: 13, color: T.ink, fontFamily: T.sans }}>{cat.name}</div>
+                      <div style={{ fontSize: 11, color: T.inkLight, marginTop: 3, lineHeight: 1.5, fontFamily: T.mono }}>
+                        {cat.components.join(" \u00b7 ")}
+                      </div>
+                      <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 3, fontFamily: T.mono }}>{cat.component_count} components</div>
+                    </div>
+                  </div>
+                ))}
+              </>
+            )}
+
+            {idx.total_components > 0 && (
+              <div style={{ marginTop: 12, fontFamily: T.mono, fontSize: 10, color: T.inkFaint }}>
+                {idx.total_components} total components \u00b7 {idx.entity_type} scoring
+              </div>
+            )}
+          </div>
+        </section>
+      ))}
+
+      {/* Grade Scale */}
       <section style={{ marginBottom: 28 }}>
         <div style={{ border: `1px solid ${T.ruleMid}`, padding: "20px 24px" }}>
           <div style={{ fontSize: 10, fontWeight: 600, color: T.inkLight, textTransform: "uppercase", letterSpacing: 1.5, marginBottom: 14, fontFamily: T.mono }}>
             Grade Scale
           </div>
           <div style={{ display: "grid", gridTemplateColumns: mobile ? "repeat(3, 1fr)" : "repeat(6, 1fr)", gap: 6 }}>
-            {[
-              { grade: "A+", range: "90–100" }, { grade: "A", range: "85–90" }, { grade: "A-", range: "80–85" },
-              { grade: "B+", range: "75–80" }, { grade: "B", range: "70–75" }, { grade: "B-", range: "65–70" },
-              { grade: "C+", range: "60–65" }, { grade: "C", range: "55–60" }, { grade: "C-", range: "50–55" },
-              { grade: "D", range: "45–50" }, { grade: "F", range: "<45" },
-            ].map((g) => (
-              <div key={g.grade} style={{ padding: "8px 6px", textAlign: "center", border: `1px solid ${T.ruleLight}` }}>
-                <div style={{ fontWeight: 700, fontSize: 14, color: gradeColor(g.grade), fontFamily: T.mono }}>{g.grade}</div>
-                <div style={{ fontSize: 9, color: T.inkFaint, marginTop: 2, fontFamily: T.mono }}>{g.range}</div>
+            {Object.entries(gradeScale).map(([grade, range]) => (
+              <div key={grade} style={{ padding: "8px 6px", textAlign: "center", border: `1px solid ${T.ruleLight}` }}>
+                <div style={{ fontWeight: 700, fontSize: 14, color: gradeColor(grade), fontFamily: T.mono }}>{grade}</div>
+                <div style={{ fontSize: 9, color: T.inkFaint, marginTop: 2, fontFamily: T.mono }}>{range}</div>
               </div>
             ))}
           </div>
         </div>
       </section>
 
+      {/* Data Sources */}
       <section style={{ marginBottom: 28 }}>
         <div style={{ border: `1px solid ${T.ruleMid}`, padding: "20px 24px" }}>
           <div style={{ fontSize: 10, fontWeight: 600, color: T.inkLight, textTransform: "uppercase", letterSpacing: 1.5, marginBottom: 12, fontFamily: T.mono }}>
             Data Sources
           </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 14 }}>
-            {["CoinGecko Pro", "DeFiLlama", "Etherscan", "Curve Finance", "Issuer Attestations", "On-Chain Analysis"].map((s) => (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {dataSources.map((s) => (
               <span key={s} style={{ padding: "4px 10px", background: T.paperWarm, color: T.inkMid, fontSize: 11, fontFamily: T.sans, border: `1px solid ${T.ruleMid}` }}>
                 {s}
               </span>
             ))}
           </div>
-          <p style={{ margin: 0, fontSize: 12, color: T.inkLight, fontFamily: T.sans, lineHeight: 1.6 }}>
-            102 components defined across 11 categories. 50 currently automated via live APIs.
-            Scores update hourly. Deterministic formula — same inputs always produce same outputs.
-            Version-controlled methodology with advance notice before changes.
-          </p>
         </div>
       </section>
 
+      {/* Principles */}
       <section>
         <div style={{ border: `1px solid ${T.ruleMid}`, padding: "20px 24px" }}>
           <div style={{ fontSize: 10, fontWeight: 600, color: T.inkLight, textTransform: "uppercase", letterSpacing: 1.5, marginBottom: 14, fontFamily: T.mono }}>
             Principles
           </div>
-          {[
-            { title: "Neutral", desc: "No customer can pay to influence scores, weights, thresholds, or methodology timing." },
-            { title: "Deterministic", desc: "Same inputs always produce the same outputs. No discretionary adjustments." },
-            { title: "Versioned", desc: "All methodology changes are announced in advance, timestamped, and retroactively reproducible." },
-            { title: "Composable", desc: "SII is designed as a programmable primitive — machine-readable, on-chain verifiable, and integratable into protocol logic." },
-          ].map((p, i) => (
-            <div key={i} style={{ padding: "10px 0", borderBottom: i < 3 ? `1px solid ${T.ruleLight}` : "none" }}>
+          {principles.map((p, i) => (
+            <div key={i} style={{ padding: "10px 0", borderBottom: i < principles.length - 1 ? `1px solid ${T.ruleLight}` : "none" }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: T.ink, fontFamily: T.sans }}>{p.title}</div>
               <div style={{ fontSize: 12, color: T.inkLight, marginTop: 3, fontFamily: T.sans, lineHeight: 1.5 }}>{p.desc}</div>
             </div>

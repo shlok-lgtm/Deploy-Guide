@@ -709,6 +709,87 @@ async def get_methodology(methodology_version: Optional[str] = Query(default=Non
 
 
 # =============================================================================
+# 6a2. GET /api/indices — All registered index definitions
+# =============================================================================
+
+@app.get("/api/indices")
+async def get_all_indices():
+    """Return all registered index definitions for the methodology page."""
+    from app.index_definitions.sii_v1 import SII_V1_DEFINITION
+    from app.index_definitions.psi_v01 import PSI_V01_DEFINITION
+
+    indices = [SII_V1_DEFINITION, PSI_V01_DEFINITION]
+
+    result = []
+    for idx in indices:
+        categories = []
+        for cat_id, cat in idx["categories"].items():
+            comp_count = sum(
+                1 for c in idx.get("components", {}).values()
+                if c.get("category") == cat_id
+            )
+            comp_names = [
+                c["name"] for c in idx.get("components", {}).values()
+                if c.get("category") == cat_id
+            ]
+            categories.append({
+                "id": cat_id,
+                "name": cat["name"],
+                "weight": cat["weight"],
+                "component_count": comp_count,
+                "components": comp_names,
+            })
+        categories.sort(key=lambda x: x["weight"], reverse=True)
+
+        formula_parts = [
+            f"{cat['weight']:.2f}\u00d7{cat['name'].split('&')[0].strip().split('(')[0].strip()}"
+            for cat in categories
+        ]
+        formula = f"{idx['index_id'].upper()} = " + " + ".join(formula_parts)
+
+        result.append({
+            "index_id": idx["index_id"],
+            "version": idx["version"],
+            "name": idx["name"],
+            "description": idx["description"],
+            "entity_type": idx["entity_type"],
+            "formula": formula,
+            "categories": categories,
+            "total_components": len(idx.get("components", {})),
+            "structural_subcategories": idx.get("structural_subcategories"),
+        })
+
+    result.append({
+        "index_id": "cqi",
+        "version": "v1.0.0",
+        "name": "Collateral Quality Index",
+        "description": "Composes SII and PSI to measure stablecoin safety within a specific protocol. Every scored stablecoin \u00d7 every scored protocol produces a CQI pair.",
+        "entity_type": "composition",
+        "formula": "CQI(asset, protocol) = 0.60\u00d7SII(asset) + 0.40\u00d7PSI(protocol)",
+        "categories": [],
+        "total_components": 0,
+    })
+
+    return {
+        "indices": result,
+        "count": len(result),
+        "grade_scale": {
+            "A+": "90\u2013100", "A": "85\u201390", "A-": "80\u201385",
+            "B+": "75\u201380", "B": "70\u201375", "B-": "65\u201370",
+            "C+": "60\u201365", "C": "55\u201360", "C-": "50\u201355",
+            "D": "45\u201350", "F": "<45",
+        },
+        "principles": [
+            {"title": "Neutral", "desc": "No customer can pay to influence scores, weights, thresholds, or methodology timing."},
+            {"title": "Deterministic", "desc": "Same inputs always produce the same outputs. No discretionary adjustments."},
+            {"title": "Versioned", "desc": "All methodology changes are announced in advance, timestamped, and retroactively reproducible."},
+            {"title": "Composable", "desc": "Every index is a JSON config against the generic scoring engine. New indices require zero code changes."},
+        ],
+        "data_sources": ["CoinGecko Pro", "DeFiLlama", "Etherscan", "Curve Finance", "Issuer Attestations", "On-Chain Analysis"],
+    }
+
+
+# =============================================================================
 # 6b. GET /api/methodology/versions — Version history and governance
 # =============================================================================
 
