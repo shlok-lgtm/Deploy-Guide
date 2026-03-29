@@ -2088,7 +2088,7 @@ async def cda_issuers():
                ) AS last_attestation
         FROM cda_issuer_registry r
         WHERE r.is_active = TRUE
-        ORDER BY r.asset_symbol
+        ORDER BY last_attestation DESC NULLS LAST, r.asset_symbol
     """)
     issuers = []
     for r in rows:

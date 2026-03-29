@@ -2018,11 +2018,7 @@ function WitnessView({ mobile, onSelectIssuer }) {
   const [latestHashes, setLatestHashes] = useState({});
   const [copiedHash, setCopiedHash] = useState(null);
 
-  const issuers = (issuersData?.issuers || []).sort((a, b) => {
-    const aOnChain = a.collection_method === "nav_oracle" ? 1 : 0;
-    const bOnChain = b.collection_method === "nav_oracle" ? 1 : 0;
-    return aOnChain - bOnChain;
-  });
+  const issuers = issuersData?.issuers || [];
 
   useEffect(() => {
     issuers.forEach(iss => {
@@ -2469,6 +2465,7 @@ export default function App() {
                 textDecoration: "none",
                 letterSpacing: 0.5,
                 whiteSpace: "nowrap",
+                display: mobile ? "none" : "inline",
               }}
             >
               API →
