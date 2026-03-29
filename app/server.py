@@ -941,7 +941,10 @@ async def get_deviations(
 
 def _check_admin_key(request: Request):
     admin_key = os.environ.get("ADMIN_KEY", "")
-    provided = request.query_params.get("key", "")
+    provided = (
+        request.query_params.get("key", "")
+        or request.headers.get("x-admin-key", "")
+    )
     if not admin_key or provided != admin_key:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
