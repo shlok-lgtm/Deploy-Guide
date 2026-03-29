@@ -2381,7 +2381,10 @@ function WitnessDetailView({ symbol, onBack, mobile }) {
   const [expanded, setExpanded] = useState(null);
   const [copiedHash, setCopiedHash] = useState(null);
 
-  const attestations = histData?.attestations || [];
+  const allAttestations = histData?.attestations || [];
+  const attestations = allAttestations.filter(a =>
+    a.quality === "full" || a.quality === "partial"
+  );
   const issuerName = latest?.issuer_name || symbol;
   const transparencyUrl = latest?.source_url || null;
 
@@ -2482,8 +2485,21 @@ function WitnessDetailView({ symbol, onBack, mobile }) {
           </div>
         )}
         {attestations.length === 0 && (
-          <div style={{ padding: 24, textAlign: "center", color: T.inkFaint, fontSize: 12, fontFamily: T.sans }}>
-            No attestations recorded yet.
+          <div style={{ padding: 24, textAlign: "center", color: T.inkFaint, fontSize: 12, fontFamily: T.sans, lineHeight: 1.7 }}>
+            No structured reserve data extracted yet.
+            {transparencyUrl && (
+              <>
+                {" "}
+                <a
+                  href={transparencyUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ color: T.inkLight, borderBottom: `1px solid ${T.ruleMid}`, textDecoration: "none" }}
+                >
+                  View issuer's transparency page directly ↗
+                </a>
+              </>
+            )}
           </div>
         )}
         {attestations.map((att, i) => {
