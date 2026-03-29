@@ -29,9 +29,9 @@ const TAB_ACCENT = {
   "witness-detail": "#A8C4A0",
 };
 
-function BasisLogo({ accent = "#fc988f", size = 28 }) {
+function BasisLogo({ accent = "#fc988f", size = 40 }) {
   return (
-    <svg viewBox="0 0 1118 896" width={size} height={size * 896 / 1118} xmlns="http://www.w3.org/2000/svg">
+    <svg viewBox="120 0 880 720" width={size} height={size * 720 / 880} xmlns="http://www.w3.org/2000/svg">
       <g stroke="none">
         <g fill="#20222d">
           <path d="M 941.49 629.18 L 946.51 637.25 L 951.99 646.13 L 954.51 650.28 L 981.98 694.03 L 984.45 698.16 Q 985.37 701.10 987.50 703.29 L 990.00 706.79 A 0.55 0.54 72.2 0 1 989.56 707.65 L 279.25 707.90 L 274.56 707.88 L 264.29 707.88 L 262.52 707.88 L 262.04 707.87 L 260.71 707.88 L 128.66 707.90 A 0.84 0.84 0.0 0 1 127.94 706.63 Q 129.14 704.66 130.44 702.38 Q 132.06 699.53 143.46 680.74 Q 197.91 590.97 201.95 584.46 C 207.70 575.21 212.96 567.68 217.55 560.11 Q 218.04 559.30 227.82 543.37 Q 241.93 520.40 384.32 286.58 Q 422.33 224.16 466.63 151.77 C 469.44 147.19 471.27 143.29 474.15 138.93 Q 478.82 131.84 484.04 122.34 Q 487.51 116.02 489.30 113.40 C 491.39 110.33 494.66 105.41 496.61 101.63 C 500.06 94.92 504.16 88.92 508.67 81.45 Q 527.86 49.63 535.73 36.72 Q 537.88 33.18 545.53 21.75 Q 547.21 19.24 548.10 17.43 C 549.30 14.99 550.17 12.86 551.61 11.60 A 1.30 1.30 0.0 0 1 553.62 11.96 C 556.47 17.30 559.17 22.44 562.35 27.21 C 566.21 33.01 573.18 43.13 578.04 51.96 Q 582.43 59.91 587.61 67.40 Q 592.93 75.06 595.11 79.26 C 597.89 84.60 601.39 89.01 605.14 95.06 C 616.63 113.57 621.25 121.53 629.78 134.60 Q 634.71 142.15 635.89 144.30 Q 638.63 149.29 641.93 154.03 C 647.35 161.80 652.21 171.61 658.01 179.94 C 660.69 183.80 662.70 187.89 665.70 192.66 Q 753.21 331.91 812.05 424.96 Q 852.98 489.67 891.97 552.28 Q 901.27 567.22 902.63 569.24 Q 908.50 577.98 912.82 585.69 Q 918.42 595.70 926.71 607.29 Q 927.72 608.69 929.18 609.97 A 2.19 2.18 -85.6 0 1 929.59 610.45 L 941.49 629.18 Z M 955.26 688.21 C 840.54 505.58 735.55 339.82 600.25 124.50 Q 584.72 99.79 552.71 48.20 A 0.38 0.38 0.0 0 0 552.07 48.20 L 161.88 687.93 A 0.32 0.31 -74.1 0 0 162.14 688.41 L 955.15 688.41 A 0.13 0.13 0.0 0 0 955.26 688.21 Z"/>
@@ -55,16 +55,75 @@ function BasisLogo({ accent = "#fc988f", size = 28 }) {
           <path d="M 575.21 231.45 L 812.13 607.56 A 0.32 0.32 0.0 0 1 811.85 608.05 L 801.56 607.77 L 650.46 607.78 Q 639.50 591.00 628.59 574.43 Q 628.16 573.77 628.21 572.64 L 738.95 572.62 L 749.09 572.50 A 0.52 0.52 0.0 0 0 749.53 571.71 L 554.46 262.26 Q 561.79 253.10 567.54 242.55 Q 570.43 237.24 573.83 232.24 A 1.45 1.43 6.9 0 1 574.57 231.67 L 575.21 231.45 Z"/>
           <path d="M 737.55 567.15 L 623.37 567.14 Q 621.45 563.41 619.08 559.75 Q 608.74 543.80 598.42 527.83 Q 546.99 448.28 495.94 369.15 L 554.00 273.32 A 0.48 0.47 44.8 0 1 554.81 273.32 L 739.63 566.16 A 0.63 0.62 64.3 0 1 739.31 567.08 Q 738.75 567.29 737.55 567.15 Z"/>
         </g>
-        {/* BASIS wordmark */}
-        <g fill="#000000">
-          <path d="M 570.77 821.29 C 575.97 829.13 584.66 832.76 593.87 831.85 C 603.98 830.84 611.96 823.12 610.90 812.51 C 610.12 804.65 604.36 800.57 597.47 798.02 C 582.27 792.38 563.24 789.60 564.87 767.75 C 565.76 755.93 574.47 748.28 585.72 746.01 C 597.66 743.59 610.57 746.14 618.70 755.49 A 0.70 0.70 0.0 0 1 618.59 756.51 L 612.07 761.33 A 0.51 0.51 0.0 0 1 611.37 761.24 Q 603.80 751.75 590.75 753.00 C 580.91 753.94 573.40 760.70 574.05 771.05 C 574.59 779.66 581.78 783.74 589.35 786.09 C 605.08 790.95 621.73 795.70 620.13 816.30 C 619.21 828.10 611.45 835.93 600.04 838.82 Q 598.42 839.23 594.39 839.64 C 581.94 840.91 570.70 836.57 562.83 827.19 A 0.68 0.67 51.5 0 1 562.94 826.21 L 569.82 821.12 A 0.67 0.67 0.0 0 1 570.77 821.29 Z"/>
-          <path d="M 718.94 826.21 L 725.82 821.12 A 0.67 0.67 0.0 0 1 726.77 821.29 C 731.97 829.13 740.66 832.76 749.87 831.85 C 759.98 830.84 767.96 823.12 766.90 812.51 C 766.12 804.65 760.36 800.57 753.47 798.02 C 738.27 792.38 719.24 789.60 720.87 767.75 C 721.76 755.93 730.47 748.28 741.72 746.01 C 753.66 743.59 766.57 746.14 774.70 755.49 A 0.70 0.70 0.0 0 1 774.59 756.51 L 768.07 761.33 A 0.51 0.51 0.0 0 1 767.37 761.24 Q 759.80 751.75 746.75 753.00 C 736.91 753.94 729.40 760.70 730.05 771.05 C 730.59 779.66 737.78 783.74 745.35 786.09 C 761.08 790.95 777.73 795.70 776.13 816.30 C 775.21 828.10 767.45 835.93 756.04 838.82 Q 754.42 839.23 750.39 839.64 C 737.94 840.91 726.70 836.57 718.83 827.19 A 0.68 0.67 51.5 0 1 718.94 826.21 Z"/>
-          <path d="M 386.15 790.33 C 387.31 790.57 389.16 790.74 389.94 790.99 Q 405.76 795.99 405.98 813.00 C 406.21 831.38 387.67 837.82 372.63 837.96 Q 358.90 838.09 345.61 837.95 A 0.58 0.58 0.0 0 1 345.03 837.37 L 345.03 747.63 A 0.59 0.59 0.0 0 1 345.62 747.04 Q 358.80 746.93 372.12 747.05 C 386.86 747.17 401.60 753.00 401.20 770.17 Q 400.87 784.93 386.12 789.83 A 0.26 0.26 0.0 0 0 386.15 790.33 Z M 354.24 755.32 L 354.18 786.72 A 0.28 0.28 0.0 0 0 354.46 787.00 L 373.70 787.03 A 18.24 14.68 0.1 0 0 391.97 772.38 L 391.97 769.78 A 18.24 14.68 0.1 0 0 373.76 755.07 L 354.52 755.04 A 0.28 0.28 0.0 0 0 354.24 755.32 Z M 354.10 794.90 L 354.34 829.68 A 0.32 0.32 0.0 0 0 354.66 830.00 L 375.72 829.85 A 21.12 16.25 -0.4 0 0 396.73 813.45 L 396.71 810.53 A 21.12 16.25 -0.4 0 0 375.48 794.43 L 354.42 794.58 A 0.32 0.32 0.0 0 0 354.10 794.90 Z"/>
-          <path d="M 484.63 747.02 Q 486.65 747.02 488.58 747.11 A 0.93 0.90 -9.6 0 1 489.38 747.66 L 527.90 837.87 A 0.11 0.11 0.0 0 1 527.80 838.03 L 518.20 838.03 A 0.32 0.31 78.8 0 1 517.91 837.83 L 507.89 814.37 A 0.62 0.60 78.2 0 0 507.34 814.00 Q 505.74 813.99 484.53 813.96 Q 463.32 813.93 461.72 813.93 A 0.62 0.60 -78.0 0 0 461.16 814.30 L 451.07 837.73 A 0.32 0.31 -78.6 0 1 450.78 837.93 L 441.18 837.90 A 0.11 0.11 0.0 0 1 441.08 837.74 L 479.88 747.65 A 0.93 0.90 9.8 0 1 480.68 747.10 Q 482.61 747.01 484.63 747.02 Z M 464.61 805.06 A 0.35 0.35 0.0 0 0 464.94 805.54 L 503.80 805.54 A 0.35 0.35 0.0 0 0 504.13 805.06 L 484.69 758.02 A 0.35 0.35 0.0 0 0 484.05 758.02 L 464.61 805.06 Z"/>
-          <rect x="665.03" y="747.01" width="9.18" height="90.96" rx="0.31"/>
-        </g>
       </g>
     </svg>
+  );
+}
+
+function TabHeader({ title, formId, stats, formulaLine, versionLabel, accent, mobile, showOnChain = true }) {
+  return (
+    <div style={{ border: `1.5px solid ${T.ink}`, marginBottom: 0 }}>
+      <div style={{ padding: mobile ? "14px 12px 0" : "18px 24px 0" }}>
+        <div style={{ display: "flex", flexDirection: mobile ? "column" : "row", justifyContent: "space-between", alignItems: mobile ? "flex-start" : "center", gap: mobile ? 4 : 0 }}>
+          <h1 style={{ margin: 0, fontSize: mobile ? 20 : 28, fontFamily: T.sans, color: T.ink, fontWeight: 400, letterSpacing: -0.3 }}>
+            {title}
+          </h1>
+          <div style={{ display: "flex", alignItems: "center", gap: mobile ? 8 : 14 }}>
+            <BasisLogo accent={accent} size={mobile ? 28 : 38} />
+            <span style={{ fontFamily: T.mono, fontSize: mobile ? 9 : 10, color: T.inkFaint, textTransform: "uppercase", letterSpacing: 2 }}>
+              {formId}
+            </span>
+          </div>
+        </div>
+
+        {stats && stats.length > 0 && (
+          <>
+            <div style={{ height: 1, background: T.ruleMid, margin: "12px 0" }} />
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: mobile ? 4 : 0, paddingBottom: 14 }}>
+              {stats.map((s, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center" }}>
+                  <span style={{ fontFamily: T.mono, fontSize: mobile ? 8 : 10, color: T.inkLight, textTransform: "uppercase", letterSpacing: mobile ? 0.5 : 1.5, padding: mobile ? "2px 6px" : "0 12px" }}>
+                    {s}
+                  </span>
+                  {!mobile && i < stats.length - 1 && (
+                    <div style={{ width: 1, height: 12, background: T.ruleMid }} />
+                  )}
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+
+      {formulaLine && (
+        <div style={{ borderTop: `1px solid ${T.ruleMid}`, padding: mobile ? "8px 12px" : "10px 24px", display: "flex", flexDirection: mobile ? "column" : "row", justifyContent: "space-between", alignItems: mobile ? "flex-start" : "center", gap: mobile ? 4 : 0 }}>
+          <span style={{ fontFamily: T.mono, fontSize: mobile ? 9 : 11, color: T.ink }}>
+            {formulaLine}
+          </span>
+          {versionLabel && (
+            <span style={{ fontFamily: T.mono, fontSize: mobile ? 8 : 10, color: T.inkLight, textTransform: "uppercase", letterSpacing: 1 }}>
+              {versionLabel}
+            </span>
+          )}
+        </div>
+      )}
+
+      {showOnChain && (
+        <div style={{ borderTop: `1px solid #b8d9c4`, background: "#f0f7f2", padding: mobile ? "8px 12px" : "10px 24px", display: "flex", flexDirection: mobile ? "column" : "row", justifyContent: "space-between", alignItems: mobile ? "flex-start" : "center", gap: mobile ? 4 : 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#2d7a3a", flexShrink: 0, animation: "pulse 2s ease-in-out infinite" }} />
+            <span style={{ fontFamily: T.mono, fontSize: mobile ? 9 : 10.5, color: "#2a5c38" }}>
+              {mobile ? "On-chain \u00b7 Block #21847293" : "Scores committed to Ethereum mainnet \u00b7 Block #21847293 \u00b7 Merkle root: 0x7f3a...c4e1"}
+            </span>
+          </div>
+          {!mobile && (
+            <span style={{ fontFamily: T.mono, fontSize: 10, color: "#4a8060" }}>
+              Methodology v1.0 \u00b7 public \u00b7 immutable \u00b7 verify on-chain \u2197
+            </span>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -539,59 +598,16 @@ function PageHeader({ ts, mobile, coinCount }) {
     hour: "2-digit", minute: "2-digit", timeZoneName: "short",
   });
 
-  const stats = [`${coinCount || 14} STABLECOINS`, "102 COMPONENTS", "6 DATA SOURCES", "DETERMINISTIC METHODOLOGY", "UPDATED HOURLY"];
-
   return (
-    <div style={{ border: `1.5px solid ${T.ink}`, marginBottom: 0 }}>
-      <div style={{ padding: mobile ? "14px 12px 0" : "18px 24px 0" }}>
-        <div style={{ display: "flex", flexDirection: mobile ? "column" : "row", justifyContent: "space-between", alignItems: mobile ? "flex-start" : "baseline", gap: mobile ? 4 : 0 }}>
-          <h1 style={{ margin: 0, fontSize: mobile ? 20 : 28, fontFamily: T.sans, color: T.ink, fontWeight: 400, letterSpacing: -0.3 }}>
-            <span style={{ fontWeight: 700 }}>Stablecoin</span> Integrity <span style={{ fontWeight: 700 }}>Index</span>
-          </h1>
-          <span style={{ fontFamily: T.mono, fontSize: mobile ? 9 : 10, color: T.inkFaint, textTransform: "uppercase", letterSpacing: 2 }}>
-            FORM SII-001 · BASIS PROTOCOL
-          </span>
-        </div>
-
-        <div style={{ height: 1, background: T.ruleMid, margin: "12px 0" }} />
-
-        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: mobile ? 4 : 0, paddingBottom: 14 }}>
-          {stats.map((s, i) => (
-            <div key={i} style={{ display: "flex", alignItems: "center" }}>
-              <span style={{ fontFamily: T.mono, fontSize: mobile ? 8 : 10, color: T.inkLight, textTransform: "uppercase", letterSpacing: mobile ? 0.5 : 1.5, padding: mobile ? "2px 6px" : "0 12px" }}>
-                {s}
-              </span>
-              {!mobile && i < stats.length - 1 && (
-                <div style={{ width: 1, height: 12, background: T.ruleMid }} />
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div style={{ borderTop: `1px solid ${T.ruleMid}`, padding: mobile ? "8px 12px" : "10px 24px", display: "flex", flexDirection: mobile ? "column" : "row", justifyContent: "space-between", alignItems: mobile ? "flex-start" : "center", gap: mobile ? 4 : 0 }}>
-        <span style={{ fontFamily: T.mono, fontSize: mobile ? 9 : 11, color: T.ink }}>
-          SII = 0.30×Peg + 0.25×Liq + 0.20×Struct + 0.15×Flow + 0.10×Dist
-        </span>
-        <span style={{ fontFamily: T.mono, fontSize: mobile ? 8 : 10, color: T.inkLight, textTransform: "uppercase", letterSpacing: 1 }}>
-          Methodology v1.0 · {timestamp}
-        </span>
-      </div>
-
-      <div style={{ borderTop: `1px solid #b8d9c4`, background: "#f0f7f2", padding: mobile ? "8px 12px" : "10px 24px", display: "flex", flexDirection: mobile ? "column" : "row", justifyContent: "space-between", alignItems: mobile ? "flex-start" : "center", gap: mobile ? 4 : 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#2d7a3a", flexShrink: 0, animation: "pulse 2s ease-in-out infinite" }} />
-          <span style={{ fontFamily: T.mono, fontSize: mobile ? 9 : 10.5, color: "#2a5c38" }}>
-            {mobile ? "On-chain · Block #21847293" : "Scores committed to Ethereum mainnet · Block #21847293 · Merkle root: 0x7f3a...c4e1"}
-          </span>
-        </div>
-        {!mobile && (
-          <span style={{ fontFamily: T.mono, fontSize: 10, color: "#4a8060" }}>
-            Methodology v1.0 · public · immutable · verify on-chain ↗
-          </span>
-        )}
-      </div>
-    </div>
+    <TabHeader
+      title={<><span style={{ fontWeight: 700 }}>Stablecoin</span> Integrity <span style={{ fontWeight: 700 }}>Index</span></>}
+      formId="FORM SII-001 · BASIS PROTOCOL"
+      stats={[`${coinCount || 14} STABLECOINS`, "102 COMPONENTS", "6 DATA SOURCES", "DETERMINISTIC METHODOLOGY", "UPDATED HOURLY"]}
+      formulaLine="SII = 0.30×Peg + 0.25×Liq + 0.20×Struct + 0.15×Flow + 0.10×Dist"
+      versionLabel={`Methodology v1.0 · ${timestamp}`}
+      accent="#fc988f"
+      mobile={mobile}
+    />
   );
 }
 
@@ -1124,12 +1140,25 @@ function MethodologyView({ mobile }) {
   return (
     <div style={{ padding: mobile ? "16px 0 32px" : "24px 0 64px", maxWidth: 780 }}>
 
+      <TabHeader
+        title={<><span style={{ fontWeight: 700 }}>Scoring</span> Methodology</>}
+        formId="FORM MTH-001 · BASIS PROTOCOL"
+        stats={[
+          `${indices.length} INDICES`,
+          `${dataSources.length} DATA SOURCES`,
+          "DETERMINISTIC",
+          "VERSION-CONTROLLED",
+        ]}
+        accent="#B8937A"
+        mobile={mobile}
+        showOnChain={false}
+      />
+
+      <div style={{ height: 24 }} />
+
       {/* Intro */}
       <section style={{ marginBottom: 28 }}>
         <div style={{ border: `1px solid ${T.ruleMid}`, padding: "20px 24px" }}>
-          <h2 style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 600, color: T.ink, fontFamily: T.sans }}>
-            Basis Scoring Methodology
-          </h2>
           <p style={{ margin: 0, fontSize: 13, color: T.inkMid, fontFamily: T.sans, lineHeight: 1.7 }}>
             Basis produces {indices.length} composable risk indices. All use the same deterministic scoring engine — the same inputs always produce the same outputs. Methodologies are version-controlled, changes announced in advance, and all scores retroactively reproducible. New indices are JSON configurations against the generic engine — no code changes required.
           </p>
@@ -1486,31 +1515,24 @@ function WalletsView({ mobile }) {
 
   const queuedCount = (backlog || []).filter((a) => a.scoring_status === "queued" || a.scoring_status === "in_progress").length;
 
-  const statsItems = [
-    `${topWallets ? topWallets.length : "—"} WALLETS TRACKED`,
-    `${backlog ? backlog.length : "—"} BACKLOG ASSETS`,
-    `${queuedCount} QUEUED FOR SCORING`,
-    "FORM WRG-001 · BASIS PROTOCOL",
-  ];
-
   return (
     <div>
       <div style={{ height: mobile ? 16 : 28 }} />
 
-      <div style={{ border: `1.5px solid ${T.ink}`, marginBottom: 24, padding: mobile ? "10px 12px" : "14px 20px" }}>
-        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: mobile ? 4 : 0 }}>
-          {statsItems.map((s, i) => (
-            <div key={i} style={{ display: "flex", alignItems: "center" }}>
-              <span style={{ fontFamily: T.mono, fontSize: mobile ? 8 : 10, color: T.inkLight, textTransform: "uppercase", letterSpacing: mobile ? 0.5 : 1.5, padding: mobile ? "2px 6px" : "0 12px" }}>
-                {s}
-              </span>
-              {!mobile && i < statsItems.length - 1 && (
-                <div style={{ width: 1, height: 12, background: T.ruleMid }} />
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
+      <TabHeader
+        title={<><span style={{ fontWeight: 700 }}>Wallet</span> Risk <span style={{ fontWeight: 700 }}>Graph</span></>}
+        formId="FORM WRG-001 · BASIS PROTOCOL"
+        stats={[
+          `${topWallets ? topWallets.length : "—"} WALLETS TRACKED`,
+          `${backlog ? backlog.length : "—"} BACKLOG ASSETS`,
+          `${queuedCount} QUEUED FOR SCORING`,
+        ]}
+        accent="#8B7B9E"
+        mobile={mobile}
+        showOnChain={false}
+      />
+
+      <div style={{ height: 24 }} />
 
       <WalletSearchPanel mobile={mobile} />
 
@@ -1624,34 +1646,26 @@ function ProtocolsView({ mobile }) {
   const { data: protocols, loading: psiLoading } = usePsiScores();
   const { data: cqiData, loading: cqiLoading } = useCqiMatrix();
 
-  const statsItems = [
-    `${protocols ? protocols.length : "—"} PROTOCOLS SCORED`,
-    `${cqiData ? cqiData.count : "—"} CQI PAIRS`,
-    "PSI v0.1.0",
-    "FORM PSI-001 · BASIS PROTOCOL",
-  ];
-
   const sorted = protocols ? [...protocols].sort((a, b) => (b.score || b.overall_score || 0) - (a.score || a.overall_score || 0)) : [];
 
   return (
     <div>
       <div style={{ height: mobile ? 16 : 28 }} />
 
-      {/* Stats bar */}
-      <div style={{ border: `1.5px solid ${T.ink}`, marginBottom: 24, padding: mobile ? "10px 12px" : "14px 20px" }}>
-        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: mobile ? 4 : 0 }}>
-          {statsItems.map((s, i) => (
-            <div key={i} style={{ display: "flex", alignItems: "center" }}>
-              <span style={{ fontFamily: T.mono, fontSize: mobile ? 8 : 10, color: T.inkLight, textTransform: "uppercase", letterSpacing: mobile ? 0.5 : 1.5, padding: mobile ? "2px 6px" : "0 12px" }}>
-                {s}
-              </span>
-              {!mobile && i < statsItems.length - 1 && (
-                <div style={{ width: 1, height: 12, background: T.ruleMid }} />
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
+      <TabHeader
+        title={<><span style={{ fontWeight: 700 }}>Protocol</span> Solvency <span style={{ fontWeight: 700 }}>Index</span></>}
+        formId="FORM PSI-001 · BASIS PROTOCOL"
+        stats={[
+          `${protocols ? protocols.length : "—"} PROTOCOLS SCORED`,
+          `${cqiData ? cqiData.count : "—"} CQI PAIRS`,
+          "PSI v0.1.0",
+        ]}
+        accent="#7BA3A8"
+        mobile={mobile}
+        showOnChain={false}
+      />
+
+      <div style={{ height: 24 }} />
 
       {/* PSI Rankings Table */}
       <div style={{ marginBottom: 32 }}>
@@ -1890,19 +1904,16 @@ function PulseView({ mobile, integrity }) {
     <div>
       <div style={{ height: mobile ? 16 : 28 }} />
 
-      {/* Pulse header — newspaper masthead style */}
-      <div style={{ border: `1.5px solid ${T.ink}`, marginBottom: 24 }}>
-        <div style={{ padding: mobile ? "14px 12px" : "18px 24px", borderBottom: `1px solid ${T.ruleMid}` }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: mobile ? "flex-start" : "baseline", flexDirection: mobile ? "column" : "row", gap: mobile ? 4 : 0 }}>
-            <h2 style={{ margin: 0, fontSize: mobile ? 18 : 24, fontFamily: T.sans, fontWeight: 400, color: T.ink }}>
-              <span style={{ fontWeight: 700 }}>Daily</span> Pulse
-            </h2>
-            <span style={{ fontFamily: T.mono, fontSize: mobile ? 9 : 10, color: T.inkFaint, textTransform: "uppercase", letterSpacing: 2 }}>
-              {s.pulse_date || pulse.pulse_date || "—"} · FORM PLS-001 · BASIS PROTOCOL
-            </span>
-          </div>
-        </div>
+      <TabHeader
+        title={<><span style={{ fontWeight: 700 }}>Daily</span> Pulse</>}
+        formId={`${s.pulse_date || pulse.pulse_date || "—"} · FORM PLS-001 · BASIS PROTOCOL`}
+        accent="#C4A882"
+        mobile={mobile}
+        showOnChain={false}
+      />
 
+      {/* Pulse detail — network stats */}
+      <div style={{ border: `1.5px solid ${T.ink}`, borderTop: "none", marginBottom: 24 }}>
         {/* Network state summary — big numbers */}
         <div style={{
           display: "grid",
@@ -2199,21 +2210,20 @@ function WitnessView({ mobile, onSelectIssuer }) {
 
   return (
     <div style={{ padding: mobile ? "16px 0 32px" : "24px 0 64px" }}>
-      <div style={{ marginBottom: 24 }}>
-        <div style={{ fontSize: 10, fontWeight: 600, color: T.inkLight, textTransform: "uppercase", letterSpacing: 1.5, marginBottom: 8, fontFamily: T.mono }}>
-          BASIS WITNESS
-        </div>
-        <p style={{ margin: "0 0 16px", fontSize: 13, color: T.inkMid, fontFamily: T.sans, lineHeight: 1.6, maxWidth: 600 }}>
-          Structured, timestamped, hash-verified archive of stablecoin issuer disclosures.
-        </p>
-        <div style={{ fontFamily: T.mono, fontSize: 11, color: T.inkLight, display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <span>{issuers.length} issuers tracked</span>
-          <span style={{ color: T.ruleMid }}>·</span>
-          <span>{totalAttestations} attestations archived</span>
-          <span style={{ color: T.ruleMid }}>·</span>
-          <span>Updated daily</span>
-        </div>
-      </div>
+      <TabHeader
+        title={<><span style={{ fontWeight: 700 }}>Basis</span> Witness</>}
+        formId="FORM CDA-001 · BASIS PROTOCOL"
+        stats={[
+          `${issuers.length} ISSUERS TRACKED`,
+          `${totalAttestations} ATTESTATIONS ARCHIVED`,
+          "UPDATED DAILY",
+        ]}
+        accent="#A8C4A0"
+        mobile={mobile}
+        showOnChain={false}
+      />
+
+      <div style={{ height: 24 }} />
 
       <div style={{ border: `1px solid ${T.ruleMid}` }}>
         {!mobile && (
@@ -2563,8 +2573,6 @@ export default function App() {
           background: T.paper,
         }}>
           <div style={{ padding: mobile ? "10px 12px" : "12px 24px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: mobile ? 10 : 14 }}>
-            <BasisLogo accent={TAB_ACCENT[view] || "#fc988f"} size={mobile ? 22 : 28} />
             <nav style={{ display: "flex", gap: mobile ? 12 : 16, overflowX: mobile ? "auto" : "visible", WebkitOverflowScrolling: "touch" }}>
               {[
                 { id: "rankings", label: "Rankings" },
@@ -2591,21 +2599,6 @@ export default function App() {
                 </button>
               ))}
             </nav>
-            </div>
-            <a
-              href="/developers"
-              style={{
-                fontFamily: T.mono,
-                fontSize: 10,
-                color: T.inkLight,
-                textDecoration: "none",
-                letterSpacing: 0.5,
-                whiteSpace: "nowrap",
-                display: mobile ? "none" : "inline",
-              }}
-            >
-              API →
-            </a>
           </div>
 
           <div style={{ borderTop: `1px solid ${T.ruleLight}` }} />
