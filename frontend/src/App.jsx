@@ -118,7 +118,7 @@ function TabHeader({ title, formId, stats, formulaLine, versionLabel, accent, mo
           </div>
           {!mobile && (
             <span style={{ fontFamily: T.mono, fontSize: 10, color: "#4a8060" }}>
-              Methodology v1.0 \u00b7 public \u00b7 immutable \u00b7 verify on-chain \u2197
+              {"Methodology v1.0 · public · immutable · verify on-chain ↗"}
             </span>
           )}
         </div>
@@ -1156,12 +1156,20 @@ function MethodologyView({ mobile }) {
 
       <div style={{ height: 24 }} />
 
-      {/* Intro */}
+      {/* Intro + Principles */}
       <section style={{ marginBottom: 28 }}>
         <div style={{ border: `1px solid ${T.ruleMid}`, padding: "20px 24px" }}>
-          <p style={{ margin: 0, fontSize: 13, color: T.inkMid, fontFamily: T.sans, lineHeight: 1.7 }}>
+          <p style={{ margin: "0 0 20px", fontSize: 13, color: T.inkMid, fontFamily: T.sans, lineHeight: 1.7 }}>
             Basis produces {indices.length} composable risk indices. All use the same deterministic scoring engine — the same inputs always produce the same outputs. Methodologies are version-controlled, changes announced in advance, and all scores retroactively reproducible. New indices are JSON configurations against the generic engine — no code changes required.
           </p>
+          <div style={{ borderTop: `1px solid ${T.ruleLight}`, paddingTop: 16 }}>
+            {principles.map((p, i) => (
+              <div key={i} style={{ padding: "10px 0", borderBottom: i < principles.length - 1 ? `1px solid ${T.ruleLight}` : "none" }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: T.ink, fontFamily: T.sans }}>{p.title}</div>
+                <div style={{ fontSize: 12, color: T.inkLight, marginTop: 3, fontFamily: T.sans, lineHeight: 1.5 }}>{p.desc}</div>
+              </div>
+            ))}
+          </div>
         </div>
       </section>
 
@@ -1212,7 +1220,7 @@ function MethodologyView({ mobile }) {
 
             {idx.total_components > 0 && (
               <div style={{ marginTop: 12, fontFamily: T.mono, fontSize: 10, color: T.inkFaint }}>
-                {idx.total_components} total components \u00b7 {idx.entity_type} scoring
+                {idx.total_components} total components · {idx.entity_type} scoring
               </div>
             )}
           </div>
@@ -1252,20 +1260,6 @@ function MethodologyView({ mobile }) {
         </div>
       </section>
 
-      {/* Principles */}
-      <section>
-        <div style={{ border: `1px solid ${T.ruleMid}`, padding: "20px 24px" }}>
-          <div style={{ fontSize: 10, fontWeight: 600, color: T.inkLight, textTransform: "uppercase", letterSpacing: 1.5, marginBottom: 14, fontFamily: T.mono }}>
-            Principles
-          </div>
-          {principles.map((p, i) => (
-            <div key={i} style={{ padding: "10px 0", borderBottom: i < principles.length - 1 ? `1px solid ${T.ruleLight}` : "none" }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: T.ink, fontFamily: T.sans }}>{p.title}</div>
-              <div style={{ fontSize: 12, color: T.inkLight, marginTop: 3, fontFamily: T.sans, lineHeight: 1.5 }}>{p.desc}</div>
-            </div>
-          ))}
-        </div>
-      </section>
     </div>
   );
 }
@@ -1527,9 +1521,11 @@ function WalletsView({ mobile }) {
           `${backlog ? backlog.length : "—"} BACKLOG ASSETS`,
           `${queuedCount} QUEUED FOR SCORING`,
         ]}
+        formulaLine="Risk = f(concentration, coverage quality, behavioral signals)"
+        versionLabel="WRG v0.1.0"
         accent="#8B7B9E"
         mobile={mobile}
-        showOnChain={false}
+        showOnChain={true}
       />
 
       <div style={{ height: 24 }} />
@@ -1660,9 +1656,11 @@ function ProtocolsView({ mobile }) {
           `${cqiData ? cqiData.count : "—"} CQI PAIRS`,
           "PSI v0.1.0",
         ]}
+        formulaLine="PSI = 0.25×Balance Sheet + 0.20×Revenue + 0.20×Liquidity + 0.15×Security + 0.10×Governance + 0.10×Token"
+        versionLabel="PSI v0.1.0"
         accent="#7BA3A8"
         mobile={mobile}
-        showOnChain={false}
+        showOnChain={true}
       />
 
       <div style={{ height: 24 }} />
@@ -2587,7 +2585,7 @@ export default function App() {
           <div style={{ padding: mobile ? "10px 12px" : "12px 24px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <nav style={{ display: "flex", gap: mobile ? 12 : 16, overflowX: mobile ? "auto" : "visible", WebkitOverflowScrolling: "touch" }}>
               {[
-                { id: "rankings", label: "Rankings" },
+                { id: "rankings", label: "Stablecoins" },
                 { id: "protocols", label: "Protocols" },
                 { id: "wallets", label: "Wallets" },
                 { id: "pulse", label: "Pulse" },
