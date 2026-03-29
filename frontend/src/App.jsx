@@ -922,8 +922,6 @@ function RankingsView({ scores, loading, onSelect, ts, mobile }) {
 
       <div style={{ height: mobile ? 16 : 32 }} />
 
-      <PulseSummarySection mobile={mobile} />
-
       {mobile ? (
         <div>
           <div style={{ borderBottom: `3px solid ${T.ink}`, padding: "8px 12px", fontFamily: T.mono, fontSize: 9, textTransform: "uppercase", letterSpacing: 1.5, color: T.inkLight }}>
@@ -966,6 +964,8 @@ function RankingsView({ scores, loading, onSelect, ts, mobile }) {
           {rest.map((coin, i) => renderDesktopRow(coin, i, globalIdx++))}
         </div>
       )}
+
+      <PulseSummarySection mobile={mobile} />
 
       <Footnotes mobile={mobile} />
     </div>
