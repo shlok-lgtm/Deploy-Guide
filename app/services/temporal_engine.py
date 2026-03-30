@@ -255,7 +255,7 @@ def _compute_confidence(
     return "low"
 
 
-async def reconstruct_score(
+def reconstruct_score_sync(
     stablecoin_id: str,
     target_date: date,
     formula_version: str = None,
@@ -424,7 +424,7 @@ async def reconstruct_score(
     }
 
 
-async def reconstruct_range(
+def reconstruct_range_sync(
     stablecoin_id: str,
     from_date: date,
     to_date: date,
@@ -437,7 +437,7 @@ async def reconstruct_range(
     results = []
     current = from_date
     while current <= to_date:
-        result = await reconstruct_score(stablecoin_id, current, formula_version)
+        result = reconstruct_score_sync(stablecoin_id, current, formula_version)
         # Return slim version for range queries (no per-component detail)
         results.append({
             "target_date": result["target_date"],
@@ -516,3 +516,11 @@ CRISIS_EVENTS = {
         "description": "EU MiCA regulation enforcement began, affecting non-compliant stablecoins.",
     },
 }
+
+
+# Async wrappers for backward compatibility
+async def reconstruct_score(stablecoin_id: str, target_date: date, formula_version: str = None) -> dict:
+    return reconstruct_score_sync(stablecoin_id, target_date, formula_version)
+
+async def reconstruct_range(stablecoin_id: str, from_date: date, to_date: date, formula_version: str = None) -> list[dict]:
+    return reconstruct_range_sync(stablecoin_id, from_date, to_date, formula_version)
