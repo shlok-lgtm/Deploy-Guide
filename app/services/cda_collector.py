@@ -791,13 +791,14 @@ FAST_PATH_INDEX = {
     "firecrawl_js": 2,      # Start at Firecrawl JS
     "firecrawl_json": 3,
     "parallel_task": 4,
+    "multi_source": 0,      # Multi-source doesn't use the single-URL waterfall
 }
 
 
 async def collect_issuer_adaptive(issuer: dict, prefix: str) -> dict:
     """
-    Adaptive collection — tries each approach in order of cost/speed.
-    Stops at the first one that returns usable data.
+    Adaptive collection — if source_urls exist, iterate all sources.
+    Otherwise fall back to single-URL waterfall (legacy path).
     """
     symbol = issuer["asset_symbol"]
     category = issuer.get("asset_category", "unknown")
@@ -810,14 +811,282 @@ async def collect_issuer_adaptive(issuer: dict, prefix: str) -> dict:
         logger.info(f"{prefix} — skipped (PDF already extracted today)")
         return {"status": "already_collected", "method": None}
 
+    # Multi-source path: iterate source_urls if populated
+    source_urls = issuer.get("source_urls")
+    if source_urls and isinstance(source_urls, list) and len(source_urls) > 0:
+        return await _collect_multi_source(issuer, source_urls, prefix)
+
+    # Legacy single-URL waterfall (fiat-reserve issuers without source_urls)
+    return await _collect_single_url_waterfall(issuer, prefix)
+
+
+async def _collect_multi_source(issuer: dict, source_urls: list, prefix: str) -> dict:
+    """
+    Iterate all source_urls for an issuer. Each source has a type that determines
+    the collection strategy. Collects from ALL sources, not stop-at-first.
+    """
+    symbol = issuer["asset_symbol"]
+    disc_type = issuer.get("disclosure_type", "fiat-reserve")
+    results = []
+    any_success = False
+
+    for i, source in enumerate(source_urls):
+        src_url = source.get("url")
+        src_type = source.get("type", "attestation_page")
+
+        if not src_url:
+            continue
+
+        if _already_collected_today(symbol, src_url):
+            logger.info(f"{prefix} — [Source {i+1}/{len(source_urls)}] {src_type} already collected today")
+            results.append({"source": src_type, "status": "already_collected"})
+            any_success = True
+            continue
+
+        logger.info(f"{prefix} — [Source {i+1}/{len(source_urls)}] {src_type}: {src_url[:80]}...")
+
+        try:
+            result = await _collect_from_source(issuer, src_url, src_type, disc_type, prefix)
+            if result:
+                results.append({"source": src_type, "status": "success", "method": result.get("method")})
+                any_success = True
+            else:
+                results.append({"source": src_type, "status": "no_data"})
+        except Exception as e:
+            logger.warning(f"{prefix} — [Source {i+1}] {src_type} error: {e}")
+            results.append({"source": src_type, "status": "error", "error": str(e)[:100]})
+
+        await asyncio.sleep(2)
+
+    if any_success:
+        _update_registry(symbol, success=True, collection_method="multi_source")
+        methods = [r.get("method", r["source"]) for r in results if r["status"] == "success"]
+        return {"status": "success", "method": "+".join(methods) if methods else "multi_source", "sources": results}
+    else:
+        _update_registry(symbol, success=False, failure_reason="all_sources_failed")
+        return {"status": "failed", "method": None, "sources": results}
+
+
+async def _collect_from_source(issuer: dict, url: str, source_type: str, disc_type: str, prefix: str) -> dict | None:
+    """
+    Collect from a single source URL using the appropriate strategy for its type.
+    """
+    symbol = issuer["asset_symbol"]
+
+    if source_type == "dashboard":
+        return await _collect_dashboard(symbol, url, disc_type, prefix)
+
+    elif source_type == "attestation_page":
+        return await _collect_attestation_page(issuer, url, prefix)
+
+    elif source_type == "pdf_direct":
+        ok, method = await _try_reducto_pdf(symbol, url, prefix, disclosure_type=disc_type)
+        if ok:
+            return {"status": "success", "method": "pdf_direct+reducto"}
+        return None
+
+    elif source_type == "api":
+        return await _collect_api_source(symbol, url, prefix)
+
+    elif source_type == "docs_page":
+        return await _collect_attestation_page(issuer, url, prefix)
+
+    else:
+        logger.info(f"{prefix} — unknown source type '{source_type}', trying parallel extract")
+        return await _step_parallel_extract(
+            {**issuer, "transparency_url": url}, prefix
+        )
+
+
+async def _collect_dashboard(symbol: str, url: str, disc_type: str, prefix: str) -> dict | None:
+    """
+    Collect from a JS-rendered transparency dashboard.
+    Uses Firecrawl to render the page, then extracts data using type-specific schema.
+    """
+    logger.info(f"{prefix} — dashboard collection: {url[:80]}")
+
+    try:
+        # Step 1: Firecrawl JS render to get the page content
+        result = firecrawl_client.scrape_js_page(url, wait_ms=10000)
+        markdown = getattr(result, "markdown", "") or ""
+
+        if not markdown or len(markdown) < 200:
+            logger.warning(f"{prefix} — dashboard: insufficient content ({len(markdown)} chars)")
+            return None
+
+        # Step 2: Try Firecrawl JSON extraction with type-specific schema
+        from app.services.reducto_client import get_schema_for_type
+        schema, system_prompt = get_schema_for_type(disc_type)
+
+        client = firecrawl_client.get_client()
+        extract_result = client.scrape(
+            url,
+            formats=["extract"],
+            extract={"schema": schema},
+            actions=[{"type": "wait", "milliseconds": 10000}],
+        )
+
+        extract_data = getattr(extract_result, "extract", None)
+
+        if isinstance(extract_data, dict) and any(
+            v for v in extract_data.values() if v is not None and v != "" and v != 0
+        ):
+            _store_extraction(
+                asset_symbol=symbol,
+                source_url=url,
+                source_type="dashboard",
+                extraction_method="firecrawl_dashboard",
+                extraction_vendor="firecrawl",
+                raw_response={},
+                structured_data=extract_data,
+                confidence_score=0.80,
+            )
+
+            # Run validation
+            try:
+                from app.services.cda_validator import validate_extraction
+                last_ext = fetch_one(
+                    "SELECT id FROM cda_vendor_extractions WHERE asset_symbol = %s ORDER BY extracted_at DESC LIMIT 1",
+                    (symbol,)
+                )
+                if last_ext:
+                    validate_extraction(last_ext["id"], symbol, extract_data, disc_type)
+            except Exception as ve:
+                logger.warning(f"{prefix} — dashboard validation error: {ve}")
+
+            return {"status": "success", "method": "firecrawl_dashboard"}
+
+        # Step 3: Fall back to regex extraction from rendered markdown
+        page_data = _extract_reserve_data_from_markdown(markdown)
+        if page_data:
+            _store_extraction(
+                asset_symbol=symbol,
+                source_url=url,
+                source_type="dashboard",
+                extraction_method="firecrawl_js_direct",
+                extraction_vendor="firecrawl",
+                raw_response={},
+                structured_data=page_data,
+                confidence_score=0.65,
+            )
+            return {"status": "success", "method": "firecrawl_js_markdown"}
+
+    except Exception as e:
+        logger.warning(f"{prefix} — dashboard error: {e}")
+
+    return None
+
+
+async def _collect_attestation_page(issuer: dict, url: str, prefix: str) -> dict | None:
+    """
+    Collect from a page that links to PDF attestation reports.
+    Scrapes the page for PDF links, then parses the best one with Reducto.
+    """
+    symbol = issuer["asset_symbol"]
+    disc_type = issuer.get("disclosure_type", "fiat-reserve")
+
+    logger.info(f"{prefix} — attestation page: {url[:80]}")
+
+    # Try Parallel Extract to find PDF links
+    parallel_result = await parallel_client.extract(
+        url,
+        objective="Find PDF download links for attestation reports, custody reports, or reserve reports"
+    )
+
+    if "error" in parallel_result:
+        # Fall back to Firecrawl JS render for JS-heavy pages
+        try:
+            result = firecrawl_client.scrape_js_page(url, wait_ms=8000)
+            links = getattr(result, "links", []) or []
+            pdf_links = [l for l in links if ".pdf" in str(l).lower()]
+            pdf_links = _filter_attestation_pdfs(pdf_links)
+            if pdf_links:
+                best = _pick_most_recent_pdf(pdf_links)
+                if best:
+                    ok, method = await _try_reducto_pdf(symbol, best, prefix, disclosure_type=disc_type)
+                    if ok:
+                        return {"status": "success", "method": "firecrawl_js+reducto"}
+        except Exception as e:
+            logger.warning(f"{prefix} — attestation page firecrawl fallback error: {e}")
+        return None
+
+    # Extract PDF links from page content
+    results_list = parallel_result.get("results", [])
+    full_content = ""
+    if results_list:
+        full_content = results_list[0].get("full_content", "") or ""
+
+    # Store page scrape
+    _store_extraction(
+        asset_symbol=symbol,
+        source_url=url,
+        source_type="attestation_page",
+        extraction_method="parallel_extract",
+        extraction_vendor="parallel",
+        raw_response=parallel_result,
+        structured_data={
+            "content_length": len(full_content),
+        },
+        confidence_score=0.5,
+    )
+
+    pdf_urls = _extract_pdf_urls(full_content)
+    if pdf_urls:
+        pdf_urls = _filter_attestation_pdfs(pdf_urls)
+        best = _pick_most_recent_pdf(pdf_urls)
+        if best:
+            ok, method = await _try_reducto_pdf(symbol, best, prefix, disclosure_type=disc_type)
+            if ok:
+                return {"status": "success", "method": "parallel_extract+reducto"}
+
+    return None
+
+
+async def _collect_api_source(symbol: str, url: str, prefix: str) -> dict | None:
+    """
+    Collect from a public JSON API endpoint.
+    Stores the response directly as structured data.
+    """
+    import httpx
+
+    logger.info(f"{prefix} — API source: {url[:80]}")
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            data = resp.json()
+
+            if data:
+                _store_extraction(
+                    asset_symbol=symbol,
+                    source_url=url,
+                    source_type="api",
+                    extraction_method="direct_api",
+                    extraction_vendor="issuer",
+                    raw_response=data,
+                    structured_data=data,
+                    confidence_score=0.90,
+                )
+                return {"status": "success", "method": "direct_api"}
+    except Exception as e:
+        logger.warning(f"{prefix} — API source error: {e}")
+
+    return None
+
+
+async def _collect_single_url_waterfall(issuer: dict, prefix: str) -> dict:
+    """
+    Legacy single-URL waterfall for issuers without source_urls.
+    This is the original collect_issuer_adaptive logic.
+    """
+    symbol = issuer["asset_symbol"]
     attempts = []
 
-    # Fast-path: if the last run worked, try that step first
     method = issuer.get("collection_method", "web_extract")
     failures = issuer.get("consecutive_failures", 0)
     fast_start = FAST_PATH_INDEX.get(method, 0)
 
-    # Build step order: fast-path step first, then remaining in order
     if failures == 0 and fast_start > 0:
         step_order = [WATERFALL_STEPS[fast_start]] + [
             s for i, s in enumerate(WATERFALL_STEPS) if i != fast_start
@@ -829,7 +1098,6 @@ async def collect_issuer_adaptive(issuer: dict, prefix: str) -> dict:
         try:
             result = await step_fn(issuer, prefix)
             if result:
-                # Determine the collection_method to store based on which step succeeded
                 method_to_store = step_name
                 if step_name == "parallel_extract":
                     method_to_store = "web_extract"
@@ -838,23 +1106,19 @@ async def collect_issuer_adaptive(issuer: dict, prefix: str) -> dict:
 
                 _update_registry(symbol, success=True, collection_method=method_to_store)
                 result["step"] = step_name
-                logger.info(
-                    f"{prefix} — SUCCESS via {result['method']} (step: {step_name})"
-                )
+                logger.info(f"{prefix} — SUCCESS via {result['method']} (step: {step_name})")
                 return result
             attempts.append(f"{step_name}: no data")
         except Exception as e:
             attempts.append(f"{step_name}: {str(e)[:100]}")
             logger.warning(f"{prefix} — [Step {step_name}] error: {e}")
 
-        # Rate limit between steps
         await asyncio.sleep(1)
 
-    # All steps failed
     _update_registry(
         symbol,
         success=False,
-        failure_reason="; ".join(attempts[-3:]),  # Last 3 attempts
+        failure_reason="; ".join(attempts[-3:]),
     )
     logger.warning(f"{prefix} — ALL STEPS FAILED")
     for a in attempts:
@@ -1076,3 +1340,64 @@ async def discover_new_issuer(asset_symbol: str, coingecko_id: str):
          transparency_url, collection_method, asset_category),
     )
     logger.info(f"CDA: Registered {asset_symbol} — {issuer_name} ({asset_category})")
+
+    # Phase 2: Discover source URLs
+    source_result = await parallel_client.task(
+        question=(
+            f"For the stablecoin or digital asset '{asset_symbol}' issued by "
+            f"'{issuer_name}', find all transparency and attestation sources. "
+            f"I need specific URLs for: "
+            f"1. Transparency dashboard (live page showing reserves or backing) "
+            f"2. Attestation report page (where PDF reports are published) "
+            f"3. Direct PDF links to recent attestation reports "
+            f"4. Any public API endpoints for proof-of-reserves or reserve data"
+        ),
+        fields={
+            "dashboard_url": "URL of live transparency dashboard (if exists)",
+            "attestation_page_url": "URL of page listing attestation/audit reports (if exists)",
+            "latest_pdf_url": "Direct URL to most recent attestation PDF (if exists)",
+            "api_url": "URL of public reserve/proof-of-reserves API endpoint (if exists)",
+            "other_sources": "Any other transparency source URLs found",
+        },
+        processor="core",
+    )
+
+    if "error" not in source_result:
+        src_fields = source_result.get("fields", source_result.get("data", source_result))
+        sources = []
+
+        if src_fields.get("dashboard_url"):
+            sources.append({
+                "url": src_fields["dashboard_url"],
+                "type": "dashboard",
+                "description": f"{issuer_name} transparency dashboard",
+            })
+        if src_fields.get("attestation_page_url"):
+            sources.append({
+                "url": src_fields["attestation_page_url"],
+                "type": "attestation_page",
+                "description": f"{issuer_name} attestation reports",
+            })
+        if src_fields.get("latest_pdf_url") and str(src_fields["latest_pdf_url"]).lower().endswith(".pdf"):
+            sources.append({
+                "url": src_fields["latest_pdf_url"],
+                "type": "pdf_direct",
+                "description": "Latest attestation report",
+            })
+        if src_fields.get("api_url"):
+            sources.append({
+                "url": src_fields["api_url"],
+                "type": "api",
+                "description": f"{issuer_name} reserve API",
+            })
+
+        if sources:
+            execute(
+                """
+                UPDATE cda_issuer_registry
+                SET source_urls = %s, updated_at = NOW()
+                WHERE asset_symbol = %s
+                """,
+                (json.dumps(sources), asset_symbol),
+            )
+            logger.info(f"CDA: Discovered {len(sources)} source URLs for {asset_symbol}")

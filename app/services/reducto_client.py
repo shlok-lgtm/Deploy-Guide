@@ -139,6 +139,52 @@ SCHEMAS_BY_TYPE = {
 }
 
 
+# Custodian attestation PDF schema — narrow, for proof-of-custody documents
+CUSTODIAN_ATTESTATION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "custodian_name": {"type": "string", "description": "Name of the custodian (e.g., Copper, Ceffu, Cobo, Fireblocks)"},
+        "attestation_date": {"type": "string", "description": "As-of date or report date"},
+        "assets_under_custody_usd": {"type": "number", "description": "Total value of assets held by this custodian in USD"},
+        "asset_breakdown": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "asset_type": {"type": "string", "description": "e.g., ETH, stETH, BTC, USDT"},
+                    "amount": {"type": "number"},
+                    "value_usd": {"type": "number"},
+                }
+            },
+            "description": "Breakdown of assets held by type"
+        },
+        "attestor_name": {"type": "string", "description": "Firm that performed the attestation (if any)"},
+        "report_type": {"type": "string", "description": "e.g., custody attestation, proof of reserves, SOC report"},
+        "wallet_addresses": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "On-chain wallet addresses listed in the report (if any)"
+        },
+    }
+}
+
+# Source-type-specific schemas — used when a source_url has a known type
+SOURCE_TYPE_SCHEMAS = {
+    "custodian_pdf": {
+        "schema": CUSTODIAN_ATTESTATION_SCHEMA,
+        "system_prompt": "This is a custodian attestation report. It proves that a specific custodian holds certain assets on behalf of a stablecoin issuer. Extract the custodian name, assets under custody, asset breakdown by type, attestation date, and any wallet addresses listed.",
+    },
+    "dashboard": {
+        "schema": None,  # Will use get_schema_for_type(disclosure_type)
+        "system_prompt": None,  # Will use SYSTEM_PROMPTS[disclosure_type]
+    },
+    "attestation_page": {
+        "schema": None,
+        "system_prompt": None,
+    },
+}
+
+
 def get_schema_for_type(disclosure_type: str) -> tuple[dict, str]:
     """Return (schema, system_prompt) for a given disclosure type."""
     schema = SCHEMAS_BY_TYPE.get(disclosure_type, BRSS_ATTESTATION_SCHEMA)

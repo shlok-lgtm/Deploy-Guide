@@ -196,6 +196,41 @@ def _seed_cda_issuer_registry():
             logger.warning(f"CDA seed failed for {cfg['symbol']}: {e}")
     logger.info(f"CDA issuer registry seeded ({seeded} upserts attempted)")
 
+    # Populate source_urls for issuers that have transparency_url but no source_urls
+    try:
+        issuers_needing_sources = fetch_all(
+            """
+            SELECT asset_symbol, transparency_url, attestation_page_url, disclosure_type
+            FROM cda_issuer_registry
+            WHERE (source_urls IS NULL OR source_urls = '[]'::jsonb)
+              AND transparency_url IS NOT NULL
+              AND is_active = TRUE
+            """
+        )
+        import json as _j
+        for iss in issuers_needing_sources:
+            sources = []
+            t_url = iss.get("transparency_url")
+            a_url = iss.get("attestation_page_url")
+
+            if t_url:
+                if any(k in t_url.lower() for k in ("dashboard", "stats", "facts.")):
+                    sources.append({"url": t_url, "type": "dashboard", "description": "Transparency dashboard"})
+                else:
+                    sources.append({"url": t_url, "type": "attestation_page", "description": "Transparency page"})
+
+            if a_url and a_url != t_url:
+                sources.append({"url": a_url, "type": "attestation_page", "description": "Attestation reports"})
+
+            if sources:
+                execute(
+                    "UPDATE cda_issuer_registry SET source_urls = %s WHERE asset_symbol = %s",
+                    (_j.dumps(sources), iss["asset_symbol"]),
+                )
+        logger.info(f"CDA: Populated source_urls for {len(issuers_needing_sources)} issuers")
+    except Exception as e:
+        logger.warning(f"CDA source_urls population failed: {e}")
+
 
 @app.on_event("startup")
 async def startup():
@@ -2731,6 +2766,14 @@ async def cda_issuer_latest(symbol: str):
     raw_data = _json.dumps(attestation, sort_keys=True, separators=(',', ':'), default=str)
     evidence_hash = '0x' + hashlib.sha256(raw_data.encode()).hexdigest()
     attestation["evidence_hash"] = evidence_hash
+
+    # Include source URLs so frontend can show data provenance
+    reg_full = fetch_one(
+        "SELECT source_urls FROM cda_issuer_registry WHERE UPPER(asset_symbol) = %s",
+        (symbol.upper(),)
+    )
+    if reg_full and reg_full.get("source_urls"):
+        attestation["source_urls"] = reg_full["source_urls"]
 
     disclosure_type = row.get("disclosure_type", "fiat-reserve")
     return _classify_attestation_quality(attestation, disclosure_type=disclosure_type)

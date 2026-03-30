@@ -2529,6 +2529,11 @@ function WitnessDetailView({ symbol, onBack, mobile }) {
             View source ↗
           </a>
         )}
+        {latest?.source_urls && latest.source_urls.length > 1 && (
+          <span style={{ fontSize: 11, fontFamily: T.mono, color: T.inkFaint }}>
+            {latest.source_urls.length} sources monitored
+          </span>
+        )}
       </div>
 
       <div style={{
