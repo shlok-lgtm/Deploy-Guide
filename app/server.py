@@ -716,32 +716,32 @@ def backtest_event(
 
 
 @app.post("/api/admin/backfill")
-async def admin_backfill(request: Request):
-    """Trigger historical price backfill from CoinGecko. Admin-key protected."""
+async def admin_backfill(request: Request, background_tasks: BackgroundTasks):
+    """Trigger historical price backfill from CoinGecko. Runs in background.
+    Admin-key protected."""
     _check_admin_key(request)
     body = await request.json()
 
-    from app.services.historical_backfill import backfill_coin, backfill_all
+    from app.services.historical_backfill import backfill_coin_sync, backfill_all_sync
 
     if body.get("all"):
         from_date = body.get("from", "2020-01-01")
         to_date = body.get("to")
-        result = await backfill_all(from_date, to_date)
-        return {"status": "completed", **result}
+        background_tasks.add_task(backfill_all_sync, from_date, to_date)
+        return {"status": "started", "scope": "all", "from": from_date, "to": to_date or "today"}
 
     stablecoin_id = body.get("stablecoin_id")
     if not stablecoin_id:
         raise HTTPException(status_code=400, detail="Provide stablecoin_id or all=true")
 
-    # Resolve to coingecko_id
     from app.config import STABLECOIN_REGISTRY
     cfg = STABLECOIN_REGISTRY.get(stablecoin_id)
     coingecko_id = cfg["coingecko_id"] if cfg else stablecoin_id
 
     from_date = body.get("from", "2020-01-01")
     to_date = body.get("to")
-    count = await backfill_coin(coingecko_id, from_date, to_date)
-    return {"status": "completed", "coingecko_id": coingecko_id, "records": count}
+    background_tasks.add_task(backfill_coin_sync, coingecko_id, from_date, to_date)
+    return {"status": "started", "coingecko_id": coingecko_id, "from": from_date, "to": to_date or "today"}
 
 
 # =============================================================================

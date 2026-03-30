@@ -31,36 +31,55 @@ def _headers() -> dict:
     return h
 
 
-def _get_existing_date_range(coingecko_id: str) -> tuple:
-    """Return (earliest_date, latest_date) already stored, or (None, None)."""
-    row = fetch_one(
-        """
-        SELECT MIN("timestamp"::date) AS earliest, MAX("timestamp"::date) AS latest
-        FROM historical_prices
-        WHERE coingecko_id = %s
-        """,
-        (coingecko_id,),
-    )
-    if row and row["earliest"]:
-        return row["earliest"], row["latest"]
-    return None, None
+def _store_chunk(coingecko_id, data):
+    """Parse and store a CoinGecko market_chart response chunk. Returns records inserted."""
+    prices = data.get("prices", [])
+    mcaps = data.get("market_caps", [])
+    volumes = data.get("total_volumes", [])
+
+    mcap_by_date = {}
+    for ts_ms, val in mcaps:
+        d = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).date()
+        mcap_by_date[d] = val
+
+    vol_by_date = {}
+    for ts_ms, val in volumes:
+        d = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).date()
+        vol_by_date[d] = val
+
+    inserted = 0
+    for ts_ms, price in prices:
+        ts = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
+        d = ts.date()
+        mcap = mcap_by_date.get(d)
+        vol = vol_by_date.get(d)
+
+        try:
+            execute(
+                """
+                INSERT INTO historical_prices
+                    (coingecko_id, "timestamp", price, market_cap, volume_24h)
+                SELECT %s, %s, %s, %s, %s
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM historical_prices
+                    WHERE coingecko_id = %s
+                      AND "timestamp"::date = %s::date
+                )
+                """,
+                (coingecko_id, ts, price, mcap, vol, coingecko_id, ts),
+            )
+            inserted += 1
+        except Exception:
+            pass
+    return inserted
 
 
-async def backfill_coin(
+def backfill_coin_sync(
     coingecko_id: str,
     from_date: str = "2020-01-01",
     to_date: str = None,
 ) -> int:
-    """Backfill historical prices for one coin from CoinGecko.
-
-    Args:
-        coingecko_id: CoinGecko coin ID (e.g., "usd-coin")
-        from_date: Start date YYYY-MM-DD (default: 2020-01-01)
-        to_date: End date YYYY-MM-DD (default: today)
-
-    Returns:
-        Number of records inserted.
-    """
+    """Backfill historical prices for one coin. Synchronous — safe for background tasks."""
     if not API_KEY:
         logger.warning("COINGECKO_API_KEY not set — cannot backfill")
         return 0
@@ -76,7 +95,7 @@ async def backfill_coin(
 
     total_inserted = 0
 
-    async with httpx.AsyncClient() as client:
+    with httpx.Client() as client:
         chunk_start = start
         while chunk_start < end:
             chunk_end = min(chunk_start + timedelta(days=CHUNK_DAYS), end)
@@ -85,13 +104,9 @@ async def backfill_coin(
             to_ts = int(chunk_end.timestamp())
 
             try:
-                resp = await client.get(
+                resp = client.get(
                     f"{BASE_URL}/coins/{coingecko_id}/market_chart/range",
-                    params={
-                        "vs_currency": "usd",
-                        "from": from_ts,
-                        "to": to_ts,
-                    },
+                    params={"vs_currency": "usd", "from": from_ts, "to": to_ts},
                     headers=_headers(),
                     timeout=30,
                 )
@@ -106,46 +121,7 @@ async def backfill_coin(
                 time.sleep(2)
                 continue
 
-            prices = data.get("prices", [])
-            mcaps = data.get("market_caps", [])
-            volumes = data.get("total_volumes", [])
-
-            # Build lookup by date for mcap and volume
-            mcap_by_date = {}
-            for ts_ms, val in mcaps:
-                d = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).date()
-                mcap_by_date[d] = val
-
-            vol_by_date = {}
-            for ts_ms, val in volumes:
-                d = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).date()
-                vol_by_date[d] = val
-
-            chunk_inserted = 0
-            for ts_ms, price in prices:
-                ts = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
-                d = ts.date()
-                mcap = mcap_by_date.get(d)
-                vol = vol_by_date.get(d)
-
-                try:
-                    execute(
-                        """
-                        INSERT INTO historical_prices
-                            (coingecko_id, "timestamp", price, market_cap, volume_24h)
-                        SELECT %s, %s, %s, %s, %s
-                        WHERE NOT EXISTS (
-                            SELECT 1 FROM historical_prices
-                            WHERE coingecko_id = %s
-                              AND "timestamp"::date = %s::date
-                        )
-                        """,
-                        (coingecko_id, ts, price, mcap, vol, coingecko_id, ts),
-                    )
-                    chunk_inserted += 1
-                except Exception:
-                    pass  # skip duplicates silently
-
+            chunk_inserted = _store_chunk(coingecko_id, data)
             total_inserted += chunk_inserted
             logger.info(
                 f"  {coingecko_id}: {chunk_start.date()} to {chunk_end.date()} "
@@ -153,18 +129,14 @@ async def backfill_coin(
             )
 
             chunk_start = chunk_end
-            time.sleep(2)  # rate limit
+            time.sleep(2)
 
     logger.info(f"Backfilled {coingecko_id}: {from_date} to {to_date}, {total_inserted} records")
     return total_inserted
 
 
-async def backfill_all(from_date: str = "2020-01-01", to_date: str = None) -> dict:
-    """Backfill all scored stablecoins from the registry.
-
-    Returns:
-        {"coins": {coingecko_id: records_inserted}, "total": N}
-    """
+def backfill_all_sync(from_date: str = "2020-01-01", to_date: str = None) -> dict:
+    """Backfill all scored stablecoins. Synchronous — safe for background tasks."""
     results = {}
     total = 0
 
@@ -174,11 +146,10 @@ async def backfill_all(from_date: str = "2020-01-01", to_date: str = None) -> di
             continue
 
         logger.info(f"Backfilling {cfg['symbol']} ({gecko_id})...")
-        count = await backfill_coin(gecko_id, from_date, to_date)
+        count = backfill_coin_sync(gecko_id, from_date, to_date)
         results[gecko_id] = count
         total += count
 
-    # Also backfill any promoted stablecoins from DB
     try:
         promoted = fetch_all(
             "SELECT coingecko_id FROM stablecoins WHERE scoring_enabled = TRUE AND coingecko_id IS NOT NULL"
@@ -187,7 +158,7 @@ async def backfill_all(from_date: str = "2020-01-01", to_date: str = None) -> di
             gecko_id = row["coingecko_id"]
             if gecko_id not in results:
                 logger.info(f"Backfilling promoted coin {gecko_id}...")
-                count = await backfill_coin(gecko_id, from_date, to_date)
+                count = backfill_coin_sync(gecko_id, from_date, to_date)
                 results[gecko_id] = count
                 total += count
     except Exception as e:
@@ -195,3 +166,11 @@ async def backfill_all(from_date: str = "2020-01-01", to_date: str = None) -> di
 
     logger.info(f"Backfill complete: {len(results)} coins, {total} total records")
     return {"coins": results, "total": total}
+
+
+# Async wrappers for backward compatibility
+async def backfill_coin(coingecko_id: str, from_date: str = "2020-01-01", to_date: str = None) -> int:
+    return backfill_coin_sync(coingecko_id, from_date, to_date)
+
+async def backfill_all(from_date: str = "2020-01-01", to_date: str = None) -> dict:
+    return backfill_all_sync(from_date, to_date)
