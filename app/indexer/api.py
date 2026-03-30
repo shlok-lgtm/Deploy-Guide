@@ -554,13 +554,14 @@ def register_wallet_routes(app: FastAPI) -> None:
 
     @app.get("/api/graph/stats")
     async def graph_stats():
-        """Edge graph statistics and build progress."""
+        """Edge graph statistics, build progress, and coverage metrics."""
         edge_stats = fetch_one(
             """
             SELECT
                 COUNT(*) AS total_edges,
                 COALESCE(SUM(total_value_usd), 0) AS total_value,
                 COALESCE(AVG(weight), 0) AS avg_weight,
+                MIN(last_transfer_at) AS oldest_edge,
                 MAX(last_transfer_at) AS newest_edge
             FROM wallet_graph.wallet_edges
             """
@@ -573,7 +574,8 @@ def register_wallet_routes(app: FastAPI) -> None:
             FROM wallet_graph.edge_build_status
             """
         )
-        wallets_total = fetch_one("SELECT COUNT(*) AS cnt FROM wallet_graph.wallets")
+        wallets_total_row = fetch_one("SELECT COUNT(*) AS cnt FROM wallet_graph.wallets")
+        wallets_total = wallets_total_row["cnt"] if wallets_total_row else 0
 
         # Per-chain breakdown
         chain_rows = fetch_all(
@@ -584,18 +586,70 @@ def register_wallet_routes(app: FastAPI) -> None:
         )
         by_chain = {r["chain"]: {"edges": r["cnt"], "value": float(r["value"])} for r in chain_rows}
 
+        # Coverage metrics
+        wallets_with_edges_row = fetch_one(
+            """
+            SELECT COUNT(DISTINCT addr) AS cnt FROM (
+                SELECT from_address AS addr FROM wallet_graph.wallet_edges
+                UNION SELECT to_address FROM wallet_graph.wallet_edges
+            ) sub
+            """
+        )
+        wallets_with_edges = wallets_with_edges_row["cnt"] if wallets_with_edges_row else 0
+        total_edges = edge_stats["total_edges"] if edge_stats else 0
+        coverage_pct = round(wallets_with_edges / wallets_total * 100, 2) if wallets_total > 0 else 0
+        avg_connections = round(total_edges / wallets_with_edges, 2) if wallets_with_edges > 0 else 0
+
+        # Recent activity
+        recent_row = fetch_one(
+            "SELECT COUNT(*) AS cnt FROM wallet_graph.wallet_edges WHERE last_transfer_at > NOW() - INTERVAL '24 hours'"
+        )
+        edges_last_24h = recent_row["cnt"] if recent_row else 0
+
+        # Archive count
+        try:
+            archive_row = fetch_one("SELECT COUNT(*) AS cnt FROM wallet_graph.wallet_edges_archive")
+            archived = archive_row["cnt"] if archive_row else 0
+        except Exception:
+            archived = 0
+
+        # Profile stats
+        try:
+            profile_row = fetch_one("SELECT COUNT(*) AS cnt FROM wallet_graph.wallet_profiles")
+            profiles_total = profile_row["cnt"] if profile_row else 0
+            multi_row = fetch_one(
+                "SELECT COUNT(*) AS cnt FROM wallet_graph.wallet_profiles WHERE jsonb_array_length(chains_active) > 1"
+            )
+            multi_chain = multi_row["cnt"] if multi_row else 0
+        except Exception:
+            profiles_total = 0
+            multi_chain = 0
+
         return {
             "edges": {
-                "total": edge_stats["total_edges"] if edge_stats else 0,
+                "total": total_edges,
                 "total_value_transferred": float(edge_stats["total_value"]) if edge_stats else 0,
                 "avg_weight": round(float(edge_stats["avg_weight"]), 4) if edge_stats else 0,
+                "oldest_edge": edge_stats["oldest_edge"].isoformat() if edge_stats and edge_stats.get("oldest_edge") else None,
                 "newest_edge": edge_stats["newest_edge"].isoformat() if edge_stats and edge_stats.get("newest_edge") else None,
+                "edges_last_24h": edges_last_24h,
                 "by_chain": by_chain,
+                "archived_edges": archived,
+            },
+            "coverage": {
+                "total_wallets": wallets_total,
+                "wallets_with_edges": wallets_with_edges,
+                "coverage_pct": coverage_pct,
+                "avg_connections_per_wallet": avg_connections,
+            },
+            "profiles": {
+                "unified_profiles": profiles_total,
+                "multi_chain_wallets": multi_chain,
             },
             "build_progress": {
                 "wallets_built": build_stats["built"] if build_stats else 0,
                 "wallets_pending": build_stats["pending"] if build_stats else 0,
-                "wallets_total": wallets_total["cnt"] if wallets_total else 0,
+                "wallets_total": wallets_total,
             },
         }
 

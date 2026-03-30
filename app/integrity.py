@@ -187,6 +187,56 @@ def _edges_exist_if_wallets():
     return None
 
 
+def _edges_coverage():
+    """Check that at least 5% of wallets have edges (once edges exist)."""
+    try:
+        edges = fetch_one("SELECT COUNT(*) AS cnt FROM wallet_graph.wallet_edges")
+        if not edges or edges["cnt"] == 0:
+            return None  # no edges yet — covered by _edges_exist_if_wallets
+
+        wallets_with = fetch_one("""
+            SELECT COUNT(DISTINCT addr) AS cnt FROM (
+                SELECT from_address AS addr FROM wallet_graph.wallet_edges
+                UNION SELECT to_address FROM wallet_graph.wallet_edges
+            ) sub
+        """)
+        wallets_total = fetch_one("SELECT COUNT(*) AS cnt FROM wallet_graph.wallets")
+        w_with = wallets_with["cnt"] if wallets_with else 0
+        w_total = wallets_total["cnt"] if wallets_total else 0
+
+        if w_total > 0:
+            pct = w_with / w_total * 100
+            if pct < 5:
+                return {
+                    "rule": "low_edge_coverage", "field": "coverage_pct",
+                    "value": round(pct, 2), "level": "warning",
+                    "message": f"Only {pct:.1f}% of wallets have edges ({w_with}/{w_total})",
+                }
+    except Exception as e:
+        return {"rule": "low_edge_coverage", "field": "coverage_pct", "value": None, "level": "warning", "message": f"check failed: {e}"}
+    return None
+
+
+def _edges_stuck_builds():
+    """Check for wallets stuck in 'building' status for > 1 hour."""
+    try:
+        row = fetch_one("""
+            SELECT COUNT(*) AS cnt FROM wallet_graph.edge_build_status
+            WHERE status NOT IN ('complete', 'pending')
+              AND last_built_at < NOW() - INTERVAL '1 hour'
+        """)
+        cnt = row["cnt"] if row else 0
+        if cnt > 0:
+            return {
+                "rule": "stuck_edge_builds", "field": "build_status",
+                "value": cnt, "level": "warning",
+                "message": f"{cnt} wallet(s) stuck in edge building for >1 hour",
+            }
+    except Exception as e:
+        return {"rule": "stuck_edge_builds", "field": "build_status", "value": None, "level": "warning", "message": f"check failed: {e}"}
+    return None
+
+
 def _pulse_summary_coherence():
     """Validate the latest pulse summary JSON."""
     try:
@@ -263,7 +313,7 @@ DOMAINS = {
     "edges": {
         "freshness_query": "SELECT COUNT(*) AS cnt, MAX(created_at) AS latest FROM wallet_graph.wallet_edges",
         "max_age_hours": 48,
-        "coherence_rules": [_edges_exist_if_wallets],
+        "coherence_rules": [_edges_exist_if_wallets, _edges_coverage, _edges_stuck_builds],
     },
     "pulse": {
         "freshness_query": "SELECT COUNT(*) AS cnt, MAX(created_at) AS latest FROM daily_pulses",

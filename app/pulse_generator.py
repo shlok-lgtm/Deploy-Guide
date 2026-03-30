@@ -26,6 +26,32 @@ def _default_serializer(obj):
     return str(obj)
 
 
+def _safe_count(sql: str) -> int:
+    """Run a COUNT query, return 0 on any error."""
+    try:
+        row = fetch_one(sql)
+        return row["count"] if row else 0
+    except Exception:
+        return 0
+
+
+def _safe_edge_coverage() -> float:
+    """Compute edge coverage percentage. Returns 0 on error."""
+    try:
+        wallets_with = fetch_one("""
+            SELECT COUNT(DISTINCT addr) AS count FROM (
+                SELECT from_address AS addr FROM wallet_graph.wallet_edges
+                UNION SELECT to_address FROM wallet_graph.wallet_edges
+            ) sub
+        """)
+        wallets_total = fetch_one("SELECT COUNT(*) AS count FROM wallet_graph.wallets")
+        w_with = wallets_with["count"] if wallets_with else 0
+        w_total = wallets_total["count"] if wallets_total else 0
+        return round(w_with / w_total * 100, 2) if w_total > 0 else 0
+    except Exception:
+        return 0
+
+
 def run_daily_pulse():
     """Generate today's daily pulse. Idempotent — safe to call multiple times."""
 
@@ -168,6 +194,8 @@ def run_daily_pulse():
             "avg_risk_score": round(float(wallet_stats.get("avg_risk_score", 0)), 2) if wallet_stats and wallet_stats.get("avg_risk_score") else 0,
             "stablecoins_scored": len(scores_list),
             "protocols_scored": len(psi_summary),
+            "edge_count": _safe_count("SELECT COUNT(*) AS count FROM wallet_graph.wallet_edges"),
+            "edge_coverage_pct": _safe_edge_coverage(),
         },
         "events_24h": event_counts,
         "notable_events": notable_events,
