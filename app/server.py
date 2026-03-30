@@ -186,7 +186,8 @@ def _seed_cda_issuer_registry():
                      collection_method, asset_category, disclosure_type)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (asset_symbol) DO UPDATE SET
-                    disclosure_type = EXCLUDED.disclosure_type
+                    disclosure_type = EXCLUDED.disclosure_type,
+                    asset_category = EXCLUDED.asset_category
                 """,
                 (cfg["symbol"], cfg.get("issuer", "Unknown"), cfg.get("coingecko_id"),
                  url, method, category, disc_type),
