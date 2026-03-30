@@ -42,7 +42,8 @@
       "Bash(kill 10458)",
       "Bash(head -c 200 /home/runner/workspace/frontend/dist/assets/*.js)",
       "Bash(git -C /home/runner/workspace log --oneline -5 -- frontend/dist/assets/index-BptLoetl.js)",
-      "Bash(git ls-tree:*)"
+      "Bash(git ls-tree:*)",
+      "Bash(find /home/runner/workspace -name *mcp* -type f)"
     ]
   }
 }
