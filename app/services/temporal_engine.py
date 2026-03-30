@@ -96,11 +96,14 @@ def _reconstruct_from_prices(
     """Build synthetic component readings from historical price data."""
     series = _get_price_series(coingecko_id, target, lookback_days=30)
     if not series:
+        logger.warning(f"  No price series for {coingecko_id} at {target}")
         return []
 
     prices = [p["price"] for p in series if p["price"] is not None]
     if not prices:
+        logger.warning(f"  Price series empty (all null) for {coingecko_id} at {target}")
         return []
+    logger.info(f"  Price series: {len(series)} points, {len(prices)} with prices")
 
     # Find the target date's data point (or closest)
     target_data = None
@@ -268,11 +271,12 @@ def reconstruct_score_sync(
     if formula_version is None:
         formula_version = FORMULA_VERSION
 
-    # 1. Check cache
+    # 1. Check cache (skip zero-coverage entries — those were cached before data existed)
     cached = fetch_one(
         """
         SELECT * FROM temporal_reconstructions
         WHERE stablecoin_id = %s AND target_date = %s AND formula_version = %s
+          AND components_available > 0
         """,
         (stablecoin_id, target_date.isoformat(), formula_version),
     )
@@ -281,6 +285,7 @@ def reconstruct_score_sync(
 
     # 2. Resolve CoinGecko ID
     coingecko_id = _get_coingecko_id(stablecoin_id)
+    logger.info(f"Reconstruct {stablecoin_id} @ {target_date}: coingecko_id={coingecko_id}")
 
     # 3. Assemble components from all sources
     all_components = {}  # component_id -> reading dict
@@ -289,13 +294,17 @@ def reconstruct_score_sync(
     live = _get_live_readings(stablecoin_id, target_date)
     for comp in live:
         all_components[comp["component_id"]] = comp
+    logger.info(f"  Live readings: {len(live)}")
 
     # 3b. Reconstructed from historical prices
     if coingecko_id:
         reconstructed = _reconstruct_from_prices(coingecko_id, target_date, stablecoin_id)
+        logger.info(f"  Reconstructed from prices: {len(reconstructed)}")
         for comp in reconstructed:
             if comp["component_id"] not in all_components:
                 all_components[comp["component_id"]] = comp
+    else:
+        logger.warning(f"  No coingecko_id for {stablecoin_id} — skipping price reconstruction")
 
     # 3c. Carry-forward for semi-static components
     for comp_id, spec in COMPONENT_NORMALIZATIONS.items():
