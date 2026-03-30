@@ -1166,7 +1166,8 @@ def run_psi_scoring():
                     grade = EXCLUDED.grade,
                     category_scores = EXCLUDED.category_scores,
                     component_scores = EXCLUDED.component_scores,
-                    raw_values = EXCLUDED.raw_values
+                    raw_values = EXCLUDED.raw_values,
+                    computed_at = NOW()
             """, (
                 result["protocol_slug"],
                 result["protocol_name"],

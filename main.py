@@ -331,6 +331,46 @@ def run_migrations():
         else:
             logger.warning(f"Migration file not found: {migration_path}")
 
+    # Auto-apply remaining SQL migrations (015+) not yet recorded
+    import glob as _glob
+    import re as _re
+
+    migrations_dir = os.path.join(os.path.dirname(__file__), "migrations")
+    sql_files = sorted(_glob.glob(os.path.join(migrations_dir, "*.sql")))
+
+    for sql_path in sql_files:
+        basename = os.path.basename(sql_path)
+        # Extract migration name: "021_wallet_edges.sql" -> "021_wallet_edges"
+        name = basename.replace(".sql", "")
+
+        # Skip migrations already handled above (001-014)
+        match = _re.match(r"^(\d+)", name)
+        if match and int(match.group(1)) <= 14:
+            continue
+
+        try:
+            already = fetch_one("SELECT 1 FROM migrations WHERE name = %s", (name,))
+            if already:
+                continue
+        except Exception:
+            pass
+
+        logger.info(f"Applying migration: {name}...")
+        success = run_migration(sql_path)
+        if success:
+            # Ensure migration is recorded (some SQL files include their own INSERT)
+            try:
+                from app.database import execute as _exec
+                _exec(
+                    "INSERT INTO migrations (name) VALUES (%s) ON CONFLICT DO NOTHING",
+                    (name,),
+                )
+            except Exception:
+                pass
+            logger.info(f"Migration {name} applied ✓")
+        else:
+            logger.error(f"Failed to apply migration {name}")
+
 
 def main():
     # 1. Initialize database

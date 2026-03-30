@@ -347,6 +347,7 @@ def run_agent_cycle():
         logger.error(f"Depeg detection failed: {e}")
 
     # 5. Daily cycle: assess top wallets
+    daily_ran = None
     try:
         now_utc = datetime.now(timezone.utc)
         # Check if daily cycle has already run today
@@ -382,6 +383,21 @@ def run_agent_cycle():
                 logger.info("Daily pulse generated successfully")
         except Exception as e:
             logger.error(f"Pulse generation failed: {e}")
+
+    # Heartbeat: ensure events freshness is tracked even when no triggers fire
+    if total_processed == 0:
+        try:
+            from app.agent.store import store_assessment
+            heartbeat = {
+                "wallet_address": "0x0000000000000000000000000000000000000000",
+                "trigger_type": "heartbeat",
+                "severity": "silent",
+                "broadcast": False,
+                "trigger_detail": {"cycle_assessments": 0},
+            }
+            store_assessment(heartbeat)
+        except Exception as e:
+            logger.debug(f"Heartbeat store failed: {e}")
 
     # Summary
     severities = {}
