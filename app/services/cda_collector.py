@@ -906,21 +906,25 @@ async def _collect_dashboard(symbol: str, url: str, disc_type: str, prefix: str)
     logger.info(f"{prefix} — dashboard collection: {url[:80]}")
 
     try:
-        # Step 1: Try Firecrawl JSON extraction with type-specific schema
+        # Step 1: Scrape page for markdown content
+        result = firecrawl_client.scrape_js_page(url, wait_ms=15000)
+        markdown = getattr(result, "markdown", "") or ""
+        logger.info(f"{prefix} — dashboard: {len(markdown)} chars markdown")
+
+        # Step 2: Try Firecrawl extract for structured data
         from app.services.reducto_client import get_schema_for_type
         schema, system_prompt = get_schema_for_type(disc_type)
 
         client = firecrawl_client.get_client()
-        extract_result = client.scrape(
-            url,
-            formats=["extract", "markdown"],
-            extract={"schema": schema},
-            actions=[{"type": "wait", "milliseconds": 15000}],
+        extract_result = client.extract(
+            urls=[url],
+            schema=schema,
+            system_prompt=system_prompt,
+            prompt=f"Extract all backing/reserve data from this transparency dashboard for {symbol}",
         )
 
-        markdown = getattr(extract_result, "markdown", "") or ""
-        extract_data = getattr(extract_result, "extract", None)
-        logger.info(f"{prefix} — dashboard: {len(markdown)} chars markdown, extract={'yes' if extract_data else 'no'}")
+        extract_data = extract_result.get("data") if isinstance(extract_result, dict) else getattr(extract_result, "data", None)
+        logger.info(f"{prefix} — dashboard extract: {'yes' if extract_data else 'no'}")
 
         if isinstance(extract_data, dict) and any(
             v for v in extract_data.values() if v is not None and v != "" and v != 0
