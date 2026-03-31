@@ -222,6 +222,7 @@ def _seed_cda_issuer_registry():
     logger.info(f"CDA issuer registry seeded ({seeded} upserts attempted)")
 
     # Populate source_urls for issuers that have transparency_url but no source_urls
+    # (skips issuers that already have source_urls set, e.g. from SOURCE_URLS_MAP)
     try:
         issuers_needing_sources = fetch_all(
             """
@@ -233,6 +234,7 @@ def _seed_cda_issuer_registry():
             """
         )
         import json as _j
+        populated = 0
         for iss in issuers_needing_sources:
             sources = []
             t_url = iss.get("transparency_url")
@@ -248,11 +250,15 @@ def _seed_cda_issuer_registry():
                 sources.append({"url": a_url, "type": "attestation_page", "description": "Attestation reports"})
 
             if sources:
+                # Only set if still NULL (double-check to avoid race with SOURCE_URLS_MAP seed)
                 execute(
-                    "UPDATE cda_issuer_registry SET source_urls = %s WHERE asset_symbol = %s",
+                    """UPDATE cda_issuer_registry SET source_urls = %s
+                       WHERE asset_symbol = %s AND (source_urls IS NULL OR source_urls = '[]'::jsonb)""",
                     (_j.dumps(sources), iss["asset_symbol"]),
                 )
-        logger.info(f"CDA: Populated source_urls for {len(issuers_needing_sources)} issuers")
+                populated += 1
+        if populated:
+            logger.info(f"CDA: Populated source_urls for {populated} issuers")
     except Exception as e:
         logger.warning(f"CDA source_urls population failed: {e}")
 
