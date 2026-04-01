@@ -109,7 +109,7 @@ function Flash({ flash }) {
 
 function useFlash() {
   const [flash, setFlash] = useState(null);
-  const showFlash = (msg, ok = true) => { setFlash({ msg, ok }); setTimeout(() => setFlash(null), 3000); };
+  const showFlash = (msg, ok = true) => { setFlash({ msg, ok }); setTimeout(() => setFlash(null), 5000); };
   return [flash, showFlash];
 }
 
@@ -126,8 +126,8 @@ function contentStatusDot(c) {
   return { color: "#f39c12", label: "needs analysis" };
 }
 
-function ContentItem({ item, onDecide, onAnalyze, busy }) {
-  const [open, setOpen] = useState(false);
+function ContentItem({ item, onDecide, onAnalyze, busy, defaultOpen }) {
+  const [open, setOpen] = useState(!!defaultOpen);
   const c = item;
   const status = contentStatusDot(c);
   const icon = SOURCE_ICONS[c.source_type] || SOURCE_ICONS.default;
@@ -171,6 +171,17 @@ function ContentItem({ item, onDecide, onAnalyze, busy }) {
               </a>
             </div>
           )}
+
+          {/* Content text / tweet body */}
+          {c.content && c.content !== c.source_url && c.content !== c.title ? (
+            <div style={{ marginBottom: 6, color: T.inkMid, lineHeight: 1.4 }}>
+              {c.content.length > 300 ? c.content.substring(0, 300) + "..." : c.content}
+            </div>
+          ) : c.source_type === "tweet" ? (
+            <div style={{ marginBottom: 6, color: T.inkFaint, fontSize: 10, fontStyle: "italic" }}>
+              Content not extracted — only URL stored.
+            </div>
+          ) : null}
 
           {/* Analyzed content */}
           {c.analyzed ? (
@@ -317,7 +328,7 @@ function TargetRow({ target, onUpdate }) {
 
   const showFlash = (msg, ok = true) => {
     setFlash({ msg, ok });
-    setTimeout(() => setFlash(null), 3000);
+    setTimeout(() => setFlash(null), 5000);
   };
 
   const loadDetail = async () => {
@@ -352,14 +363,21 @@ function TargetRow({ target, onUpdate }) {
     setBusy(null);
   };
 
+  const [exposureReport, setExposureReport] = useState(null);
+
   const handleExposure = async () => {
     setBusy("exposure");
     try {
       const res = await opsFetch("/api/ops/exposure/generate", {
         method: "POST", body: JSON.stringify({ target_id: t.id }),
       });
-      showFlash(`Exposure report: weighted SII ${res.data?.weighted_sii || "N/A"}`);
-      loadDetail();
+      if (res.status === "error") {
+        showFlash(res.detail || "Exposure generation failed", false);
+      } else {
+        setExposureReport(res);
+        showFlash(`Exposure report generated — weighted SII ${res.data?.weighted_sii || "N/A"}`);
+        loadDetail();
+      }
     } catch (e) { showFlash(e.message, false); }
     setBusy(null);
   };
@@ -432,29 +450,38 @@ function TargetRow({ target, onUpdate }) {
     setBusy(null);
   };
 
+  const [autoExpandId, setAutoExpandId] = useState(null);
+
   const handleAnalyzeContent = async (contentId) => {
     setBusy(`analyze-${contentId}`);
     try {
       await opsFetch(`/api/ops/analyze/${contentId}`, { method: "POST" });
-      showFlash("Analysis complete");
-      loadDetail();
+      showFlash("Analysis complete — expand to see results");
+      setAutoExpandId(contentId);
+      await loadDetail();
     } catch (e) { showFlash(e.message, false); }
     setBusy(null);
   };
+
+  const [analyzeProgress, setAnalyzeProgress] = useState(null);
 
   const handleAnalyzeAll = async () => {
     const unanalyzed = content.filter((c) => !c.analyzed);
     if (unanalyzed.length === 0) return;
     setBusy("analyze-all");
     let done = 0;
+    const total = unanalyzed.length;
+    setAnalyzeProgress(`0/${total}`);
     for (const c of unanalyzed) {
       try {
         await opsFetch(`/api/ops/analyze/${c.id}`, { method: "POST" });
         done++;
+        setAnalyzeProgress(`${done}/${total}`);
       } catch (_) {}
     }
-    showFlash(`Analyzed ${done}/${unanalyzed.length} items`);
-    loadDetail();
+    setAnalyzeProgress(null);
+    showFlash(`Analyzed ${done}/${total} items`);
+    await loadDetail();
     setBusy(null);
   };
 
@@ -477,7 +504,12 @@ function TargetRow({ target, onUpdate }) {
         <div style={{ flex: 1, fontFamily: T.mono, fontWeight: 500 }}>{t.name}</div>
         <StageBadge stage={t.pipeline_stage} />
         {t.track && <span style={{ fontSize: 10, color: T.inkFaint }}>{t.track}</span>}
-        <div style={{ fontSize: 10, color: T.inkFaint, minWidth: 80, textAlign: "right" }}>
+        {t.last_action_at && (
+          <span style={{ fontSize: 9, color: T.inkFaint, fontFamily: T.mono }}>
+            {new Date(t.last_action_at).toLocaleDateString()}
+          </span>
+        )}
+        <div style={{ fontSize: 10, color: t.next_action ? T.inkMid : T.inkFaint, minWidth: 80, textAlign: "right" }}>
           {t.next_action || "—"}
         </div>
       </div>
@@ -685,14 +717,14 @@ function TargetRow({ target, onUpdate }) {
                 {content.filter((c) => !c.analyzed).length > 0 && (
                   <button onClick={handleAnalyzeAll} disabled={!!busy}
                     style={btn({ fontSize: 9, background: "#f39c1222", opacity: busy === "analyze-all" ? 0.5 : 1 })}>
-                    {busy === "analyze-all" ? "Analyzing..." : `Analyze All (${content.filter((c) => !c.analyzed).length})`}
+                    {busy === "analyze-all" ? `Analyzing ${analyzeProgress || ""}...` : `Analyze All (${content.filter((c) => !c.analyzed).length})`}
                   </button>
                 )}
               </div>
               <div>
                 {content.map((c) => (
                   <ContentItem key={c.id} item={c} onDecide={handleDecideContent}
-                    onAnalyze={handleAnalyzeContent} busy={busy} />
+                    onAnalyze={handleAnalyzeContent} busy={busy} defaultOpen={autoExpandId === c.id} />
                 ))}
               </div>
             </div>
@@ -719,12 +751,30 @@ function TargetRow({ target, onUpdate }) {
           )}
 
           {/* ── Latest exposure report ── */}
-          {exposure && (
+          {(exposure || exposureReport) && (
             <div style={{ marginBottom: 8 }}>
               <Lbl>Latest Exposure Report</Lbl>
-              <pre style={{ fontSize: 10, fontFamily: T.mono, whiteSpace: "pre-wrap", background: T.paperWarm, padding: 8, marginTop: 3, border: `1px solid ${T.ruleLight}` }}>
-                {exposure.report_markdown}
-              </pre>
+              {exposureReport && exposureReport.data && (
+                <div style={{ fontSize: 11, fontFamily: T.mono, marginTop: 3, padding: 8, background: T.paperWarm, border: `1px solid ${T.ruleLight}` }}>
+                  <div style={{ marginBottom: 4 }}><strong>Weighted SII:</strong> {exposureReport.data.weighted_sii}</div>
+                  {exposureReport.data.holdings && exposureReport.data.holdings.length > 0 && (
+                    <div style={{ fontSize: 10 }}>
+                      {exposureReport.data.holdings.map((h, i) => (
+                        <div key={i} style={{ display: "flex", gap: 8, padding: "1px 0" }}>
+                          <span style={{ minWidth: 60 }}>{h.token_symbol}</span>
+                          <span>${Number(h.balance_usd || 0).toLocaleString()}</span>
+                          <span style={{ color: T.inkFaint }}>SII: {h.sii_score || "N/A"}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              {exposure && exposure.report_markdown && (
+                <pre style={{ fontSize: 10, fontFamily: T.mono, whiteSpace: "pre-wrap", background: T.paperWarm, padding: 8, marginTop: 3, border: `1px solid ${T.ruleLight}` }}>
+                  {exposure.report_markdown}
+                </pre>
+              )}
             </div>
           )}
 
@@ -772,7 +822,7 @@ function InvestorRow({ investor, onUpdate }) {
 
   const showFlash = (msg, ok = true) => {
     setFlash({ msg, ok });
-    setTimeout(() => setFlash(null), 3000);
+    setTimeout(() => setFlash(null), 5000);
   };
 
   const loadDetail = async () => {
@@ -1036,6 +1086,8 @@ function DiscoveryPanel() {
   const [loading, setLoading] = useState(false);
   const [flash, showFlash] = useFlash();
 
+  useEffect(() => { scan(); }, []);
+
   const scan = async () => {
     setLoading(true);
     try {
@@ -1097,13 +1149,13 @@ function MilestonesPanel() {
     try {
       const res = await opsFetch("/api/ops/milestones");
       setData(res);
-      const st = res?.seed_triggers;
-      showFlash(st ? `${st.met}/${st.total} seed triggers met` : "Milestones loaded");
     } catch (e) {
       showFlash(e.message, false);
     }
     setLoading(false);
   };
+
+  useEffect(() => { check(); }, []);
 
   const st = data?.seed_triggers;
   const ks = data?.kill_signals;
@@ -1117,7 +1169,8 @@ function MilestonesPanel() {
     }>
       <Flash flash={flash} />
       <div style={{ padding: "0 10px" }}>
-        {!data && <div style={{ color: T.inkFaint, fontSize: 12 }}>Click "Check" to compute milestones from live data.</div>}
+        {!data && loading && <div style={{ color: T.inkFaint, fontSize: 12 }}>Loading milestones...</div>}
+        {!data && !loading && <div style={{ color: T.inkFaint, fontSize: 12 }}>Click "Refresh" to compute milestones from live data.</div>}
         {st && (
           <div style={{ marginBottom: 10 }}>
             <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 4 }}>
@@ -1176,25 +1229,34 @@ function AnalyticsPanel() {
     try {
       const res = await opsFetch("/api/ops/analytics");
       setData(res);
-      showFlash(`Analytics computed — ${res?.engagement?.total_engagements || 0} engagements, ${res?.pipeline?.active_targets || 0} active targets`);
     } catch (e) { showFlash(e.message, false); }
     setLoading(false);
   };
+
+  useEffect(() => { load(); }, []);
 
   const eng = data?.engagement;
   const pipe = data?.pipeline;
   const cont = data?.content;
   const api = data?.api_usage;
+  const isEmpty = eng && eng.total_engagements === 0 && pipe && pipe.active_targets === 0 && cont && cont.total_content === 0;
 
   return (
     <Section title="ANALYTICS" actions={
       <button onClick={load} disabled={loading} style={{ fontSize: 9, fontFamily: T.mono, padding: "2px 6px", border: `1px solid ${T.paper}44`, background: "transparent", color: T.paper, cursor: "pointer", opacity: loading ? 0.5 : 1 }}>
-        {loading ? "Computing..." : "Compute"}
+        {loading ? "Computing..." : "Refresh"}
       </button>
     }>
       <Flash flash={flash} />
       <div style={{ padding: "0 10px" }}>
-        {!data && <div style={{ color: T.inkFaint, fontSize: 12 }}>Click "Compute" to generate analytics.</div>}
+        {!data && loading && <div style={{ color: T.inkFaint, fontSize: 12 }}>Loading analytics...</div>}
+        {!data && !loading && <div style={{ color: T.inkFaint, fontSize: 12 }}>Click "Refresh" to generate analytics.</div>}
+        {isEmpty && (
+          <div style={{ color: T.inkFaint, fontSize: 12, lineHeight: 1.6, padding: "8px 0" }}>
+            No engagement data yet. Analytics will populate as you log engagements and post content.
+            Use the Targets tab to log engagement, scrape content, and move targets through the pipeline.
+          </div>
+        )}
         {eng && (
           <div style={{ marginBottom: 12 }}>
             <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 4 }}>Engagement</div>
@@ -1269,6 +1331,8 @@ function NewsPanel() {
   const [loading, setLoading] = useState(false);
   const [flash, showFlash] = useFlash();
   const [showAll, setShowAll] = useState(false);
+
+  useEffect(() => { loadFeed(); }, []);
 
   const scan = async () => {
     setLoading(true);
@@ -1413,6 +1477,8 @@ function TwitterPanel() {
   const [drafts, setDrafts] = useState({});
   const [decidingId, setDecidingId] = useState(null);
 
+  useEffect(() => { loadFeed(); }, []);
+
   const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
   const allTweets = tweets || [];
 
@@ -1511,9 +1577,14 @@ function TwitterPanel() {
                   cursor: "pointer", textDecoration: "underline dotted", textUnderlineOffset: 2 }}
                   title="View in Target Tracker">{tw.target_name}</span>
                 <a href={tw.source_url} target="_blank" rel="noopener noreferrer"
-                  style={{ flex: 1, color: T.inkMid, textDecoration: "none", borderBottom: `1px solid ${T.ruleLight}` }}>
-                  {tw.title || tw.content?.substring(0, 120) || tw.source_url}
+                  style={{ color: T.inkMid, textDecoration: "none", borderBottom: `1px solid ${T.ruleLight}`, fontSize: 10, flexShrink: 0 }}>
+                  link
                 </a>
+                <span style={{ flex: 1, color: T.inkMid }}>
+                  {tw.content && tw.content !== tw.source_url && tw.content !== tw.title
+                    ? (tw.content.length > 140 ? tw.content.substring(0, 140) + "..." : tw.content)
+                    : tw.title || tw.source_url}
+                </span>
                 {highlighted && !draft && !tw.founder_decision && (
                   <button onClick={() => handleDraftReply(tw)} disabled={!!draftingId}
                     style={btn({ background: "#3498db18", fontSize: 9, opacity: draftingId ? 0.5 : 1 })}>
@@ -1527,6 +1598,11 @@ function TwitterPanel() {
                   {tw.scraped_at ? new Date(tw.scraped_at).toLocaleDateString() : ""}
                 </span>
               </div>
+              {tw.content_summary && !draft && (
+                <div style={{ fontSize: 10, color: T.inkLight, marginTop: 2, marginLeft: 28 }}>
+                  {tw.content_summary}
+                </div>
+              )}
               {tw.bridge_found && !draft && (
                 <div style={{ fontSize: 9, color: "#27ae60", fontFamily: T.mono, marginTop: 2, marginLeft: 28 }}>
                   BRIDGE: {tw.bridge_text?.substring(0, 100)}
@@ -1571,6 +1647,8 @@ function GovernancePanel({ targets }) {
   // Build tier lookup from targets prop
   const tierByName = {};
   (targets || []).forEach((t) => { tierByName[t.name] = t.tier; });
+
+  useEffect(() => { loadFeed(); }, []);
 
   const isActive = (p) => {
     const s = (p.state || "").toLowerCase();
@@ -1735,9 +1813,11 @@ function InvestorContentPanel() {
   const [signals, setSignals] = useState(null);
   const [loading, setLoading] = useState(false);
   const [flash, showFlash] = useFlash();
-  const [showAll, setShowAll] = useState(false);
+  const [showAll, setShowAll] = useState(true);
   const [draftingId, setDraftingId] = useState(null);
   const [drafts, setDrafts] = useState({});
+
+  useEffect(() => { loadFeed(); }, []);
 
   const allContent = content || [];
   const filtered = allContent.filter((c) =>
@@ -1993,13 +2073,20 @@ export default function OpsDashboard() {
   const handleRunHealthCheck = async () => {
     setBusy("health");
     try {
-      const result = await opsFetch("/api/ops/health/check", { method: "POST" });
-      const checks = result.checks || [];
-      setHealth(checks);
-      const healthy = checks.filter((c) => c.status === "healthy").length;
-      showFlash(`Health check complete — ${healthy}/${checks.length} healthy`);
-    } catch (e) { showFlash(e.message, false); }
-    setBusy(null);
+      await opsFetch("/api/ops/health/check", { method: "POST" });
+      showFlash("Health check started — refreshing in 8s...");
+      // Health check runs in background, poll after delay
+      setTimeout(async () => {
+        try {
+          const res = await opsFetch("/api/ops/health");
+          const checks = res.health || [];
+          setHealth(checks);
+          const healthy = checks.filter((c) => c.status === "healthy").length;
+          showFlash(`Health check complete — ${healthy}/${checks.length} healthy`);
+        } catch (_) {}
+        setBusy(null);
+      }, 8000);
+    } catch (e) { showFlash(e.message, false); setBusy(null); }
   };
 
   const handleSeed = async () => {
@@ -2150,7 +2237,11 @@ export default function OpsDashboard() {
             <Section title="CONTENT ITEMS">
               <div style={{ padding: "0 10px" }}>
                 {contentItems.length === 0 ? (
-                  <div style={{ color: T.inkFaint, fontSize: 12 }}>No content items yet.</div>
+                  <div style={{ color: T.inkFaint, fontSize: 12, lineHeight: 1.6 }}>
+                    No scheduled content items yet. Content items track planned posts —
+                    forum comments, tweets, governance posts. Use the Signals tab to draft content,
+                    or create items via the API (<code style={{ fontFamily: T.mono, fontSize: 10 }}>POST /api/ops/content/items</code>).
+                  </div>
                 ) : (
                   contentItems.map((item) => (
                     <div key={item.id} style={{ fontSize: 11, padding: "4px 0", borderBottom: `1px solid ${T.ruleLight}`, display: "flex", gap: 8 }}>
