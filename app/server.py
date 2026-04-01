@@ -86,7 +86,7 @@ async def rate_limit_and_track(request: Request, call_next):
     ua = request.headers.get("user-agent", "")[:500]
 
     # Admin endpoints — exempt from rate limiting but still logged
-    if path.startswith("/api/admin"):
+    if path.startswith("/api/admin") or path.startswith("/api/ops"):
         response = await call_next(request)
         elapsed_ms = int((time.time() - start_time) * 1000)
         log_request(

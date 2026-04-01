@@ -500,11 +500,15 @@ async def generate_exposure_report(request: Request):
         raise HTTPException(status_code=400, detail="target_id required")
 
     from app.ops.tools.exposure import generate_exposure
-    result = generate_exposure(target_id)
+    try:
+        result = generate_exposure(target_id)
+    except Exception as e:
+        logger.error(f"Exposure report generation failed: {e}")
+        return {"status": "error", "detail": f"Exposure report generation failed: {e}"}
     if result is None:
         raise HTTPException(status_code=404, detail="Target not found")
     if "error" in result:
-        raise HTTPException(status_code=400, detail=result["error"])
+        return {"status": "error", "detail": result["error"]}
 
     return result
 
@@ -537,13 +541,21 @@ async def scrape_url(request: Request):
         raise HTTPException(status_code=400, detail="target_id and url required")
 
     from app.ops.tools.scraper import scrape_target
-    content_id = await scrape_target(target_id, url, source_type)
+    try:
+        content_id = await scrape_target(target_id, url, source_type)
+    except Exception as e:
+        logger.error(f"Scrape failed: {e}")
+        return {"status": "error", "detail": f"Scrape failed: {e}"}
     if content_id is None:
-        raise HTTPException(status_code=500, detail="Scrape failed")
+        return {"status": "error", "detail": "Scrape returned no content"}
 
     # Auto-trigger analysis
     from app.ops.tools.analyzer import analyze_content
-    analysis = await analyze_content(content_id)
+    try:
+        analysis = await analyze_content(content_id)
+    except Exception as e:
+        logger.error(f"Auto-analysis failed after scrape: {e}")
+        analysis = None
 
     return {"content_id": content_id, "analysis": analysis}
 
@@ -552,9 +564,13 @@ async def scrape_url(request: Request):
 async def analyze_content_endpoint(request: Request, content_id: int):
     _check_admin_key(request)
     from app.ops.tools.analyzer import analyze_content
-    result = await analyze_content(content_id)
+    try:
+        result = await analyze_content(content_id)
+    except Exception as e:
+        logger.error(f"Analysis failed: {e}")
+        return {"status": "error", "detail": f"Analysis failed: {e}"}
     if result is None:
-        raise HTTPException(status_code=500, detail="Analysis failed")
+        return {"status": "error", "detail": "Analysis returned no result — Claude API may be unavailable"}
     return {"content_id": content_id, "analysis": result}
 
 
@@ -696,14 +712,21 @@ async def draft_dm_endpoint(request: Request):
     _check_admin_key(request)
     body = await request.json()
     target_id = body.get("target_id")
-    trigger = body.get("trigger", "")
+    trigger = body.get("trigger") or body.get("trigger_context") or ""
     if not target_id or not trigger:
-        raise HTTPException(status_code=400, detail="target_id and trigger required")
+        raise HTTPException(status_code=400, detail="target_id and trigger (or trigger_context) required")
 
     from app.ops.tools.drafter import draft_dm
-    result = await draft_dm(target_id, trigger)
+    try:
+        result = await draft_dm(target_id, trigger)
+    except Exception as e:
+        logger.error(f"Draft DM failed: {e}")
+        return {"status": "error", "detail": f"Draft generation failed: {e}"}
     if "error" in result:
-        raise HTTPException(status_code=500, detail=result["error"])
+        detail = result["error"]
+        if "Claude API" in detail:
+            return {"status": "error", "detail": "Claude API unavailable — check ANTHROPIC_API_KEY or try again later", "raw": result.get("raw")}
+        return {"status": "error", "detail": detail}
     return result
 
 
@@ -717,14 +740,21 @@ async def draft_forum_endpoint(request: Request):
         raise HTTPException(status_code=400, detail="forum and topic required")
 
     from app.ops.tools.drafter import draft_forum_post
-    result = await draft_forum_post(
-        forum=forum,
-        topic=topic,
-        target_id=body.get("target_id"),
-        include_sii_data=body.get("include_sii_data", True),
-    )
+    try:
+        result = await draft_forum_post(
+            forum=forum,
+            topic=topic,
+            target_id=body.get("target_id"),
+            include_sii_data=body.get("include_sii_data", True),
+        )
+    except Exception as e:
+        logger.error(f"Draft forum post failed: {e}")
+        return {"status": "error", "detail": f"Draft generation failed: {e}"}
     if "error" in result:
-        raise HTTPException(status_code=500, detail=result["error"])
+        detail = result["error"]
+        if "Claude API" in detail:
+            return {"status": "error", "detail": "Claude API unavailable — check ANTHROPIC_API_KEY or try again later", "raw": result.get("raw")}
+        return {"status": "error", "detail": detail}
     return result
 
 
@@ -787,9 +817,13 @@ async def backfill_target(request: Request):
     from app.ops.tools.analyzer import analyze_content
 
     # Step 1: Search for URLs
-    search_result = await parallel_client.search(query, num_results=max_results)
+    try:
+        search_result = await parallel_client.search(query, num_results=max_results)
+    except Exception as e:
+        logger.error(f"Backfill search failed: {e}")
+        return {"status": "error", "detail": f"Search failed: {e}"}
     if "error" in search_result:
-        raise HTTPException(status_code=500, detail=f"Search failed: {search_result['error']}")
+        return {"status": "error", "detail": f"Search failed: {search_result['error']}"}
 
     # Parse URLs from search results
     urls = []
