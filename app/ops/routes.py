@@ -152,23 +152,31 @@ async def log_engagement(request: Request, target_id: int):
     if not action_type:
         raise HTTPException(status_code=400, detail="action_type required")
 
-    execute(
-        """INSERT INTO ops_target_engagement_log (target_id, contact_id, action_type, content, channel, next_action)
-           VALUES (%s, %s, %s, %s, %s, %s)""",
-        (
-            target_id,
-            body.get("contact_id"),
-            action_type,
-            body.get("content"),
-            body.get("channel"),
-            body.get("next_action"),
-        ),
-    )
-    # Update target last_action
-    execute(
-        "UPDATE ops_targets SET last_action_at = NOW(), updated_at = NOW() WHERE id = %s",
-        (target_id,),
-    )
+    # Verify target exists
+    target = fetch_one("SELECT id FROM ops_targets WHERE id = %s", (target_id,))
+    if not target:
+        raise HTTPException(status_code=404, detail="Target not found")
+
+    try:
+        execute(
+            """INSERT INTO ops_target_engagement_log (target_id, contact_id, action_type, content, channel, next_action)
+               VALUES (%s, %s, %s, %s, %s, %s)""",
+            (
+                target_id,
+                body.get("contact_id"),
+                action_type,
+                body.get("content"),
+                body.get("channel"),
+                body.get("next_action"),
+            ),
+        )
+        execute(
+            "UPDATE ops_targets SET last_action_at = NOW(), updated_at = NOW() WHERE id = %s",
+            (target_id,),
+        )
+    except Exception as e:
+        logger.error(f"Engagement log failed: {e}")
+        return {"status": "error", "detail": str(e)}
     return {"status": "ok"}
 
 
@@ -359,15 +367,24 @@ async def log_investor_interaction(request: Request, investor_id: int):
     if not action_type:
         raise HTTPException(status_code=400, detail="action_type required")
 
-    execute(
-        """INSERT INTO ops_investor_interactions (investor_id, action_type, content, response, next_step)
-           VALUES (%s, %s, %s, %s, %s)""",
-        (investor_id, action_type, body.get("content"), body.get("response"), body.get("next_step")),
-    )
-    execute(
-        "UPDATE ops_investors SET last_action_at = NOW(), updated_at = NOW() WHERE id = %s",
-        (investor_id,),
-    )
+    # Verify investor exists
+    investor = fetch_one("SELECT id FROM ops_investors WHERE id = %s", (investor_id,))
+    if not investor:
+        raise HTTPException(status_code=404, detail="Investor not found")
+
+    try:
+        execute(
+            """INSERT INTO ops_investor_interactions (investor_id, action_type, content, response, next_step)
+               VALUES (%s, %s, %s, %s, %s)""",
+            (investor_id, action_type, body.get("content"), body.get("response"), body.get("next_step")),
+        )
+        execute(
+            "UPDATE ops_investors SET last_action_at = NOW(), updated_at = NOW() WHERE id = %s",
+            (investor_id,),
+        )
+    except Exception as e:
+        logger.error(f"Investor interaction log failed: {e}")
+        return {"status": "error", "detail": str(e)}
     return {"status": "ok"}
 
 
