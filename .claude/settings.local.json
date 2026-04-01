@@ -52,7 +52,12 @@
       "Bash(find /home/runner/workspace/app/ops -name \"*.py\" -exec wc -l {} +)",
       "Bash(find /home/runner/workspace -type f -name *ops*)",
       "Bash(find /home/runner/workspace -type f -name *integrity*)",
-      "Bash(find /home/runner/workspace/frontend -name *news* -o -name *routes.py)"
+      "Bash(find /home/runner/workspace/frontend -name *news* -o -name *routes.py)",
+      "Bash(find /home/runner/workspace -name *.py -path */ops*)",
+      "Bash(kill -HUP 92)",
+      "Bash(netstat -tlnp)",
+      "Bash(replit deploy:*)",
+      "Bash(BASE=\"http://localhost:5000\" __NEW_LINE_49459998d86b3d40__ echo \"===== POST/PUT ACTION ENDPOINTS =====\" __NEW_LINE_49459998d86b3d40__ echo \"--- health/check ---\" curl -s -w \"\\\\n%{http_code}\" -X POST \"$BASE/api/ops/health/check\" -H \"X-Admin-Key: basis-admin-2026\")"
     ]
   }
 }
