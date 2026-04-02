@@ -137,6 +137,15 @@ CHAIN_CONFIGS = {
             "0xda10009cbd5d07dd0cecc66161fc93d7c9000da1": {"symbol": "DAI", "decimals": 18, "stablecoin_id": "dai"},
         },
     },
+    "solana": {
+        "explorer_base": "helius",  # sentinel — not a Blockscout/Etherscan URL
+        "chain_id": None,           # Solana doesn't use EVM chain IDs
+        "stablecoin_contracts": {
+            # SPL token mint addresses for stablecoins
+            "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": {"symbol": "USDC", "decimals": 6, "stablecoin_id": "usdc"},
+            "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": {"symbol": "USDT", "decimals": 6, "stablecoin_id": "usdt"},
+        },
+    },
 }
 
 SUPPORTED_CHAINS = list(CHAIN_CONFIGS.keys())

@@ -13,7 +13,7 @@ from typing import Optional
 
 from fastapi import FastAPI, Query, HTTPException, BackgroundTasks, Request
 
-from app.database import fetch_all, fetch_one
+from app.database import execute, fetch_all, fetch_one
 from app.indexer.backlog import get_backlog, get_backlog_detail
 from app.indexer.pipeline import get_coverage_diagnostic
 from app.specs.methodology_versions import WALLET_METHODOLOGY_VERSIONS
@@ -677,3 +677,80 @@ def register_wallet_routes(app: FastAPI) -> None:
             return {"chains": results}
         result = await run_edge_builder(max_wallets=max_wallets, priority=priority, chain=chain)
         return result
+
+    @app.post("/api/admin/solana-discover-drift")
+    async def admin_discover_drift_wallets(
+        request: Request,
+        key: str = Query(default=None),
+    ):
+        """Discover Drift depositors and build their Solana wallet graph edges."""
+        admin_key = os.environ.get("ADMIN_KEY", "")
+        provided = key or request.headers.get("x-admin-key", "")
+        if not admin_key or provided != admin_key:
+            raise HTTPException(status_code=403, detail="Invalid admin key")
+
+        from app.indexer.solana_edges import discover_drift_depositors, run_solana_edge_builder
+        import httpx as _httpx
+
+        async with _httpx.AsyncClient() as client:
+            depositors = await discover_drift_depositors(client)
+
+        if not depositors:
+            return {"status": "no depositors found", "wallets": 0}
+
+        # Register wallets
+        for addr in depositors:
+            execute(
+                """
+                INSERT INTO wallet_graph.wallets (address, chain, source, label, created_at, updated_at)
+                VALUES (%s, 'solana', 'drift-discovery', 'drift-depositor', NOW(), NOW())
+                ON CONFLICT (address, chain) DO NOTHING
+                """,
+                (addr,),
+            )
+
+        # Build edges
+        result = await run_solana_edge_builder(depositors, max_pages_per_wallet=3)
+
+        return {
+            "depositors_discovered": len(depositors),
+            "edge_build_result": result,
+        }
+
+    @app.post("/api/admin/merge-wallets")
+    async def admin_merge_wallets(
+        request: Request,
+    ):
+        """Manually link wallets across chains as belonging to the same entity."""
+        admin_key = os.environ.get("ADMIN_KEY", "")
+        provided = request.query_params.get("key", "") or request.headers.get("x-admin-key", "")
+        if not admin_key or provided != admin_key:
+            raise HTTPException(status_code=403, detail="Invalid admin key")
+
+        body = await request.json()
+        addresses = body.get("addresses", [])  # list of {address, chain}
+        entity_label = body.get("label", "")
+
+        if len(addresses) < 2:
+            raise HTTPException(status_code=400, detail="Provide at least 2 addresses to merge")
+
+        import uuid as _uuid
+        entity_id = body.get("entity_id", str(_uuid.uuid4()))
+
+        merged = 0
+        for addr_info in addresses:
+            execute(
+                """
+                UPDATE wallet_graph.wallets
+                SET label = %s, updated_at = NOW()
+                WHERE address = %s AND chain = %s
+                """,
+                (f"entity:{entity_id}:{entity_label}", addr_info["address"], addr_info["chain"]),
+            )
+            merged += 1
+
+        return {
+            "entity_id": entity_id,
+            "label": entity_label,
+            "wallets_merged": merged,
+        }

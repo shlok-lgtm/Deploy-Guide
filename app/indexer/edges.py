@@ -233,7 +233,16 @@ async def run_edge_builder(
 ) -> dict:
     """
     Batch edge builder. Queries wallets needing edge building and processes them.
+    Delegates to Solana adapter for chain='solana'.
     """
+    # Solana uses a different data source (Helius, not Blockscout/Etherscan)
+    if chain == "solana":
+        from app.indexer.solana_edges import run_solana_edge_builder
+        return await run_solana_edge_builder(
+            max_wallets=max_wallets,
+            max_pages_per_wallet=max_pages_per_wallet,
+        )
+
     order_clause = "w.total_stablecoin_value DESC NULLS LAST"
     if priority == "unbuilt":
         order_clause = "w.created_at ASC"

@@ -3840,6 +3840,31 @@ async def protocol_full_exposure(slug: str):
     }
 
 
+@app.get("/api/protocols/drift/vault-balances")
+async def drift_vault_balances():
+    """On-chain Drift vault token balances via Helius RPC. Real-time, not DeFiLlama."""
+    from app.collectors.solana import get_drift_vault_balances, DRIFT_PROGRAM_ID
+    import httpx as _httpx
+
+    async with _httpx.AsyncClient() as client:
+        balances = await get_drift_vault_balances(client)
+
+    total_stablecoin = sum(b["usd_value_approx"] or 0 for b in balances if b["is_stablecoin"])
+
+    return {
+        "protocol": "drift",
+        "source": "on-chain (Helius RPC)",
+        "program_id": DRIFT_PROGRAM_ID,
+        "balances": balances,
+        "summary": {
+            "total_token_accounts": len(balances),
+            "stablecoin_accounts": sum(1 for b in balances if b["is_stablecoin"]),
+            "total_stablecoin_usd_approx": round(total_stablecoin, 2),
+        },
+        "note": "Post-exploit snapshot. Compare against DeFiLlama collateral exposure for discrepancy.",
+    }
+
+
 @app.get("/api/indices")
 async def list_indices():
     """List all available index definitions."""
@@ -4586,6 +4611,23 @@ async def drift_exploit_analysis():
         "basis_insight": "A high SII score for USDC did not protect depositors because protocol-level risk was the failure mode. This is exactly what CQI measures.",
         "methodology_note": f"Drift is Basis's first Solana protocol. Governance components are not yet scored (Solana uses Realms, not Snapshot). The PSI score reflects {n_components}/24 available components.",
     }
+
+    # 7. On-chain vault balances (real-time via Helius)
+    try:
+        from app.collectors.solana import get_drift_vault_balances
+        import httpx as _httpx
+        async with _httpx.AsyncClient() as vault_client:
+            vault_balances = await get_drift_vault_balances(vault_client)
+        result["on_chain_vault"] = {
+            "balances": vault_balances[:10],  # top 10
+            "total_stablecoin_usd": round(
+                sum(b["usd_value_approx"] or 0 for b in vault_balances if b["is_stablecoin"]), 2
+            ),
+            "source": "on-chain (Helius RPC)",
+            "note": "Real-time vault state — may differ from DeFiLlama aggregation",
+        }
+    except Exception:
+        result["on_chain_vault"] = {"error": "Helius API unavailable or HELIUS_API_KEY not set"}
 
     return result
 
