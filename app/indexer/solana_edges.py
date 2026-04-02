@@ -280,29 +280,48 @@ async def run_solana_edge_builder(
 
 async def discover_drift_depositors(client: httpx.AsyncClient, limit: int = 50) -> list[str]:
     """
-    Discover wallet addresses that recently transferred stablecoins to/from Drift.
-    Uses Helius parsed transactions on the Drift program to find depositors.
+    Discover high-value Solana wallet addresses by querying recent large
+    stablecoin transfers (>$1000) on USDC and USDT SPL mints via Helius.
+
+    Queries each mint for TRANSFER-type transactions, extracts unique
+    sender/receiver addresses from transfers exceeding the value threshold.
     """
     if not HELIUS_API_KEY:
         return []
 
-    url = f"{HELIUS_API_URL}/v0/addresses/{DRIFT_PROGRAM_ID}/transactions"
-    params = {"api-key": HELIUS_API_KEY, "limit": 100}
+    min_value_usd = 1000
+    mints = [
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",  # USDC
+        "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",   # USDT
+    ]
 
-    try:
-        resp = await client.get(url, params=params, timeout=30)
-        if resp.status_code != 200:
-            return []
-        txns = resp.json()
-    except Exception:
-        return []
+    wallets: set[str] = set()
 
-    wallets = set()
-    for tx in txns:
-        for tt in tx.get("tokenTransfers", []):
-            for field in ["fromUserAccount", "toUserAccount"]:
-                addr = tt.get(field, "")
-                if addr and addr not in SYSTEM_ADDRESSES and addr != DRIFT_PROGRAM_ID:
-                    wallets.add(addr)
+    for mint in mints:
+        url = f"{HELIUS_API_URL}/v0/addresses/{mint}/transactions"
+        params = {"api-key": HELIUS_API_KEY, "type": "TRANSFER", "limit": 100}
 
+        try:
+            resp = await client.get(url, params=params, timeout=30)
+            if resp.status_code != 200:
+                logger.warning(f"Helius discovery {resp.status_code} for mint {mint[:8]}...")
+                continue
+            txns = resp.json()
+        except Exception as e:
+            logger.debug(f"Helius discovery error for mint {mint[:8]}...: {e}")
+            continue
+
+        for tx in txns:
+            for tt in tx.get("tokenTransfers", []):
+                amount = tt.get("tokenAmount", 0)
+                if not isinstance(amount, (int, float)) or amount < min_value_usd:
+                    continue
+                for field in ["fromUserAccount", "toUserAccount"]:
+                    addr = tt.get(field, "")
+                    if addr and addr not in SYSTEM_ADDRESSES:
+                        wallets.add(addr)
+
+        await asyncio.sleep(RATE_LIMIT_DELAY)
+
+    logger.info(f"Solana discovery: {len(wallets)} unique wallets from {len(mints)} mint queries")
     return list(wallets)[:limit]
