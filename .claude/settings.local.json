@@ -60,7 +60,12 @@
       "Bash(BASE=\"http://localhost:5000\" __NEW_LINE_49459998d86b3d40__ echo \"===== POST/PUT ACTION ENDPOINTS =====\" __NEW_LINE_49459998d86b3d40__ echo \"--- health/check ---\" curl -s -w \"\\\\n%{http_code}\" -X POST \"$BASE/api/ops/health/check\" -H \"X-Admin-Key: basis-admin-2026\")",
       "Bash(git clone:*)",
       "Bash(npm install:*)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(npm pack:*)",
+      "Bash(git -C artifacts/basis-mcp status)",
+      "Bash(git -C /home/runner/workspace/basis-mcp diff HEAD -- artifacts/basis-mcp/src/ artifacts/basis-mcp/package.json artifacts/basis-mcp/README.md artifacts/basis-mcp/build/)",
+      "Bash(git:*)",
+      "Bash(wc -l /home/runner/workspace/basis-mcp/artifacts/basis-mcp/src/*.ts)"
     ]
   }
 }
