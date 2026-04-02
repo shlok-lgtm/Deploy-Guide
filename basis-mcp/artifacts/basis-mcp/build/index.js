@@ -5,8 +5,8 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import express from "express";
 import { registerTools } from "./tools.js";
 const SERVER_NAME = "basis-protocol";
-const SERVER_VERSION = "1.0.0";
-const SERVER_DESCRIPTION = "Decision integrity infrastructure for on-chain finance. Verifiable risk scores for stablecoins and wallet risk profiles.";
+const SERVER_VERSION = "1.1.0";
+const SERVER_DESCRIPTION = "Decision integrity infrastructure for on-chain finance. Verifiable risk scores for stablecoins (SII), DeFi protocols (PSI), and wallet risk profiles. Composite risk via CQI.";
 function createServer() {
     const server = new McpServer({
         name: SERVER_NAME,

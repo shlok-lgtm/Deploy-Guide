@@ -2,13 +2,17 @@
   "name": "@basis-protocol/mcp-server",
   "version": "1.1.0",
   "mcpName": "io.github.shlok-lgtm/basis-mcp",
-  "description": "MCP server for Basis Protocol — verifiable risk intelligence for stablecoins and wallet risk profiles",
+  "description": "MCP server for Basis Protocol — verifiable risk intelligence for stablecoins (SII), DeFi protocols (PSI), and wallet risk profiles. 14 tools.",
   "keywords": [
     "mcp",
     "risk",
     "stablecoin",
     "defi",
     "wallet",
+    "protocol",
+    "psi",
+    "cqi",
+    "solana",
     "basis-protocol"
   ],
   "license": "MIT",

@@ -162,6 +162,117 @@ export interface MethodologyResponse {
         methodology_locked_since?: string;
     };
 }
+export interface ProtocolScore {
+    protocol_slug: string;
+    protocol_name: string;
+    score: number | null;
+    grade: string | null;
+    category_scores?: Record<string, number>;
+    component_scores?: Record<string, number>;
+    raw_values?: Record<string, number>;
+    formula_version?: string;
+    computed_at?: string;
+}
+export interface PsiScoresResponse {
+    protocols?: ProtocolScore[];
+    count?: number;
+    index?: string;
+    version?: string;
+}
+export interface PsiDetailResponse extends ProtocolScore {
+    __status?: number;
+}
+export interface CqiResponse {
+    composite_id?: string;
+    name?: string;
+    asset?: string;
+    protocol?: string;
+    protocol_slug?: string;
+    cqi_score?: number | null;
+    cqi_grade?: string | null;
+    inputs?: {
+        sii?: {
+            score: number;
+            grade?: string;
+        };
+        psi?: {
+            score: number;
+            grade?: string;
+        };
+    };
+    method?: string;
+    formula_version?: string;
+    error?: string;
+    __status?: number;
+}
+export interface FullExposureResponse {
+    slug?: string;
+    name?: string;
+    psi_score?: number | null;
+    treasury_stablecoin_exposure?: {
+        holdings?: Array<{
+            token_symbol: string;
+            usd_value: number;
+            is_stablecoin: boolean;
+            sii_score?: number | null;
+        }>;
+        total_usd?: number;
+        stablecoin_pct?: number;
+    };
+    collateral_stablecoin_exposure?: {
+        pools?: Array<{
+            token_symbol: string;
+            tvl_usd: number;
+            is_sii_scored: boolean;
+            sii_score?: number | null;
+        }>;
+        total_tvl_usd?: number;
+        sii_scored_pct?: number;
+    };
+    __status?: number;
+}
+export interface DriftExploitAnalysis {
+    event?: Record<string, unknown>;
+    drift_psi?: {
+        current_score?: number | null;
+        grade?: string | null;
+        category_breakdown?: Record<string, number>;
+        components_missing?: string[];
+        rank_among_protocols?: number | null;
+        total_protocols?: number;
+        scored_at?: string;
+    };
+    stablecoin_exposure?: Array<{
+        symbol: string;
+        tvl_usd: number;
+        sii_scored: boolean;
+        sii_score?: number | null;
+    }>;
+    cqi_pairs?: Record<string, {
+        cqi?: number;
+        cqi_grade?: string;
+        sii?: number;
+        psi?: number;
+    }>;
+    contagion?: {
+        connected_wallets: number;
+        note: string;
+    };
+    market_impact?: {
+        drift_price?: number;
+        drift_24h_change_pct?: number;
+        drift_market_cap?: number;
+        drift_volume_24h?: number;
+    };
+    narrative?: {
+        headline?: string;
+        key_finding?: string;
+        basis_insight?: string;
+        methodology_note?: string;
+    };
+    generated_at?: string;
+    __status?: number;
+}
 export type OverallAssessment = "LOW_RISK" | "MEDIUM_RISK" | "HIGH_RISK" | "UNKNOWN";
 export declare function gradeRank(grade: string | undefined | null): number;
 export declare function isGradeAtLeast(grade: string | undefined | null, minGrade: string): boolean;

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { fetchScores, fetchScoreDetail, fetchWalletProfile, fetchRiskiestWallets, fetchBacklog, fetchMethodology, } from "./api.js";
+import { fetchScores, fetchScoreDetail, fetchWalletProfile, fetchRiskiestWallets, fetchBacklog, fetchMethodology, fetchPsiScores, fetchPsiDetail, fetchCqi, fetchProtocolExposure, fetchDriftExploitAnalysis, } from "./api.js";
 import { GRADE_ORDER, isGradeAtLeast, } from "./config.js";
 const API_ERROR_RESPONSE = {
     error: true,
@@ -557,6 +557,275 @@ export function registerTools(server) {
                     {
                         type: "text",
                         text: JSON.stringify(result, null, 2),
+                    },
+                ],
+            };
+        }
+        catch {
+            return {
+                content: [
+                    { type: "text", text: JSON.stringify(API_ERROR_RESPONSE) },
+                ],
+            };
+        }
+    });
+    // ===========================================================================
+    // PSI (Protocol Solvency Index) Tools
+    // ===========================================================================
+    server.registerTool("get_protocol_score", {
+        description: "Get the PSI (Protocol Solvency Index) score for a DeFi protocol. Returns score (0-100), grade, and category breakdown across balance sheet, revenue, liquidity, security, governance, and token health. Covers Ethereum and Solana protocols.",
+        inputSchema: z.object({
+            slug: z
+                .string()
+                .describe("Protocol slug (e.g. 'drift', 'aave', 'jupiter-perpetual-exchange', 'raydium', 'compound-finance')"),
+        }),
+        annotations: TOOL_ANNOTATIONS,
+    }, async ({ slug }) => {
+        try {
+            const data = await fetchPsiDetail(slug);
+            if (data.__status === 404) {
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({
+                                error: false,
+                                is_scored: false,
+                                protocol_slug: slug,
+                                message: "This protocol is not yet scored by PSI. Currently scoring 13 protocols across Ethereum and Solana.",
+                            }),
+                        },
+                    ],
+                };
+            }
+            const cats = data.category_scores ?? {};
+            let weakest;
+            let strongest;
+            if (Object.keys(cats).length > 0) {
+                weakest = Object.entries(cats).sort(([, a], [, b]) => a - b)[0]?.[0];
+                strongest = Object.entries(cats).sort(([, a], [, b]) => b - a)[0]?.[0];
+            }
+            return {
+                content: [
+                    {
+                        type: "text",
+                        text: JSON.stringify({
+                            protocol_slug: data.protocol_slug,
+                            protocol_name: data.protocol_name,
+                            psi_score: data.score,
+                            psi_grade: data.grade,
+                            category_scores: cats,
+                            weakest_category: weakest,
+                            strongest_category: strongest,
+                            formula_version: data.formula_version,
+                            computed_at: data.computed_at,
+                            methodology_summary: "PSI = 0.25×Balance Sheet + 0.20×Revenue + 0.20×Liquidity + 0.15×Security + 0.10×Governance + 0.10×Token Health",
+                        }, null, 2),
+                    },
+                ],
+            };
+        }
+        catch {
+            return {
+                content: [
+                    { type: "text", text: JSON.stringify(API_ERROR_RESPONSE) },
+                ],
+            };
+        }
+    });
+    server.registerTool("get_protocol_rankings", {
+        description: "Get ranked list of all scored DeFi protocols by PSI score. Currently scores 13 protocols across Ethereum and Solana including Aave, Compound, Drift, Jupiter, and Raydium.",
+        inputSchema: z.object({
+            min_grade: z
+                .enum(["A+", "A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D", "F"])
+                .optional()
+                .describe("Optional minimum grade filter (e.g. 'B' returns B and above)"),
+        }),
+        annotations: TOOL_ANNOTATIONS,
+    }, async ({ min_grade }) => {
+        try {
+            const data = await fetchPsiScores();
+            let protocols = (data.protocols ?? []).map((p) => ({
+                protocol_slug: p.protocol_slug,
+                protocol_name: p.protocol_name,
+                psi_score: p.score,
+                psi_grade: p.grade,
+                category_scores: p.category_scores,
+                computed_at: p.computed_at,
+            }));
+            if (min_grade) {
+                const minRank = GRADE_ORDER[min_grade] ?? 0;
+                protocols = protocols.filter((p) => (GRADE_ORDER[p.psi_grade ?? ""] ?? 0) >= minRank);
+            }
+            protocols.sort((a, b) => (b.psi_score ?? 0) - (a.psi_score ?? 0));
+            return {
+                content: [
+                    {
+                        type: "text",
+                        text: JSON.stringify({
+                            protocols,
+                            count: protocols.length,
+                            index: "psi",
+                            version: data.version ?? "v0.1.0",
+                            timestamp: new Date().toISOString(),
+                        }, null, 2),
+                    },
+                ],
+            };
+        }
+        catch {
+            return {
+                content: [
+                    { type: "text", text: JSON.stringify(API_ERROR_RESPONSE) },
+                ],
+            };
+        }
+    });
+    server.registerTool("get_cqi", {
+        description: "Get the Composite Quality Index (CQI) for a stablecoin-protocol pair. CQI = sqrt(SII x PSI) — measures the combined risk of holding a specific stablecoin within a specific protocol. Example: CQI(USDC, Drift) tells you the risk of USDC deposited in Drift vaults.",
+        inputSchema: z.object({
+            asset: z
+                .string()
+                .describe("Stablecoin symbol (e.g. 'usdc', 'usdt', 'dai')"),
+            protocol: z
+                .string()
+                .describe("Protocol slug (e.g. 'drift', 'aave', 'compound-finance')"),
+        }),
+        annotations: TOOL_ANNOTATIONS,
+    }, async ({ asset, protocol }) => {
+        try {
+            const data = await fetchCqi(asset, protocol);
+            if (data.__status === 404 || data.error) {
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({
+                                error: false,
+                                asset: asset.toUpperCase(),
+                                protocol,
+                                message: data.error ??
+                                    "CQI not available for this pair. Ensure both SII and PSI scores exist.",
+                            }),
+                        },
+                    ],
+                };
+            }
+            const sii = data.inputs?.sii?.score;
+            const psi = data.inputs?.psi?.score;
+            const interpretation = data.cqi_score != null && sii != null && psi != null
+                ? `${asset.toUpperCase()} in ${data.protocol ?? protocol}: CQI ${data.cqi_score.toFixed(1)} (${data.cqi_grade}). ` +
+                    `SII ${sii.toFixed(1)} (stablecoin quality) × PSI ${psi.toFixed(1)} (protocol solvency) = ${data.cqi_score.toFixed(1)} composite risk.`
+                : undefined;
+            return {
+                content: [
+                    {
+                        type: "text",
+                        text: JSON.stringify({
+                            asset: data.asset ?? asset.toUpperCase(),
+                            protocol: data.protocol ?? protocol,
+                            protocol_slug: data.protocol_slug ?? protocol,
+                            cqi_score: data.cqi_score,
+                            cqi_grade: data.cqi_grade,
+                            inputs: data.inputs,
+                            method: data.method ?? "geometric_mean",
+                            interpretation,
+                            formula_version: data.formula_version ?? "composition-v1.0.0",
+                        }, null, 2),
+                    },
+                ],
+            };
+        }
+        catch {
+            return {
+                content: [
+                    { type: "text", text: JSON.stringify(API_ERROR_RESPONSE) },
+                ],
+            };
+        }
+    });
+    server.registerTool("get_protocol_exposure", {
+        description: "Get a protocol's stablecoin exposure — which stablecoins it holds in treasury and accepts as collateral, cross-referenced against SII scores. Shows unscored stablecoins the protocol accepts. Essential for understanding protocol-level stablecoin risk.",
+        inputSchema: z.object({
+            slug: z
+                .string()
+                .describe("Protocol slug (e.g. 'drift', 'aave', 'morpho')"),
+        }),
+        annotations: TOOL_ANNOTATIONS,
+    }, async ({ slug }) => {
+        try {
+            const data = await fetchProtocolExposure(slug);
+            if (data.__status === 404) {
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({
+                                error: false,
+                                protocol_slug: slug,
+                                message: "Protocol not found or no exposure data available.",
+                            }),
+                        },
+                    ],
+                };
+            }
+            const treasury = data.treasury_stablecoin_exposure;
+            const collateral = data.collateral_stablecoin_exposure;
+            const treasuryVal = formatMoney(treasury?.total_usd);
+            const collateralVal = formatMoney(collateral?.total_tvl_usd);
+            const siiPct = collateral?.sii_scored_pct;
+            const interpretation = `${data.name ?? slug} holds ${treasuryVal} in treasury stablecoins ` +
+                `and accepts ${collateralVal} in stablecoin collateral. ` +
+                `${siiPct != null ? `${siiPct.toFixed(1)}% of collateral is SII-scored.` : ""}`;
+            return {
+                content: [
+                    {
+                        type: "text",
+                        text: JSON.stringify({
+                            protocol_slug: data.slug ?? slug,
+                            protocol_name: data.name,
+                            psi_score: data.psi_score,
+                            treasury: treasury,
+                            collateral: collateral,
+                            interpretation,
+                        }, null, 2),
+                    },
+                ],
+            };
+        }
+        catch {
+            return {
+                content: [
+                    { type: "text", text: JSON.stringify(API_ERROR_RESPONSE) },
+                ],
+            };
+        }
+    });
+    server.registerTool("get_drift_exploit_analysis", {
+        description: "Structured analysis of the Drift Protocol exploit (April 1, 2026, ~$270M drained). Returns PSI score, CQI composition with USDC, stablecoin exposure, market impact, and narrative. Demonstrates how CQI captures protocol-level risk that SII alone misses.",
+        inputSchema: z.object({}),
+        annotations: TOOL_ANNOTATIONS,
+    }, async () => {
+        try {
+            const data = await fetchDriftExploitAnalysis();
+            if (data.__status === 404) {
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: JSON.stringify({
+                                error: false,
+                                message: "Drift exploit analysis not yet available. The endpoint requires PSI scoring to be deployed.",
+                            }),
+                        },
+                    ],
+                };
+            }
+            return {
+                content: [
+                    {
+                        type: "text",
+                        text: JSON.stringify(data, null, 2),
                     },
                 ],
             };

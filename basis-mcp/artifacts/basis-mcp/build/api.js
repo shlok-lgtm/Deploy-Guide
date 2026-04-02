@@ -43,4 +43,20 @@ export async function fetchBacklog(limit) {
 export async function fetchMethodology() {
     return apiFetch("/api/methodology");
 }
+// PSI (Protocol Solvency Index) API functions
+export async function fetchPsiScores() {
+    return apiFetch("/api/psi/scores");
+}
+export async function fetchPsiDetail(slug) {
+    return apiFetch(`/api/psi/scores/${encodeURIComponent(slug)}`);
+}
+export async function fetchCqi(asset, protocol) {
+    return apiFetch(`/api/compose/cqi?asset=${encodeURIComponent(asset)}&protocol=${encodeURIComponent(protocol)}`);
+}
+export async function fetchProtocolExposure(slug) {
+    return apiFetch(`/api/protocols/${encodeURIComponent(slug)}/full-exposure`);
+}
+export async function fetchDriftExploitAnalysis() {
+    return apiFetch("/api/analysis/drift-exploit");
+}
 //# sourceMappingURL=api.js.map
