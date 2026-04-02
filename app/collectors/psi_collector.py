@@ -5,6 +5,7 @@ Fetches protocol data from DeFiLlama's free API and scores protocols
 using the generic scoring engine with the PSI v0.1 definition.
 """
 
+import hashlib
 import json
 import logging
 import time
@@ -468,6 +469,15 @@ def score_protocol(slug):
     result["protocol_name"] = protocol_data.get("name", slug)
     result["raw_values"] = raw_values
 
+    return result
+
+
+def score_protocol_from_raw(slug, raw_values):
+    """Score a protocol from stored raw_values (no API calls). For verification."""
+    if not raw_values:
+        return None
+    result = score_entity(PSI_V01_DEFINITION, raw_values)
+    result["protocol_slug"] = slug
     return result
 
 
@@ -1186,10 +1196,15 @@ def run_psi_scoring():
         if result:
             # Strip internal _token_holdings before storing (saved separately)
             raw_for_storage = {k: v for k, v in result["raw_values"].items() if not k.startswith("_")}
+
+            # Compute inputs_hash for computation attestation
+            raw_canonical = json.dumps(raw_for_storage, sort_keys=True, default=str)
+            inputs_hash = "0x" + hashlib.sha256(raw_canonical.encode()).hexdigest()
+
             execute("""
                 INSERT INTO psi_scores (protocol_slug, protocol_name, overall_score, grade,
-                    category_scores, component_scores, raw_values, formula_version)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    category_scores, component_scores, raw_values, formula_version, inputs_hash)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT ON CONSTRAINT psi_scores_protocol_slug_scored_date_key
                 DO UPDATE SET
                     protocol_name = EXCLUDED.protocol_name,
@@ -1198,6 +1213,7 @@ def run_psi_scoring():
                     category_scores = EXCLUDED.category_scores,
                     component_scores = EXCLUDED.component_scores,
                     raw_values = EXCLUDED.raw_values,
+                    inputs_hash = EXCLUDED.inputs_hash,
                     computed_at = NOW()
             """, (
                 result["protocol_slug"],
@@ -1208,6 +1224,7 @@ def run_psi_scoring():
                 json.dumps(result["component_scores"]),
                 json.dumps(raw_for_storage, default=str),
                 result["version"],
+                inputs_hash,
             ))
             # Store per-token treasury holdings with SII cross-reference
             token_holdings = result.get("raw_values", {}).get("_token_holdings")
@@ -1220,6 +1237,62 @@ def run_psi_scoring():
                 f"  {result['protocol_name']}: {result['overall_score']} ({result['grade']}) "
                 f"- {result['components_available']}/{result['components_total']} components"
             )
+
+            # --- Auto-generate assessment event on significant score change ---
+            try:
+                prev_row = fetch_one("""
+                    SELECT overall_score FROM psi_scores
+                    WHERE protocol_slug = %s AND scored_date < CURRENT_DATE
+                    ORDER BY computed_at DESC LIMIT 1
+                """, (slug,))
+
+                if prev_row and prev_row.get("overall_score"):
+                    prev_score = float(prev_row["overall_score"])
+                    current_score = result["overall_score"]
+                    delta = current_score - prev_score
+
+                    if abs(delta) >= 3.0:
+                        direction = "declined" if delta < 0 else "improved"
+                        if abs(delta) >= 10:
+                            severity = "critical"
+                        elif abs(delta) >= 5:
+                            severity = "alert"
+                        else:
+                            severity = "notable"
+
+                        from app.agent.store import store_assessment
+                        event = {
+                            "wallet_address": f"protocol:{slug}",
+                            "chain": "multi",
+                            "trigger_type": "psi_score_change",
+                            "trigger_detail": {
+                                "entity_type": "protocol",
+                                "entity_id": slug,
+                                "title": f"{result['protocol_name']} PSI {direction} {abs(delta):.1f} pts",
+                                "description": f"PSI score moved from {prev_score:.1f} to {current_score:.1f} ({delta:+.1f}). Grade: {result['grade']}.",
+                                "previous_score": prev_score,
+                                "current_score": current_score,
+                                "delta": round(delta, 2),
+                                "grade": result["grade"],
+                            },
+                            "wallet_risk_score": current_score,
+                            "wallet_risk_grade": result["grade"],
+                            "wallet_risk_score_prev": prev_score,
+                            "concentration_hhi": None,
+                            "concentration_hhi_prev": None,
+                            "coverage_ratio": None,
+                            "total_stablecoin_value": result["raw_values"].get("tvl"),
+                            "holdings_snapshot": [],
+                            "severity": severity,
+                            "broadcast": severity in ("alert", "critical"),
+                            "content_hash": inputs_hash,
+                            "methodology_version": result["version"],
+                        }
+                        event_id = store_assessment(event)
+                        if event_id:
+                            logger.info(f"PSI event: {slug} {severity} ({delta:+.1f} pts)")
+            except Exception as e:
+                logger.debug(f"PSI event generation error for {slug}: {e}")
 
             # Mark promoted backlog protocols as scored after first successful score
             if slug not in TARGET_PROTOCOLS:

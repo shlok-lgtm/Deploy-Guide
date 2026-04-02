@@ -236,11 +236,168 @@ def detect_quality_flow_divergence():
 _SEVERITY_ORDER = {"critical": 3, "alert": 2, "notable": 1, "silent": 0}
 
 
+# ---------------------------------------------------------------------------
+# Signal D: Protocol Solvency Divergence (PSI declining)
+# ---------------------------------------------------------------------------
+
+def detect_protocol_divergence():
+    """Detect protocols where PSI score is declining day-over-day."""
+    results = []
+
+    rows = fetch_all("""
+        WITH latest AS (
+            SELECT DISTINCT ON (protocol_slug)
+                protocol_slug, protocol_name, overall_score, computed_at
+            FROM psi_scores ORDER BY protocol_slug, computed_at DESC
+        ),
+        previous AS (
+            SELECT DISTINCT ON (protocol_slug)
+                protocol_slug, overall_score AS prev_score
+            FROM psi_scores
+            WHERE scored_date < CURRENT_DATE
+            ORDER BY protocol_slug, computed_at DESC
+        )
+        SELECT l.protocol_slug, l.protocol_name, l.overall_score,
+               p.prev_score,
+               (l.overall_score - p.prev_score) AS delta
+        FROM latest l
+        LEFT JOIN previous p ON l.protocol_slug = p.protocol_slug
+        WHERE p.prev_score IS NOT NULL
+          AND (l.overall_score - p.prev_score) < -2.0
+    """)
+
+    for r in rows:
+        delta = float(r["delta"])
+        if delta < -10:
+            severity = "critical"
+        elif delta < -5:
+            severity = "alert"
+        else:
+            severity = "notable"
+
+        results.append({
+            "type": "protocol_solvency",
+            "protocol": r["protocol_slug"],
+            "protocol_name": r.get("protocol_name", r["protocol_slug"]),
+            "current_score": float(r["overall_score"]),
+            "previous_score": float(r["prev_score"]),
+            "score_delta": round(delta, 1),
+            "signal": f"{r.get('protocol_name', r['protocol_slug'])} PSI declined {abs(delta):.1f} pts ({float(r['prev_score']):.0f} → {float(r['overall_score']):.0f})",
+            "severity": severity,
+        })
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Signal E: Cross-Index Divergence (SII stable + PSI declining = CQI gap)
+# ---------------------------------------------------------------------------
+
+def detect_cross_index_divergence():
+    """
+    Detect when SII and PSI move in opposite directions for related pairs.
+    A stablecoin SII stable/improving while a protocol holding it has declining PSI
+    means the CQI gap is widening — composed risk is worse than SII alone suggests.
+    """
+    results = []
+
+    # SII deltas from daily pulse
+    latest_pulse = fetch_one(
+        "SELECT summary FROM daily_pulses ORDER BY pulse_date DESC LIMIT 1"
+    )
+    if not latest_pulse or not latest_pulse.get("summary"):
+        return results
+
+    summary = latest_pulse["summary"]
+    if isinstance(summary, str):
+        summary = json.loads(summary)
+
+    sii_scores = {
+        s["symbol"].lower(): s
+        for s in summary.get("scores", [])
+        if s.get("symbol")
+    }
+
+    # PSI deltas
+    psi_rows = fetch_all("""
+        WITH latest AS (
+            SELECT DISTINCT ON (protocol_slug)
+                protocol_slug, overall_score, computed_at
+            FROM psi_scores ORDER BY protocol_slug, computed_at DESC
+        ),
+        previous AS (
+            SELECT DISTINCT ON (protocol_slug)
+                protocol_slug, overall_score AS prev_score
+            FROM psi_scores WHERE scored_date < CURRENT_DATE
+            ORDER BY protocol_slug, computed_at DESC
+        )
+        SELECT l.protocol_slug, l.overall_score AS psi_score,
+               p.prev_score AS psi_prev,
+               (l.overall_score - p.prev_score) AS psi_delta
+        FROM latest l
+        LEFT JOIN previous p ON l.protocol_slug = p.protocol_slug
+        WHERE p.prev_score IS NOT NULL
+    """)
+
+    # Protocol → stablecoins exposure map
+    try:
+        exposure_rows = fetch_all("""
+            SELECT DISTINCT protocol_slug, token_symbol
+            FROM protocol_collateral_exposure
+            WHERE is_stablecoin = TRUE AND tvl_usd > 100000
+              AND snapshot_date = (SELECT MAX(snapshot_date) FROM protocol_collateral_exposure)
+        """)
+    except Exception:
+        exposure_rows = []
+
+    proto_stables: dict[str, list[str]] = {}
+    for r in exposure_rows:
+        slug = r["protocol_slug"]
+        sym = r["token_symbol"].lower()
+        if slug not in proto_stables:
+            proto_stables[slug] = []
+        proto_stables[slug].append(sym)
+
+    for psi_row in psi_rows:
+        slug = psi_row["protocol_slug"]
+        psi_delta = float(psi_row["psi_delta"])
+
+        if psi_delta >= -3.0:
+            continue
+
+        stables = proto_stables.get(slug, [])
+        for sym in stables:
+            sii_entry = sii_scores.get(sym)
+            if not sii_entry:
+                continue
+
+            sii_delta = sii_entry.get("delta_24h", 0) or 0
+
+            # Divergence: SII flat/up but PSI down
+            if sii_delta >= -1.0:
+                severity = "alert" if psi_delta < -5 else "notable"
+                results.append({
+                    "type": "cross_index",
+                    "stablecoin": sym.upper(),
+                    "protocol": slug,
+                    "sii_score": sii_entry.get("score"),
+                    "sii_delta": round(sii_delta, 1),
+                    "psi_score": float(psi_row["psi_score"]),
+                    "psi_delta": round(psi_delta, 1),
+                    "signal": f"{sym.upper()} SII stable ({sii_delta:+.1f}) but {slug} PSI declining ({psi_delta:+.1f}) — CQI gap widening",
+                    "severity": severity,
+                })
+
+    return results
+
+
 def detect_all_divergences():
     """Run all divergence detectors and return combined results."""
     asset_divs = []
     wallet_divs = []
     flow_divs = []
+    protocol_divs = []
+    cross_divs = []
 
     try:
         asset_divs = detect_asset_divergence()
@@ -257,7 +414,17 @@ def detect_all_divergences():
     except Exception as e:
         logger.warning(f"Quality-flow divergence detection failed: {e}")
 
-    all_signals = asset_divs + wallet_divs + flow_divs
+    try:
+        protocol_divs = detect_protocol_divergence()
+    except Exception as e:
+        logger.warning(f"Protocol solvency divergence detection failed: {e}")
+
+    try:
+        cross_divs = detect_cross_index_divergence()
+    except Exception as e:
+        logger.warning(f"Cross-index divergence detection failed: {e}")
+
+    all_signals = asset_divs + wallet_divs + flow_divs + protocol_divs + cross_divs
     all_signals.sort(
         key=lambda s: _SEVERITY_ORDER.get(s.get("severity", "silent"), 0),
         reverse=True,
@@ -270,11 +437,13 @@ def detect_all_divergences():
             "asset_quality": len(asset_divs),
             "wallet_concentration": len(wallet_divs),
             "quality_flow": len(flow_divs),
+            "protocol_solvency": len(protocol_divs),
+            "cross_index": len(cross_divs),
             "alerts": sum(1 for s in all_signals if s.get("severity") == "alert"),
             "critical": sum(1 for s in all_signals if s.get("severity") == "critical"),
         },
         "detected_at": datetime.now(timezone.utc).isoformat(),
-        "version": "divergence-v1.0.0",
+        "version": "divergence-v1.1.0",
     }
 
 

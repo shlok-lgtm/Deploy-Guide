@@ -12,7 +12,7 @@ import os
 import re
 import time
 import uuid as uuid_mod
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 from decimal import Decimal
 from typing import Optional
 
@@ -3329,6 +3329,137 @@ async def psi_definition():
     """Return the full PSI v0.1 index definition."""
     from app.index_definitions.psi_v01 import PSI_V01_DEFINITION
     return PSI_V01_DEFINITION
+
+
+# =============================================================================
+# PSI Temporal Reconstruction
+# =============================================================================
+
+@app.get("/api/psi/scores/{slug}/at/{date_str}")
+def psi_score_at_date(slug: str, date_str: str):
+    """Reconstruct PSI score for a protocol at a historical date."""
+    from app.services.psi_temporal_engine import reconstruct_psi_score
+    try:
+        target = date.fromisoformat(date_str)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+    return reconstruct_psi_score(slug, target)
+
+
+@app.get("/api/psi/scores/{slug}/range")
+def psi_score_range(
+    slug: str,
+    start: Optional[str] = Query(default=None),
+    end: Optional[str] = Query(default=None),
+):
+    """Reconstruct daily PSI scores for a date range (max 365 days)."""
+    from app.services.psi_temporal_engine import reconstruct_psi_range
+    to_date = date.fromisoformat(end) if end else date.today()
+    from_date = date.fromisoformat(start) if start else to_date - timedelta(days=30)
+    if (to_date - from_date).days > 365:
+        raise HTTPException(status_code=400, detail="Max range is 365 days")
+    scores = reconstruct_psi_range(slug, from_date, to_date)
+    return {
+        "protocol": slug,
+        "from": from_date.isoformat(),
+        "to": to_date.isoformat(),
+        "scores": scores,
+        "count": len(scores),
+    }
+
+
+@app.get("/api/psi/scores/{slug}/backtest/{event}")
+def psi_backtest_event(slug: str, event: str):
+    """Reconstruct PSI scores during a named crisis event."""
+    from app.services.psi_temporal_engine import reconstruct_psi_range
+    from app.services.temporal_engine import CRISIS_EVENTS
+    crisis = CRISIS_EVENTS.get(event)
+    if not crisis:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown event '{event}'. Available: {list(CRISIS_EVENTS.keys())}",
+        )
+    from_date = date.fromisoformat(crisis["from"])
+    to_date = date.fromisoformat(crisis["to"])
+    scores = reconstruct_psi_range(slug, from_date, to_date)
+    return {
+        "event": event,
+        "event_name": crisis["name"],
+        "event_description": crisis["description"],
+        "protocol": slug,
+        "from": crisis["from"],
+        "to": crisis["to"],
+        "scores": scores,
+        "count": len(scores),
+    }
+
+
+@app.post("/api/admin/psi-backfill")
+async def admin_psi_backfill(request: Request):
+    """Trigger historical data backfill for all PSI protocols. Admin-key protected."""
+    _check_admin_key(request)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    from_date = body.get("from_date", "2024-01-01")
+    from app.services.psi_backfill import backfill_all_protocols
+    result = backfill_all_protocols(from_date=from_date)
+    return {"status": "complete", "results": result}
+
+
+@app.get("/api/psi/scores/{slug}/verify")
+async def verify_psi_score(slug: str):
+    """Verify the latest PSI score by re-deriving from stored raw values."""
+    row = fetch_one("""
+        SELECT protocol_slug, overall_score, grade, raw_values,
+               inputs_hash, formula_version, computed_at
+        FROM psi_scores WHERE protocol_slug = %s
+        ORDER BY computed_at DESC LIMIT 1
+    """, (slug,))
+
+    if not row:
+        raise HTTPException(status_code=404, detail=f"No PSI score found for {slug}")
+
+    stored_score = float(row["overall_score"]) if row.get("overall_score") else None
+    stored_hash = row.get("inputs_hash")
+    raw_values = row.get("raw_values", {})
+
+    # Re-derive hash from stored raw values
+    raw_canonical = json.dumps(raw_values, sort_keys=True, default=str)
+    recomputed_hash = "0x" + hashlib.sha256(raw_canonical.encode()).hexdigest()
+
+    # Re-derive score from stored raw values
+    from app.collectors.psi_collector import score_protocol_from_raw
+    recomputed = score_protocol_from_raw(slug, raw_values)
+    recomputed_score = recomputed.get("overall_score") if recomputed else None
+
+    hash_match = stored_hash == recomputed_hash if stored_hash else None
+    score_match = abs(stored_score - recomputed_score) < 0.01 if stored_score and recomputed_score else None
+
+    if hash_match and score_match:
+        status = "verified"
+    elif hash_match is False or score_match is False:
+        status = "mismatch"
+    else:
+        status = "no_hash_stored"
+
+    return {
+        "protocol": slug,
+        "verification": {
+            "status": status,
+            "stored_score": stored_score,
+            "recomputed_score": round(recomputed_score, 2) if recomputed_score else None,
+            "score_match": score_match,
+            "hash_match": hash_match,
+            "formula_version": row.get("formula_version"),
+        },
+        "hashes": {
+            "stored_inputs_hash": stored_hash,
+            "recomputed_inputs_hash": recomputed_hash,
+        },
+        "computed_at": row["computed_at"].isoformat() if row.get("computed_at") else None,
+    }
 
 
 # =============================================================================
