@@ -1800,6 +1800,29 @@ function DriftExploitBanner() {
   );
 }
 
+const PROTO_SHORT_NAMES = {
+  "jupiter-perpetual-exchange": "Jupiter",
+  "compound-finance": "Compound",
+  "convex-finance": "Convex",
+  "curve-finance": "Curve",
+  "eigenlayer": "Eigen",
+};
+
+function ChainBadge({ chain }) {
+  if (!chain || chain === "ethereum") return null;
+  const styles = {
+    solana: { bg: "#EEEDFE", color: "#534AB7", text: "SOL" },
+  };
+  const s = styles[chain] || { bg: "#F1EFE8", color: "#5F5E5A", text: chain.slice(0, 3).toUpperCase() };
+  return (
+    <span style={{
+      fontSize: 8, fontWeight: 700, padding: "1px 5px", borderRadius: 3,
+      marginLeft: 6, background: s.bg, color: s.color, letterSpacing: 0.5,
+      verticalAlign: "middle",
+    }}>{s.text}</span>
+  );
+}
+
 function ProtocolsView({ mobile }) {
   const { data: protocols, loading: psiLoading } = usePsiScores();
   const { data: cqiData, loading: cqiLoading } = useCqiMatrix();
@@ -1871,7 +1894,10 @@ function ProtocolsView({ mobile }) {
                   alignItems: "center",
                 }}>
                   <span style={{ fontFamily: T.mono, fontSize: 11, color: T.inkFaint }}>{i + 1}</span>
-                  <span style={{ fontFamily: T.mono, fontSize: 13, fontWeight: 700, color: T.ink }}>{p.protocol_name || p.protocol_slug}</span>
+                  <span style={{ fontFamily: T.mono, fontSize: 13, fontWeight: 700, color: T.ink }}>
+                    {p.protocol_name || p.protocol_slug}
+                    <ChainBadge chain={p.chain} />
+                  </span>
                   {!mobile && <span style={{ fontFamily: T.mono, fontSize: 11, color: subScoreColor(cats.balance_sheet) }}>{fmt(cats.balance_sheet, 0)}</span>}
                   {!mobile && <span style={{ fontFamily: T.mono, fontSize: 11, color: subScoreColor(cats.revenue) }}>{fmt(cats.revenue, 0)}</span>}
                   {!mobile && <span style={{ fontFamily: T.mono, fontSize: 11, color: subScoreColor(cats.security) }}>{fmt(cats.security, 0)}</span>}
@@ -1979,11 +2005,20 @@ function ProtocolsView({ mobile }) {
                 <thead>
                   <tr style={{ borderBottom: `3px solid ${T.ink}` }}>
                     <th style={{ padding: "8px 12px", textAlign: "left", fontSize: 9, textTransform: "uppercase", letterSpacing: 1.5, color: T.inkLight }}>Asset \ Protocol</th>
-                    {protos.map(p => (
-                      <th key={p} style={{ padding: "8px 6px", textAlign: "center", fontSize: 9, textTransform: "uppercase", letterSpacing: 0.5, color: T.inkLight, maxWidth: 90 }}>
-                        {p.length > 10 ? p.slice(0, 9) + "…" : p}
-                      </th>
-                    ))}
+                    {protos.map(p => {
+                      const slug = protoSlugMap[p];
+                      const short = PROTO_SHORT_NAMES[slug] || p;
+                      const isSolana = slug && ["drift", "jupiter-perpetual-exchange", "raydium"].includes(slug);
+                      return (
+                        <th key={p} title={p} style={{
+                          padding: "8px 6px", textAlign: "center", fontSize: 9,
+                          textTransform: "uppercase", letterSpacing: 0.5, color: T.inkLight, maxWidth: 90,
+                          borderBottom: isSolana ? "2px solid #534AB7" : undefined,
+                        }}>
+                          {short}
+                        </th>
+                      );
+                    })}
                   </tr>
                 </thead>
                 <tbody>

@@ -177,7 +177,7 @@ KNOWN_BAD_DEBT = {
     "morpho": 0,
     "spark": 0,
     "convex-finance": 0,
-    "drift": 0,
+    "drift": {"amount": 270000000, "since": "2026-04-01"},
     "jupiter-perpetual-exchange": 0,
     "raydium": 0,
 }
@@ -409,8 +409,9 @@ def score_protocol(slug):
     treasury_data = fetch_treasury_data(slug)
     raw_values = extract_raw_values(protocol_data, fees_data, treasury_data)
 
-    # Bad debt (static config)
-    bad_debt = KNOWN_BAD_DEBT.get(slug, 0)
+    # Bad debt (static config — live scoring always uses current amount)
+    bad_debt_entry = KNOWN_BAD_DEBT.get(slug, 0)
+    bad_debt = bad_debt_entry["amount"] if isinstance(bad_debt_entry, dict) else bad_debt_entry
     tvl = raw_values.get("tvl", 0)
     if tvl > 0:
         raw_values["bad_debt_ratio"] = (bad_debt / tvl) * 100  # as percentage of TVL
@@ -1062,7 +1063,8 @@ def enrich_protocol_backlog():
 
         # Dry-run: count how many PSI components have values
         # Add governance/token fields the same way score_protocol does
-        bad_debt = KNOWN_BAD_DEBT.get(slug, 0)
+        bad_debt_entry = KNOWN_BAD_DEBT.get(slug, 0)
+        bad_debt = bad_debt_entry["amount"] if isinstance(bad_debt_entry, dict) else bad_debt_entry
         if tvl > 0:
             raw_values["bad_debt_ratio"] = (bad_debt / tvl) * 100
         else:

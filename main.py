@@ -103,6 +103,7 @@ def run_worker_loop():
 
     cda_interval_hours = int(os.environ.get("CDA_COLLECTION_INTERVAL_HOURS", "24"))
     last_cda_at = 0  # Run CDA on first cycle
+    last_expansion_at = 0  # Run PSI expansion on first cycle
     edge_cycle_counter = 0
 
     while True:
@@ -133,6 +134,31 @@ def run_worker_loop():
             logger.info(f"PSI scoring complete: {len(psi_results)} protocols scored")
         except Exception as e:
             logger.warning(f"PSI scoring failed: {e}")
+
+        # PSI expansion pipeline — daily gate (discover → enrich → promote)
+        hours_since_expansion = (time.time() - last_expansion_at) / 3600
+        if hours_since_expansion >= 24:
+            try:
+                from app.collectors.psi_collector import (
+                    collect_collateral_exposure,
+                    sync_collateral_to_backlog,
+                    discover_protocols,
+                    enrich_protocol_backlog,
+                    promote_eligible_protocols,
+                )
+                logger.info("Running PSI expansion pipeline...")
+                collect_collateral_exposure()
+                synced = sync_collateral_to_backlog()
+                discovered = discover_protocols()
+                enriched = enrich_protocol_backlog()
+                promoted = promote_eligible_protocols()
+                last_expansion_at = time.time()
+                logger.info(
+                    f"PSI expansion: {synced} stablecoins synced, {discovered} discovered, "
+                    f"{enriched} enriched, {promoted} promoted"
+                )
+            except Exception as e:
+                logger.warning(f"PSI expansion pipeline failed: {e}")
 
         # Verification agent cycle — runs after every scoring cycle
         try:

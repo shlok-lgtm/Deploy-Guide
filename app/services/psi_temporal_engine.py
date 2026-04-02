@@ -172,7 +172,12 @@ def reconstruct_psi_score(slug: str, target_date: date) -> dict:
     raw_values["protocol_admin_key_risk"] = admin_score
     sources["protocol_admin_key_risk"] = "config_static"
 
-    bad_debt = KNOWN_BAD_DEBT.get(slug, 0)
+    bad_debt_entry = KNOWN_BAD_DEBT.get(slug, 0)
+    if isinstance(bad_debt_entry, dict):
+        since = date.fromisoformat(bad_debt_entry["since"])
+        bad_debt = bad_debt_entry["amount"] if target_date >= since else 0
+    else:
+        bad_debt = bad_debt_entry
     if tvl_val and tvl_val > 0:
         raw_values["bad_debt_ratio"] = (bad_debt / tvl_val) * 100
     else:

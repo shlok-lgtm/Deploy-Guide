@@ -802,46 +802,58 @@ async def admin_backfill(request: Request, background_tasks: BackgroundTasks):
     """Trigger historical price backfill from CoinGecko. Runs in background.
     Admin-key protected."""
     _check_admin_key(request)
-    body = await request.json()
+    try:
+        body = await request.json()
 
-    from app.services.historical_backfill import backfill_coin_sync, backfill_all_sync
+        from app.services.historical_backfill import backfill_coin_sync, backfill_all_sync
 
-    if body.get("all"):
+        if body.get("all"):
+            from_date = body.get("from", "2020-01-01")
+            to_date = body.get("to")
+            background_tasks.add_task(backfill_all_sync, from_date, to_date)
+            return {"status": "started", "scope": "all", "from": from_date, "to": to_date or "today"}
+
+        stablecoin_id = body.get("stablecoin_id")
+        if not stablecoin_id:
+            raise HTTPException(status_code=400, detail="Provide stablecoin_id or all=true")
+
+        from app.config import STABLECOIN_REGISTRY
+        cfg = STABLECOIN_REGISTRY.get(stablecoin_id)
+        coingecko_id = cfg["coingecko_id"] if cfg else stablecoin_id
+
         from_date = body.get("from", "2020-01-01")
         to_date = body.get("to")
-        background_tasks.add_task(backfill_all_sync, from_date, to_date)
-        return {"status": "started", "scope": "all", "from": from_date, "to": to_date or "today"}
-
-    stablecoin_id = body.get("stablecoin_id")
-    if not stablecoin_id:
-        raise HTTPException(status_code=400, detail="Provide stablecoin_id or all=true")
-
-    from app.config import STABLECOIN_REGISTRY
-    cfg = STABLECOIN_REGISTRY.get(stablecoin_id)
-    coingecko_id = cfg["coingecko_id"] if cfg else stablecoin_id
-
-    from_date = body.get("from", "2020-01-01")
-    to_date = body.get("to")
-    background_tasks.add_task(backfill_coin_sync, coingecko_id, from_date, to_date)
-    return {"status": "started", "coingecko_id": coingecko_id, "from": from_date, "to": to_date or "today"}
+        background_tasks.add_task(backfill_coin_sync, coingecko_id, from_date, to_date)
+        return {"status": "started", "coingecko_id": coingecko_id, "from": from_date, "to": to_date or "today"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": traceback.format_exc()})
 
 
 @app.get("/api/admin/backfill/status")
 def backfill_status(request: Request):
     """Check backfill progress."""
     _check_admin_key(request)
-    row = fetch_one("SELECT * FROM backfill_status ORDER BY id DESC LIMIT 1")
-    if not row:
-        return {"status": "never_run"}
-    return {
-        "status": row["status"],
-        "started_at": row["started_at"].isoformat() if row["started_at"] else None,
-        "finished_at": row["finished_at"].isoformat() if row["finished_at"] else None,
-        "coins_total": row["coins_total"],
-        "coins_completed": row["coins_completed"],
-        "records_total": row["records_total"],
-        "current_coin": row["current_coin"],
-    }
+    try:
+        row = fetch_one("SELECT * FROM backfill_status ORDER BY id DESC LIMIT 1")
+        if not row:
+            return {"status": "never_run"}
+        return {
+            "status": row["status"],
+            "started_at": row["started_at"].isoformat() if row["started_at"] else None,
+            "finished_at": row["finished_at"].isoformat() if row["finished_at"] else None,
+            "coins_total": row["coins_total"],
+            "coins_completed": row["coins_completed"],
+            "records_total": row["records_total"],
+            "current_coin": row["current_coin"],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": traceback.format_exc()})
 
 
 # =============================================================================
@@ -1182,70 +1194,76 @@ def _check_admin_key(request: Request):
 async def admin_governance_stats(request: Request):
     _check_admin_key(request)
 
-    total_docs = fetch_one("SELECT COUNT(*) as count FROM gov_documents")
-    total_coin_mentions = fetch_one("SELECT COUNT(*) as count FROM gov_stablecoin_mentions")
-    total_metric_mentions = fetch_one("SELECT COUNT(*) as count FROM gov_metric_mentions")
+    try:
+        total_docs = fetch_one("SELECT COUNT(*) as count FROM gov_documents")
+        total_coin_mentions = fetch_one("SELECT COUNT(*) as count FROM gov_stablecoin_mentions")
+        total_metric_mentions = fetch_one("SELECT COUNT(*) as count FROM gov_metric_mentions")
 
-    sources = fetch_all("""
-        SELECT source, COUNT(*) as count
-        FROM gov_documents
-        GROUP BY source
-        ORDER BY count DESC
-    """)
+        sources = fetch_all("""
+            SELECT source, COUNT(*) as count
+            FROM gov_documents
+            GROUP BY source
+            ORDER BY count DESC
+        """)
 
-    top_coins = fetch_all("""
-        SELECT
-            sm.stablecoin,
-            COUNT(*) as count,
-            COUNT(*) FILTER (WHERE sm.sentiment = 'negative') as negative,
-            COUNT(*) FILTER (WHERE sm.sentiment = 'neutral') as neutral,
-            COUNT(*) FILTER (WHERE sm.sentiment = 'positive') as positive,
-            COUNT(*) FILTER (WHERE sm.sentiment = 'concerned') as concerned
-        FROM gov_stablecoin_mentions sm
-        GROUP BY sm.stablecoin
-        ORDER BY count DESC
-        LIMIT 15
-    """)
+        top_coins = fetch_all("""
+            SELECT
+                sm.stablecoin,
+                COUNT(*) as count,
+                COUNT(*) FILTER (WHERE sm.sentiment = 'negative') as negative,
+                COUNT(*) FILTER (WHERE sm.sentiment = 'neutral') as neutral,
+                COUNT(*) FILTER (WHERE sm.sentiment = 'positive') as positive,
+                COUNT(*) FILTER (WHERE sm.sentiment = 'concerned') as concerned
+            FROM gov_stablecoin_mentions sm
+            GROUP BY sm.stablecoin
+            ORDER BY count DESC
+            LIMIT 15
+        """)
 
-    recent_docs = fetch_all("""
-        SELECT
-            d.title, d.source, d.published_at,
-            array_agg(DISTINCT sm.stablecoin) FILTER (WHERE sm.stablecoin IS NOT NULL) as stablecoins_mentioned
-        FROM gov_documents d
-        LEFT JOIN gov_stablecoin_mentions sm ON d.id = sm.document_id
-        GROUP BY d.id, d.title, d.source, d.published_at
-        ORDER BY d.published_at DESC NULLS LAST
-        LIMIT 20
-    """)
+        recent_docs = fetch_all("""
+            SELECT
+                d.title, d.source, d.published_at,
+                array_agg(DISTINCT sm.stablecoin) FILTER (WHERE sm.stablecoin IS NOT NULL) as stablecoins_mentioned
+            FROM gov_documents d
+            LEFT JOIN gov_stablecoin_mentions sm ON d.id = sm.document_id
+            GROUP BY d.id, d.title, d.source, d.published_at
+            ORDER BY d.published_at DESC NULLS LAST
+            LIMIT 20
+        """)
 
-    return {
-        "total_documents": total_docs["count"] if total_docs else 0,
-        "total_stablecoin_mentions": total_coin_mentions["count"] if total_coin_mentions else 0,
-        "total_metric_mentions": total_metric_mentions["count"] if total_metric_mentions else 0,
-        "sources": [{"source": r["source"], "count": r["count"]} for r in sources],
-        "top_stablecoin_mentions": [
-            {
-                "stablecoin": r["stablecoin"],
-                "count": r["count"],
-                "sentiment_breakdown": {
-                    "negative": r["negative"],
-                    "neutral": r["neutral"],
-                    "positive": r["positive"],
-                    "concerned": r["concerned"],
-                },
-            }
-            for r in top_coins
-        ],
-        "recent_documents": [
-            {
-                "title": r["title"],
-                "source": r["source"],
-                "published_at": r["published_at"].isoformat() if r.get("published_at") else None,
-                "stablecoins_mentioned": r["stablecoins_mentioned"] or [],
-            }
-            for r in recent_docs
-        ],
-    }
+        return {
+            "total_documents": total_docs["count"] if total_docs else 0,
+            "total_stablecoin_mentions": total_coin_mentions["count"] if total_coin_mentions else 0,
+            "total_metric_mentions": total_metric_mentions["count"] if total_metric_mentions else 0,
+            "sources": [{"source": r["source"], "count": r["count"]} for r in sources],
+            "top_stablecoin_mentions": [
+                {
+                    "stablecoin": r["stablecoin"],
+                    "count": r["count"],
+                    "sentiment_breakdown": {
+                        "negative": r["negative"],
+                        "neutral": r["neutral"],
+                        "positive": r["positive"],
+                        "concerned": r["concerned"],
+                    },
+                }
+                for r in top_coins
+            ],
+            "recent_documents": [
+                {
+                    "title": r["title"],
+                    "source": r["source"],
+                    "published_at": r["published_at"].isoformat() if r.get("published_at") else None,
+                    "stablecoins_mentioned": r["stablecoins_mentioned"] or [],
+                }
+                for r in recent_docs
+            ],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": traceback.format_exc()})
 
 
 # =============================================================================
@@ -1256,73 +1274,79 @@ async def admin_governance_stats(request: Request):
 async def admin_freshness(request: Request):
     _check_admin_key(request)
 
-    stablecoins_data = []
-    for sid in STABLECOIN_REGISTRY:
-        score_row = fetch_one(
-            "SELECT computed_at FROM scores WHERE stablecoin_id = %s", (sid,)
-        )
+    try:
+        stablecoins_data = []
+        for sid in STABLECOIN_REGISTRY:
+            score_row = fetch_one(
+                "SELECT computed_at FROM scores WHERE stablecoin_id = %s", (sid,)
+            )
 
-        components = fetch_all("""
-            SELECT
-                category,
-                COUNT(*) as count,
-                ROUND(AVG(normalized_score)::numeric, 1) as avg_score
-            FROM component_readings
-            WHERE stablecoin_id = %s
-              AND collected_at > NOW() - INTERVAL '48 hours'
-            GROUP BY category
-        """, (sid,))
+            components = fetch_all("""
+                SELECT
+                    category,
+                    COUNT(*) as count,
+                    ROUND(AVG(normalized_score)::numeric, 1) as avg_score
+                FROM component_readings
+                WHERE stablecoin_id = %s
+                  AND collected_at > NOW() - INTERVAL '48 hours'
+                GROUP BY category
+            """, (sid,))
 
-        sources_rows = fetch_all("""
-            SELECT DISTINCT data_source
-            FROM component_readings
-            WHERE stablecoin_id = %s
-              AND collected_at > NOW() - INTERVAL '48 hours'
-        """, (sid,))
+            sources_rows = fetch_all("""
+                SELECT DISTINCT data_source
+                FROM component_readings
+                WHERE stablecoin_id = %s
+                  AND collected_at > NOW() - INTERVAL '48 hours'
+            """, (sid,))
 
-        categories = {}
-        total_count = 0
-        null_cats = []
-        for c in components:
-            cat_key = c["category"]
-            cat_map = {
-                "peg_stability": "peg",
-                "liquidity_depth": "liquidity",
-                "mint_burn_dynamics": "flows",
-                "holder_distribution": "distribution",
-                "structural_risk_composite": "structural",
-            }
-            short = cat_map.get(cat_key, cat_key)
-            categories[short] = {
-                "count": c["count"],
-                "avg_score": float(c["avg_score"]) if c["avg_score"] else None,
-            }
-            total_count += c["count"]
-            if c["avg_score"] is None:
-                null_cats.append(short)
+            categories = {}
+            total_count = 0
+            null_cats = []
+            for c in components:
+                cat_key = c["category"]
+                cat_map = {
+                    "peg_stability": "peg",
+                    "liquidity_depth": "liquidity",
+                    "mint_burn_dynamics": "flows",
+                    "holder_distribution": "distribution",
+                    "structural_risk_composite": "structural",
+                }
+                short = cat_map.get(cat_key, cat_key)
+                categories[short] = {
+                    "count": c["count"],
+                    "avg_score": float(c["avg_score"]) if c["avg_score"] else None,
+                }
+                total_count += c["count"]
+                if c["avg_score"] is None:
+                    null_cats.append(short)
 
-        for expected in ["peg", "liquidity", "flows", "distribution", "structural"]:
-            if expected not in categories:
-                null_cats.append(expected)
+            for expected in ["peg", "liquidity", "flows", "distribution", "structural"]:
+                if expected not in categories:
+                    null_cats.append(expected)
 
-        stablecoins_data.append({
-            "id": sid,
-            "last_scored": score_row["computed_at"].isoformat() if score_row and score_row.get("computed_at") else None,
-            "component_count": total_count,
-            "categories": categories,
-            "null_categories": null_cats,
-            "sources": [r["data_source"] for r in sources_rows],
-        })
+            stablecoins_data.append({
+                "id": sid,
+                "last_scored": score_row["computed_at"].isoformat() if score_row and score_row.get("computed_at") else None,
+                "component_count": total_count,
+                "categories": categories,
+                "null_categories": null_cats,
+                "sources": [r["data_source"] for r in sources_rows],
+            })
 
-    latest_score = fetch_one("SELECT MAX(computed_at) as latest FROM scores")
-    last_run = latest_score["latest"] if latest_score else None
-    interval_min = int(os.environ.get("COLLECTION_INTERVAL", "60"))
+        latest_score = fetch_one("SELECT MAX(computed_at) as latest FROM scores")
+        last_run = latest_score["latest"] if latest_score else None
+        interval_min = int(os.environ.get("COLLECTION_INTERVAL", "60"))
 
-    return {
-        "stablecoins": stablecoins_data,
-        "last_worker_run": last_run.isoformat() if last_run else None,
-        "next_expected": (last_run + timedelta(minutes=interval_min)).isoformat() if last_run else None,
-    }
+        return {
+            "stablecoins": stablecoins_data,
+            "last_worker_run": last_run.isoformat() if last_run else None,
+            "next_expected": (last_run + timedelta(minutes=interval_min)).isoformat() if last_run else None,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": traceback.format_exc()})
 
 
 # =============================================================================
@@ -1333,78 +1357,84 @@ async def admin_freshness(request: Request):
 async def admin_health(request: Request):
     _check_admin_key(request)
 
-    db_status = db_health_check()
+    try:
+        db_status = db_health_check()
 
-    scores_result = fetch_one("SELECT COUNT(*) as count FROM scores")
-    scored_count = scores_result["count"] if scores_result else 0
+        scores_result = fetch_one("SELECT COUNT(*) as count FROM scores")
+        scored_count = scores_result["count"] if scores_result else 0
 
-    latest_result = fetch_one("SELECT MAX(computed_at) as latest FROM scores")
-    latest_score = latest_result["latest"] if latest_result else None
+        latest_result = fetch_one("SELECT MAX(computed_at) as latest FROM scores")
+        latest_score = latest_result["latest"] if latest_result else None
 
-    last_crawl = fetch_one("""
-        SELECT source, completed_at, documents_found, documents_new, errors, status
-        FROM gov_crawl_logs
-        ORDER BY started_at DESC
-        LIMIT 1
-    """)
+        last_crawl = fetch_one("""
+            SELECT source, completed_at, documents_found, documents_new, errors, status
+            FROM gov_crawl_logs
+            ORDER BY started_at DESC
+            LIMIT 1
+        """)
 
-    source_coverage = fetch_all("""
-        SELECT data_source, COUNT(DISTINCT stablecoin_id) as stablecoin_count, COUNT(*) as reading_count
-        FROM component_readings
-        WHERE collected_at > NOW() - INTERVAL '48 hours'
-        GROUP BY data_source
-        ORDER BY reading_count DESC
-    """)
+        source_coverage = fetch_all("""
+            SELECT data_source, COUNT(DISTINCT stablecoin_id) as stablecoin_count, COUNT(*) as reading_count
+            FROM component_readings
+            WHERE collected_at > NOW() - INTERVAL '48 hours'
+            GROUP BY data_source
+            ORDER BY reading_count DESC
+        """)
 
-    table_counts = fetch_all("""
-        SELECT relname as table_name, n_live_tup as row_count
-        FROM pg_stat_user_tables
-        WHERE schemaname = 'public'
-        ORDER BY n_live_tup DESC
-    """)
+        table_counts = fetch_all("""
+            SELECT relname as table_name, n_live_tup as row_count
+            FROM pg_stat_user_tables
+            WHERE schemaname = 'public'
+            ORDER BY n_live_tup DESC
+        """)
 
-    stale_count = fetch_one("""
-        SELECT COUNT(*) as count FROM component_readings
-        WHERE is_stale = TRUE AND collected_at > NOW() - INTERVAL '48 hours'
-    """)
+        stale_count = fetch_one("""
+            SELECT COUNT(*) as count FROM component_readings
+            WHERE is_stale = TRUE AND collected_at > NOW() - INTERVAL '48 hours'
+        """)
 
-    error_count = fetch_one("""
-        SELECT COUNT(*) as count FROM component_readings
-        WHERE error_message IS NOT NULL AND collected_at > NOW() - INTERVAL '48 hours'
-    """)
+        error_count = fetch_one("""
+            SELECT COUNT(*) as count FROM component_readings
+            WHERE error_message IS NOT NULL AND collected_at > NOW() - INTERVAL '48 hours'
+        """)
 
-    return {
-        "status": "healthy" if db_status["status"] == "healthy" else "degraded",
-        "database": db_status,
-        "scores": {
-            "stablecoins_scored": scored_count,
-            "stablecoins_registered": len(STABLECOIN_REGISTRY),
-            "last_computed": latest_score.isoformat() if latest_score else None,
-        },
-        "formula_version": FORMULA_VERSION,
-        "last_governance_crawl": {
-            "source": last_crawl["source"] if last_crawl else None,
-            "completed_at": last_crawl["completed_at"].isoformat() if last_crawl and last_crawl.get("completed_at") else None,
-            "documents_found": last_crawl["documents_found"] if last_crawl else 0,
-            "documents_new": last_crawl["documents_new"] if last_crawl else 0,
-            "errors": last_crawl["errors"] if last_crawl else 0,
-            "status": last_crawl["status"] if last_crawl else None,
-        } if last_crawl else None,
-        "component_coverage": [
-            {
-                "source": r["data_source"],
-                "stablecoin_count": r["stablecoin_count"],
-                "reading_count": r["reading_count"],
-            }
-            for r in source_coverage
-        ],
-        "scoring_issues": {
-            "stale_readings": stale_count["count"] if stale_count else 0,
-            "error_readings": error_count["count"] if error_count else 0,
-        },
-        "table_row_counts": {r["table_name"]: r["row_count"] for r in table_counts},
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
+        return {
+            "status": "healthy" if db_status["status"] == "healthy" else "degraded",
+            "database": db_status,
+            "scores": {
+                "stablecoins_scored": scored_count,
+                "stablecoins_registered": len(STABLECOIN_REGISTRY),
+                "last_computed": latest_score.isoformat() if latest_score else None,
+            },
+            "formula_version": FORMULA_VERSION,
+            "last_governance_crawl": {
+                "source": last_crawl["source"] if last_crawl else None,
+                "completed_at": last_crawl["completed_at"].isoformat() if last_crawl and last_crawl.get("completed_at") else None,
+                "documents_found": last_crawl["documents_found"] if last_crawl else 0,
+                "documents_new": last_crawl["documents_new"] if last_crawl else 0,
+                "errors": last_crawl["errors"] if last_crawl else 0,
+                "status": last_crawl["status"] if last_crawl else None,
+            } if last_crawl else None,
+            "component_coverage": [
+                {
+                    "source": r["data_source"],
+                    "stablecoin_count": r["stablecoin_count"],
+                    "reading_count": r["reading_count"],
+                }
+                for r in source_coverage
+            ],
+            "scoring_issues": {
+                "stale_readings": stale_count["count"] if stale_count else 0,
+                "error_readings": error_count["count"] if error_count else 0,
+            },
+            "table_row_counts": {r["table_name"]: r["row_count"] for r in table_counts},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": traceback.format_exc()})
 
 
 # =============================================================================
@@ -1415,21 +1445,7 @@ async def admin_health(request: Request):
 async def admin_content_signals(request: Request):
     _check_admin_key(request)
 
-    hot_docs = fetch_all("""
-        SELECT
-            d.id, d.title, d.source, d.published_at,
-            COUNT(sm.id) as mention_count,
-            array_agg(DISTINCT sm.stablecoin) FILTER (WHERE sm.stablecoin IS NOT NULL) as stablecoins,
-            MODE() WITHIN GROUP (ORDER BY sm.sentiment) as dominant_sentiment
-        FROM gov_documents d
-        JOIN gov_stablecoin_mentions sm ON d.id = sm.document_id
-        WHERE d.published_at > NOW() - INTERVAL '14 days'
-        GROUP BY d.id, d.title, d.source, d.published_at
-        ORDER BY COUNT(sm.id) DESC
-        LIMIT 10
-    """)
-
-    if not hot_docs:
+    try:
         hot_docs = fetch_all("""
             SELECT
                 d.id, d.title, d.source, d.published_at,
@@ -1438,56 +1454,76 @@ async def admin_content_signals(request: Request):
                 MODE() WITHIN GROUP (ORDER BY sm.sentiment) as dominant_sentiment
             FROM gov_documents d
             JOIN gov_stablecoin_mentions sm ON d.id = sm.document_id
+            WHERE d.published_at > NOW() - INTERVAL '14 days'
             GROUP BY d.id, d.title, d.source, d.published_at
             ORDER BY COUNT(sm.id) DESC
             LIMIT 10
         """)
 
-    signals = []
-    for doc in hot_docs:
-        coins = doc.get("stablecoins") or []
-        sii_data = {}
-        scores_list = []
-        for coin_name in coins:
-            coin_id = coin_name.lower()
-            score_row = fetch_one("""
-                SELECT overall_score, peg_score, liquidity_score, mint_burn_score,
-                       distribution_score, structural_score
-                FROM scores WHERE stablecoin_id = %s
-            """, (coin_id,))
-            if score_row:
-                sii_data[coin_id + "_score"] = float(score_row["overall_score"])
-                scores_list.append(float(score_row["overall_score"]))
-                cats = {
-                    "peg": float(score_row["peg_score"]) if score_row.get("peg_score") else 100,
-                    "liquidity": float(score_row["liquidity_score"]) if score_row.get("liquidity_score") else 100,
-                    "flows": float(score_row["mint_burn_score"]) if score_row.get("mint_burn_score") else 100,
-                    "distribution": float(score_row["distribution_score"]) if score_row.get("distribution_score") else 100,
-                    "structural": float(score_row["structural_score"]) if score_row.get("structural_score") else 100,
-                }
-                weakest = min(cats, key=cats.get)
-                sii_data["weakest_category"] = weakest
+        if not hot_docs:
+            hot_docs = fetch_all("""
+                SELECT
+                    d.id, d.title, d.source, d.published_at,
+                    COUNT(sm.id) as mention_count,
+                    array_agg(DISTINCT sm.stablecoin) FILTER (WHERE sm.stablecoin IS NOT NULL) as stablecoins,
+                    MODE() WITHIN GROUP (ORDER BY sm.sentiment) as dominant_sentiment
+                FROM gov_documents d
+                JOIN gov_stablecoin_mentions sm ON d.id = sm.document_id
+                GROUP BY d.id, d.title, d.source, d.published_at
+                ORDER BY COUNT(sm.id) DESC
+                LIMIT 10
+            """)
 
-        if len(scores_list) >= 2:
-            sii_data["gap"] = round(max(scores_list) - min(scores_list), 1)
+        signals = []
+        for doc in hot_docs:
+            coins = doc.get("stablecoins") or []
+            sii_data = {}
+            scores_list = []
+            for coin_name in coins:
+                coin_id = coin_name.lower()
+                score_row = fetch_one("""
+                    SELECT overall_score, peg_score, liquidity_score, mint_burn_score,
+                           distribution_score, structural_score
+                    FROM scores WHERE stablecoin_id = %s
+                """, (coin_id,))
+                if score_row:
+                    sii_data[coin_id + "_score"] = float(score_row["overall_score"])
+                    scores_list.append(float(score_row["overall_score"]))
+                    cats = {
+                        "peg": float(score_row["peg_score"]) if score_row.get("peg_score") else 100,
+                        "liquidity": float(score_row["liquidity_score"]) if score_row.get("liquidity_score") else 100,
+                        "flows": float(score_row["mint_burn_score"]) if score_row.get("mint_burn_score") else 100,
+                        "distribution": float(score_row["distribution_score"]) if score_row.get("distribution_score") else 100,
+                        "structural": float(score_row["structural_score"]) if score_row.get("structural_score") else 100,
+                    }
+                    weakest = min(cats, key=cats.get)
+                    sii_data["weakest_category"] = weakest
 
-        topic = doc["title"] or "Untitled"
-        coins_str = ", ".join(c.upper() for c in coins[:3]) if coins else "stablecoins"
-        suggested = f"{topic} — comparing {coins_str}"
-        if sii_data.get("weakest_category"):
-            suggested += f" (weakest: {sii_data['weakest_category']})"
+            if len(scores_list) >= 2:
+                sii_data["gap"] = round(max(scores_list) - min(scores_list), 1)
 
-        signals.append({
-            "governance_topic": topic,
-            "source": doc["source"],
-            "published_at": doc["published_at"].isoformat() if doc.get("published_at") else None,
-            "mention_count": doc["mention_count"],
-            "sentiment": doc.get("dominant_sentiment", "neutral"),
-            "relevant_sii_data": sii_data,
-            "suggested_angle": suggested,
-        })
+            topic = doc["title"] or "Untitled"
+            coins_str = ", ".join(c.upper() for c in coins[:3]) if coins else "stablecoins"
+            suggested = f"{topic} — comparing {coins_str}"
+            if sii_data.get("weakest_category"):
+                suggested += f" (weakest: {sii_data['weakest_category']})"
 
-    return {"signals": signals}
+            signals.append({
+                "governance_topic": topic,
+                "source": doc["source"],
+                "published_at": doc["published_at"].isoformat() if doc.get("published_at") else None,
+                "mention_count": doc["mention_count"],
+                "sentiment": doc.get("dominant_sentiment", "neutral"),
+                "relevant_sii_data": sii_data,
+                "suggested_angle": suggested,
+            })
+
+        return {"signals": signals}
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": traceback.format_exc()})
 
 
 # =============================================================================
@@ -2353,49 +2389,79 @@ async def cda_attestations(asset_symbol: str):
 async def admin_reindex_batch(request: Request, background_tasks: BackgroundTasks, batch_size: int = Query(default=500)):
     """Run one batch of wallet re-indexing. Call externally via cron."""
     _check_admin_key(request)
-    from app.indexer.pipeline import run_pipeline_batch
+    try:
+        from app.indexer.pipeline import run_pipeline_batch
 
-    background_tasks.add_task(run_pipeline_batch, batch_size)
-    return {
-        "status": "accepted",
-        "batch_size": batch_size,
-        "message": "Reindex started. Check GET /api/admin/reindex-status for progress.",
-    }
+        background_tasks.add_task(run_pipeline_batch, batch_size)
+        return {
+            "status": "accepted",
+            "batch_size": batch_size,
+            "message": "Reindex started. Check GET /api/admin/reindex-status for progress.",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": traceback.format_exc()})
 
 
 @app.get("/api/admin/reindex-status")
 async def admin_reindex_status(request: Request):
     """Return current/last reindex run metadata and DB freshness."""
     _check_admin_key(request)
-    from app.indexer.pipeline import get_reindex_status
-    return get_reindex_status()
+    try:
+        from app.indexer.pipeline import get_reindex_status
+        return get_reindex_status()
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": traceback.format_exc()})
 
 
 @app.post("/api/admin/rebuild-profiles")
 async def admin_rebuild_profiles(request: Request, background_tasks: BackgroundTasks):
     """Rebuild unified cross-chain wallet profiles."""
     _check_admin_key(request)
-    from app.indexer.profiles import rebuild_all_profiles
-    background_tasks.add_task(rebuild_all_profiles)
-    return {"status": "started"}
+    try:
+        from app.indexer.profiles import rebuild_all_profiles
+        background_tasks.add_task(rebuild_all_profiles)
+        return {"status": "started"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": traceback.format_exc()})
 
 
 @app.post("/api/admin/decay-edges")
 async def admin_decay_edges(request: Request):
     """Recalculate edge weights with time-decay multiplier."""
     _check_admin_key(request)
-    from app.indexer.edges import decay_edges
-    result = decay_edges()
-    return result
+    try:
+        from app.indexer.edges import decay_edges
+        result = decay_edges()
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": traceback.format_exc()})
 
 
 @app.post("/api/admin/prune-edges")
 async def admin_prune_edges(request: Request):
     """Archive edges older than 180 days."""
     _check_admin_key(request)
-    from app.indexer.edges import prune_stale_edges
-    result = prune_stale_edges()
-    return result
+    try:
+        from app.indexer.edges import prune_stale_edges
+        result = prune_stale_edges()
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": traceback.format_exc()})
 
 
 @app.post("/api/admin/collect-cda")
@@ -2405,10 +2471,16 @@ async def trigger_cda_collection(key: str = Query(default=None)):
     if not admin_key or key != admin_key:
         raise HTTPException(status_code=401, detail="Unauthorized — provide ?key=YOUR_ADMIN_KEY")
 
-    import asyncio as _asyncio
-    from app.services.cda_collector import run_collection
-    _asyncio.create_task(run_collection())
-    return {"status": "collection_started"}
+    try:
+        import asyncio as _asyncio
+        from app.services.cda_collector import run_collection
+        _asyncio.create_task(run_collection())
+        return {"status": "collection_started"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": traceback.format_exc()})
 
 
 @app.post("/api/admin/seed-cda-registry")
@@ -2417,9 +2489,15 @@ async def seed_cda_registry(key: str = Query(default=None)):
     admin_key = os.environ.get("ADMIN_KEY", "")
     if not admin_key or key != admin_key:
         raise HTTPException(status_code=401, detail="Unauthorized — provide ?key=YOUR_ADMIN_KEY")
-    _seed_cda_issuer_registry()
-    count = fetch_one("SELECT COUNT(*) AS cnt FROM cda_issuer_registry WHERE is_active = TRUE")
-    return {"status": "seeded", "active_issuers": count["cnt"] if count else 0}
+    try:
+        _seed_cda_issuer_registry()
+        count = fetch_one("SELECT COUNT(*) AS cnt FROM cda_issuer_registry WHERE is_active = TRUE")
+        return {"status": "seeded", "active_issuers": count["cnt"] if count else 0}
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": traceback.format_exc()})
 
 
 @app.get("/api/cda/monitors")
@@ -2438,9 +2516,15 @@ async def setup_cda_monitors(key: str = Query(default=None)):
     if not admin_key or key != admin_key:
         raise HTTPException(status_code=401, detail="Unauthorized — provide ?key=YOUR_ADMIN_KEY")
 
-    from app.services.cda_collector import setup_monitors
-    count = await setup_monitors()
-    return {"status": "ok", "monitors_created": count}
+    try:
+        from app.services.cda_collector import setup_monitors
+        count = await setup_monitors()
+        return {"status": "ok", "monitors_created": count}
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": traceback.format_exc()})
 
 
 @app.post("/api/cda/webhook/monitor")
@@ -3199,73 +3283,82 @@ async def verify_assessment(assessment_id: str):
 async def admin_create_assessment_event(request: Request):
     """Create a manual assessment event (e.g. exploit, incident). Admin-key protected."""
     _check_admin_key(request)
-    body = await request.json()
+    try:
+        body = await request.json()
 
-    import hashlib
+        import hashlib
 
-    required = ["entity_type", "entity_id", "severity", "title"]
-    for field in required:
-        if field not in body:
-            raise HTTPException(status_code=400, detail=f"Missing required field: {field}")
+        required = ["entity_type", "entity_id", "severity", "title"]
+        for field in required:
+            if field not in body:
+                raise HTTPException(status_code=400, detail=f"Missing required field: {field}")
 
-    from app.specs.severity_v1 import SEVERITY_ORDER
-    if body["severity"] not in SEVERITY_ORDER:
-        raise HTTPException(status_code=400, detail=f"Invalid severity. Valid: {list(SEVERITY_ORDER.keys())}")
+        from app.specs.severity_v1 import SEVERITY_ORDER
+        if body["severity"] not in SEVERITY_ORDER:
+            raise HTTPException(status_code=400, detail=f"Invalid severity. Valid: {list(SEVERITY_ORDER.keys())}")
 
-    # Build the assessment dict compatible with store_assessment schema
-    trigger_detail = {
-        "entity_type": body["entity_type"],
-        "entity_id": body["entity_id"],
-        "title": body["title"],
-        "description": body.get("description", ""),
-        "data": body.get("data", {}),
-        "manual": True,
-    }
+        # Build the assessment dict compatible with store_assessment schema
+        trigger_detail = {
+            "entity_type": body["entity_type"],
+            "entity_id": body["entity_id"],
+            "title": body["title"],
+            "description": body.get("description", ""),
+            "data": body.get("data", {}),
+            "manual": True,
+        }
 
-    # Use entity_id as wallet_address placeholder for protocol-level events
-    wallet_addr = body.get("wallet_address", f"protocol:{body['entity_id']}")
+        # Use entity_id as wallet_address placeholder for protocol-level events
+        wallet_addr = body.get("wallet_address", f"protocol:{body['entity_id']}")
 
-    # Compute content hash for idempotency
-    canonical = json.dumps(trigger_detail, sort_keys=True, separators=(",", ":"))
-    content_hash = "0x" + hashlib.sha256(canonical.encode()).hexdigest()
+        # Compute content hash for idempotency
+        canonical = json.dumps(trigger_detail, sort_keys=True, separators=(",", ":"))
+        content_hash = "0x" + hashlib.sha256(canonical.encode()).hexdigest()
 
-    assessment = {
-        "wallet_address": wallet_addr,
-        "chain": body.get("chain", "solana" if body.get("data", {}).get("chain") == "solana" else "ethereum"),
-        "trigger_type": body.get("event_type", "manual_incident"),
-        "trigger_detail": trigger_detail,
-        "wallet_risk_score": None,
-        "wallet_risk_grade": None,
-        "wallet_risk_score_prev": None,
-        "concentration_hhi": None,
-        "concentration_hhi_prev": None,
-        "coverage_ratio": None,
-        "total_stablecoin_value": body.get("data", {}).get("estimated_loss_usd"),
-        "holdings_snapshot": body.get("holdings_snapshot", []),
-        "severity": body["severity"],
-        "broadcast": body["severity"] in ("alert", "critical"),
-        "content_hash": content_hash,
-        "methodology_version": body.get("methodology_version", "manual-v1.0.0"),
-    }
+        assessment = {
+            "wallet_address": wallet_addr,
+            "chain": body.get("chain", "solana" if body.get("data", {}).get("chain") == "solana" else "ethereum"),
+            "trigger_type": body.get("event_type", "manual_incident"),
+            "trigger_detail": trigger_detail,
+            "wallet_risk_score": None,
+            "wallet_risk_grade": None,
+            "wallet_risk_score_prev": None,
+            "concentration_hhi": None,
+            "concentration_hhi_prev": None,
+            "coverage_ratio": None,
+            "total_stablecoin_value": body.get("data", {}).get("estimated_loss_usd"),
+            "holdings_snapshot": body.get("holdings_snapshot", []),
+            "severity": body["severity"],
+            "broadcast": body["severity"] in ("alert", "critical"),
+            "content_hash": content_hash,
+            "methodology_version": body.get("methodology_version", "manual-v1.0.0"),
+        }
 
-    from app.agent.store import store_assessment
-    event_id = store_assessment(assessment)
+        from app.agent.store import store_assessment
+        event_id = store_assessment(assessment)
 
-    if not event_id:
-        return {"status": "skipped", "reason": "Duplicate event (same content_hash within 1 hour)"}
+        if not event_id:
+            return {"status": "skipped", "reason": "Duplicate event (same content_hash within 1 hour)"}
 
-    return {
-        "status": "created",
-        "event_id": event_id,
-        "severity": body["severity"],
-        "content_hash": content_hash,
-        "entity": f"{body['entity_type']}:{body['entity_id']}",
-    }
+        return {
+            "status": "created",
+            "event_id": event_id,
+            "severity": body["severity"],
+            "content_hash": content_hash,
+            "entity": f"{body['entity_type']}:{body['entity_id']}",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": traceback.format_exc()})
 
 
 # =============================================================================
 # PSI (Protocol Solvency Index) API
 # =============================================================================
+
+_SOLANA_PROTOCOL_SLUGS = {"drift", "jupiter-perpetual-exchange", "raydium"}
+
 
 @app.get("/api/psi/scores")
 async def psi_scores():
@@ -3280,11 +3373,13 @@ async def psi_scores():
     """)
     results = []
     for row in rows:
+        slug = row["protocol_slug"]
         results.append({
-            "protocol_slug": row["protocol_slug"],
+            "protocol_slug": slug,
             "protocol_name": row["protocol_name"],
             "score": float(row["overall_score"]) if row.get("overall_score") else None,
             "grade": row["grade"],
+            "chain": "solana" if slug in _SOLANA_PROTOCOL_SLUGS else "ethereum",
             "category_scores": row.get("category_scores"),
             "formula_version": row.get("formula_version"),
             "computed_at": row["computed_at"].isoformat() if row.get("computed_at") else None,
@@ -3406,6 +3501,36 @@ async def admin_psi_backfill(request: Request):
     from app.services.psi_backfill import backfill_all_protocols
     result = backfill_all_protocols(from_date=from_date)
     return {"status": "complete", "results": result}
+
+
+@app.post("/api/admin/protocol-expansion")
+async def admin_run_protocol_expansion(request: Request):
+    """Run the PSI protocol discovery + enrichment + promotion pipeline."""
+    _check_admin_key(request)
+    try:
+        from app.collectors.psi_collector import (
+            collect_collateral_exposure,
+            sync_collateral_to_backlog,
+            discover_protocols,
+            enrich_protocol_backlog,
+            promote_eligible_protocols,
+        )
+        collect_collateral_exposure()
+        synced = sync_collateral_to_backlog()
+        discovered = discover_protocols()
+        enriched = enrich_protocol_backlog()
+        promoted = promote_eligible_protocols()
+        return {
+            "synced": synced,
+            "discovered": discovered,
+            "enriched": enriched,
+            "promoted": promoted,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": traceback.format_exc()})
 
 
 @app.get("/api/psi/scores/{slug}/verify")
@@ -4229,27 +4354,45 @@ async def admin_panel(request: Request):
 @app.get("/api/admin/usage")
 async def admin_usage(request: Request, days: int = 7):
     _check_admin_key(request)
-    from app.usage_tracker import get_usage_stats
-    return get_usage_stats(days=days)
+    try:
+        from app.usage_tracker import get_usage_stats
+        return get_usage_stats(days=days)
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": traceback.format_exc()})
 
 
 @app.post("/api/admin/apikeys")
 async def admin_create_key(request: Request, name: str = Query(...)):
     _check_admin_key(request)
-    from app.usage_tracker import create_api_key
-    key = create_api_key(name)
-    return {
-        "api_key": key,
-        "name": name,
-        "message": "Store this key — it will not be shown again.",
-    }
+    try:
+        from app.usage_tracker import create_api_key
+        key = create_api_key(name)
+        return {
+            "api_key": key,
+            "name": name,
+            "message": "Store this key — it will not be shown again.",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": traceback.format_exc()})
 
 
 @app.get("/api/admin/apikeys")
 async def admin_list_keys(request: Request):
     _check_admin_key(request)
-    from app.usage_tracker import list_api_keys
-    return {"keys": list_api_keys()}
+    try:
+        from app.usage_tracker import list_api_keys
+        return {"keys": list_api_keys()}
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": traceback.format_exc()})
 
 
 # =============================================================================
@@ -4260,19 +4403,31 @@ async def admin_list_keys(request: Request):
 async def admin_budget_status(request: Request):
     """Returns today's API budget allocation and usage."""
     _check_admin_key(request)
-    from app.budget.manager import ApiBudgetManager
-    budget = ApiBudgetManager()
-    return budget.get_status()
+    try:
+        from app.budget.manager import ApiBudgetManager
+        budget = ApiBudgetManager()
+        return budget.get_status()
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": traceback.format_exc()})
 
 
 @app.post("/api/admin/run-daily-cycle")
 async def trigger_daily_cycle(request: Request):
     """Trigger the full daily scoring + indexing cycle in background."""
     _check_admin_key(request)
-    import asyncio
-    from app.budget.daily_cycle import run_daily_cycle
-    asyncio.create_task(run_daily_cycle())
-    return {"status": "started", "message": "Daily cycle triggered in background"}
+    try:
+        import asyncio
+        from app.budget.daily_cycle import run_daily_cycle
+        asyncio.create_task(run_daily_cycle())
+        return {"status": "started", "message": "Daily cycle triggered in background"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": traceback.format_exc()})
 
 
 # =============================================================================
@@ -4588,10 +4743,16 @@ async def acknowledge_discovery_signal(signal_id: int, key: str = Query(default=
     admin_key = os.environ.get("ADMIN_KEY", "")
     if not admin_key or key != admin_key:
         raise HTTPException(status_code=401, detail="Unauthorized — provide ?key=YOUR_ADMIN_KEY")
-    execute("""
-        UPDATE discovery_signals SET acknowledged = TRUE WHERE id = %s
-    """, (signal_id,))
-    return {"status": "acknowledged", "id": signal_id}
+    try:
+        execute("""
+            UPDATE discovery_signals SET acknowledged = TRUE WHERE id = %s
+        """, (signal_id,))
+        return {"status": "acknowledged", "id": signal_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": traceback.format_exc()})
 
 
 # =============================================================================
