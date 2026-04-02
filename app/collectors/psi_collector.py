@@ -110,6 +110,9 @@ PROTOCOL_GOVERNANCE_TOKENS = {
     "morpho": "morpho",
     "spark": None,  # no separate governance token
     "convex-finance": "convex-finance",
+    "drift": "drift-protocol",
+    "jupiter-perpetual-exchange": "jupiter-exchange-solana",
+    "raydium": "raydium",
 }
 
 # Snapshot space IDs for governance proposal queries
@@ -121,6 +124,7 @@ SNAPSHOT_SPACES = {
     "uniswap": "uniswapgovernance.eth",
     "curve-finance": "curve.eth",
     "convex-finance": "cvx.eth",
+    # Solana protocols use Realms (SPL Governance) — no Snapshot spaces
 }
 
 
@@ -172,6 +176,9 @@ KNOWN_BAD_DEBT = {
     "morpho": 0,
     "spark": 0,
     "convex-finance": 0,
+    "drift": 0,
+    "jupiter-perpetual-exchange": 0,
+    "raydium": 0,
 }
 
 # Protocol main contract addresses for admin key analysis
@@ -186,6 +193,9 @@ PROTOCOL_CONTRACTS = {
     "morpho": "0x9994E35Db50125E0DF82e4c2dde62496CE330999",       # Morpho token
     "spark": None,
     "convex-finance": "0x4e3FBD56CD56c3e72c1403e103b45Db9da5B9D2B", # CVX token
+    "drift": None,  # Solana program — no EVM contract
+    "jupiter-perpetual-exchange": None,  # Solana program
+    "raydium": None,  # Solana program
 }
 
 
@@ -449,6 +459,9 @@ def score_protocol(slug):
             # Map protocols to admin risk based on known governance structure
             admin_score = _PROTOCOL_ADMIN_SCORES.get(slug, 50)
         raw_values["protocol_admin_key_risk"] = admin_score
+    elif slug in _PROTOCOL_ADMIN_SCORES:
+        # Non-EVM protocols (e.g. Solana) — use static score when no contract to analyze
+        raw_values["protocol_admin_key_risk"] = _PROTOCOL_ADMIN_SCORES[slug]
 
     result = score_entity(PSI_V01_DEFINITION, raw_values)
     result["protocol_slug"] = slug
@@ -470,6 +483,9 @@ _PROTOCOL_ADMIN_SCORES = {
     "morpho": 65,      # Newer protocol, multisig governance
     "spark": 70,       # Sub-DAO of MakerDAO
     "convex-finance": 75, # Multisig + veCVX governance
+    "drift": 50,          # Solana program — upgrade authority unknown, score as neutral
+    "jupiter-perpetual-exchange": 55,  # Solana program — JUP DAO governance active
+    "raydium": 50,        # Solana program — upgrade authority unknown
 }
 
 
@@ -595,11 +611,25 @@ DEFILLAMA_PROJECT_MAP = {
     # Convex
     "convex-finance": "convex-finance",
     "convex": "convex-finance",
+    # Drift
+    "drift": "drift",
+    "drift-trade": "drift",
+    "drift-protocol": "drift",
+    "drift v2": "drift",
+    # Jupiter
+    "jupiter-perpetual-exchange": "jupiter-perpetual-exchange",
+    "jupiter-perps": "jupiter-perpetual-exchange",
+    "jupiter": "jupiter-perpetual-exchange",
+    # Raydium
+    "raydium": "raydium",
+    "raydium-amm": "raydium",
+    "raydium-clmm": "raydium",
+    "raydium-cpmm": "raydium",
 }
 
 # Protocol type hints for pool_type classification
 _LENDING_PROTOCOLS = {"aave", "compound-finance", "morpho", "spark", "sky"}
-_DEX_PROTOCOLS = {"uniswap", "curve-finance"}
+_DEX_PROTOCOLS = {"uniswap", "curve-finance", "drift", "jupiter-perpetual-exchange", "raydium"}
 _STAKING_PROTOCOLS = {"lido", "eigenlayer"}
 _YIELD_PROTOCOLS = {"convex-finance"}
 
@@ -703,7 +733,8 @@ def collect_collateral_exposure():
 
     # Log unmatched project names that look like they might be related
     protocol_keywords = {"aave", "lido", "eigen", "maker", "sky", "spark",
-                         "compound", "uniswap", "curve", "morpho", "convex"}
+                         "compound", "uniswap", "curve", "morpho", "convex",
+                         "drift", "jupiter", "raydium"}
     for proj in sorted(seen_projects):
         proj_lower = proj.lower()
         if any(kw in proj_lower for kw in protocol_keywords) and proj not in DEFILLAMA_PROJECT_MAP:

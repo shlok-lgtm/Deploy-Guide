@@ -1752,6 +1752,54 @@ function WalletsView({ mobile }) {
   );
 }
 
+function DriftExploitBanner() {
+  const [dismissed, setDismissed] = useState(() => sessionStorage.getItem("drift_banner_dismissed") === "1");
+  const [driftData, setDriftData] = useState(null);
+
+  useEffect(() => {
+    if (dismissed) return;
+    // Auto-hide after April 7, 2026
+    if (new Date() > new Date("2026-04-08T00:00:00Z")) { setDismissed(true); return; }
+    apiFetch(`${API}/api/psi/scores/drift`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setDriftData(d); })
+      .catch(() => {});
+  }, [dismissed]);
+
+  if (dismissed || !driftData) return null;
+
+  const score = driftData.score != null ? driftData.score.toFixed(1) : "—";
+  const grade = driftData.grade || "—";
+
+  return (
+    <div style={{
+      border: `1px solid #c0392b`,
+      background: "rgba(192,57,43,0.06)",
+      padding: "12px 16px",
+      marginBottom: 20,
+      fontFamily: "var(--mono, 'JetBrains Mono', monospace)",
+      fontSize: 11,
+      position: "relative",
+    }}>
+      <button
+        onClick={() => { setDismissed(true); sessionStorage.setItem("drift_banner_dismissed", "1"); }}
+        style={{
+          position: "absolute", top: 8, right: 12, background: "none", border: "none",
+          cursor: "pointer", fontSize: 14, color: "#c0392b", fontWeight: 700,
+        }}
+        aria-label="Dismiss"
+      >&times;</button>
+      <div style={{ fontWeight: 700, marginBottom: 4, color: "#c0392b", textTransform: "uppercase", letterSpacing: 1.2, fontSize: 10 }}>
+        LIVE: Drift Protocol Exploit — ~$270M Drained
+      </div>
+      <div style={{ color: "#555", lineHeight: 1.5 }}>
+        Basis is scoring Drift in real-time. PSI Score: <strong>{score} ({grade})</strong>.
+        {" "}First Solana protocol in the index.
+      </div>
+    </div>
+  );
+}
+
 function ProtocolsView({ mobile }) {
   const { data: protocols, loading: psiLoading } = usePsiScores();
   const { data: cqiData, loading: cqiLoading } = useCqiMatrix();
@@ -1778,6 +1826,8 @@ function ProtocolsView({ mobile }) {
       />
 
       <div style={{ height: 24 }} />
+
+      <DriftExploitBanner />
 
       {/* PSI Rankings Table */}
       <div style={{ marginBottom: 32 }}>

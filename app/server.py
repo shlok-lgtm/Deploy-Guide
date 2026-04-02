@@ -5,6 +5,7 @@ Clean FastAPI server. Reads from database only. No data collection.
 """
 
 import atexit
+import hashlib
 import json
 import logging
 import os
@@ -3191,6 +3192,78 @@ async def verify_assessment(assessment_id: str):
 
 
 # =============================================================================
+# Admin — Manual Assessment Event Creation
+# =============================================================================
+
+@app.post("/api/admin/assessment-events")
+async def admin_create_assessment_event(request: Request):
+    """Create a manual assessment event (e.g. exploit, incident). Admin-key protected."""
+    _check_admin_key(request)
+    body = await request.json()
+
+    import hashlib
+
+    required = ["entity_type", "entity_id", "severity", "title"]
+    for field in required:
+        if field not in body:
+            raise HTTPException(status_code=400, detail=f"Missing required field: {field}")
+
+    from app.specs.severity_v1 import SEVERITY_ORDER
+    if body["severity"] not in SEVERITY_ORDER:
+        raise HTTPException(status_code=400, detail=f"Invalid severity. Valid: {list(SEVERITY_ORDER.keys())}")
+
+    # Build the assessment dict compatible with store_assessment schema
+    trigger_detail = {
+        "entity_type": body["entity_type"],
+        "entity_id": body["entity_id"],
+        "title": body["title"],
+        "description": body.get("description", ""),
+        "data": body.get("data", {}),
+        "manual": True,
+    }
+
+    # Use entity_id as wallet_address placeholder for protocol-level events
+    wallet_addr = body.get("wallet_address", f"protocol:{body['entity_id']}")
+
+    # Compute content hash for idempotency
+    canonical = json.dumps(trigger_detail, sort_keys=True, separators=(",", ":"))
+    content_hash = "0x" + hashlib.sha256(canonical.encode()).hexdigest()
+
+    assessment = {
+        "wallet_address": wallet_addr,
+        "chain": body.get("chain", "solana" if body.get("data", {}).get("chain") == "solana" else "ethereum"),
+        "trigger_type": body.get("event_type", "manual_incident"),
+        "trigger_detail": trigger_detail,
+        "wallet_risk_score": None,
+        "wallet_risk_grade": None,
+        "wallet_risk_score_prev": None,
+        "concentration_hhi": None,
+        "concentration_hhi_prev": None,
+        "coverage_ratio": None,
+        "total_stablecoin_value": body.get("data", {}).get("estimated_loss_usd"),
+        "holdings_snapshot": body.get("holdings_snapshot", []),
+        "severity": body["severity"],
+        "broadcast": body["severity"] in ("alert", "critical"),
+        "content_hash": content_hash,
+        "methodology_version": body.get("methodology_version", "manual-v1.0.0"),
+    }
+
+    from app.agent.store import store_assessment
+    event_id = store_assessment(assessment)
+
+    if not event_id:
+        return {"status": "skipped", "reason": "Duplicate event (same content_hash within 1 hour)"}
+
+    return {
+        "status": "created",
+        "event_id": event_id,
+        "severity": body["severity"],
+        "content_hash": content_hash,
+        "entity": f"{body['entity_type']}:{body['entity_id']}",
+    }
+
+
+# =============================================================================
 # PSI (Protocol Solvency Index) API
 # =============================================================================
 
@@ -4363,6 +4436,158 @@ async def acknowledge_discovery_signal(signal_id: int, key: str = Query(default=
         UPDATE discovery_signals SET acknowledged = TRUE WHERE id = %s
     """, (signal_id,))
     return {"status": "acknowledged", "id": signal_id}
+
+
+# =============================================================================
+# Analysis — Drift Exploit aggregation endpoint
+# =============================================================================
+
+@app.get("/api/analysis/drift-exploit")
+async def drift_exploit_analysis():
+    """Structured analysis of the Drift Protocol exploit — aggregates PSI, CQI, exposure, and market data."""
+    from app.composition import compute_cqi
+    from datetime import datetime, timezone
+
+    result = {
+        "event": None,
+        "drift_psi": None,
+        "stablecoin_exposure": None,
+        "cqi_pairs": {},
+        "contagion": {
+            "connected_wallets": 0,
+            "note": "Solana wallet graph not yet indexed",
+        },
+        "market_impact": None,
+        "narrative": None,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    # 1. Assessment event
+    try:
+        event_row = fetch_one("""
+            SELECT * FROM assessment_events
+            WHERE wallet_address = 'protocol:drift'
+            ORDER BY created_at DESC LIMIT 1
+        """)
+        if event_row:
+            d = dict(event_row)
+            for k, v in d.items():
+                if hasattr(v, "isoformat"):
+                    d[k] = v.isoformat()
+                elif isinstance(v, Decimal):
+                    d[k] = float(v)
+                elif isinstance(v, uuid_mod.UUID):
+                    d[k] = str(v)
+            result["event"] = d
+    except Exception:
+        pass
+
+    # 2. Drift PSI score
+    psi_row = fetch_one("""
+        SELECT protocol_slug, protocol_name, overall_score, grade,
+               category_scores, component_scores, raw_values, formula_version, computed_at
+        FROM psi_scores WHERE protocol_slug = 'drift'
+        ORDER BY computed_at DESC LIMIT 1
+    """)
+    if psi_row:
+        # Count rank
+        all_protocols = fetch_all("""
+            SELECT DISTINCT ON (protocol_slug) protocol_slug, overall_score
+            FROM psi_scores ORDER BY protocol_slug, computed_at DESC
+        """)
+        sorted_protos = sorted(
+            [r for r in all_protocols if r.get("overall_score")],
+            key=lambda r: float(r["overall_score"]),
+            reverse=True,
+        )
+        rank = next((i + 1 for i, r in enumerate(sorted_protos) if r["protocol_slug"] == "drift"), None)
+
+        # Find missing components
+        from app.index_definitions.psi_v01 import PSI_V01_DEFINITION
+        all_comp_ids = set(PSI_V01_DEFINITION["components"].keys())
+        scored_comp_ids = set((psi_row.get("component_scores") or {}).keys())
+        missing = list(all_comp_ids - scored_comp_ids)
+
+        result["drift_psi"] = {
+            "current_score": float(psi_row["overall_score"]) if psi_row.get("overall_score") else None,
+            "grade": psi_row.get("grade"),
+            "category_breakdown": psi_row.get("category_scores"),
+            "components_missing": missing,
+            "rank_among_protocols": rank,
+            "total_protocols": len(sorted_protos),
+            "scored_at": psi_row["computed_at"].isoformat() if psi_row.get("computed_at") else None,
+        }
+
+    # 3. Collateral exposure
+    try:
+        exposure_rows = fetch_all("""
+            SELECT token_symbol, tvl_usd, is_sii_scored, sii_score, pool_type
+            FROM protocol_collateral_exposure
+            WHERE protocol_slug = 'drift'
+            AND snapshot_date = (SELECT MAX(snapshot_date) FROM protocol_collateral_exposure WHERE protocol_slug = 'drift')
+        """)
+        if exposure_rows:
+            result["stablecoin_exposure"] = [
+                {
+                    "symbol": r["token_symbol"],
+                    "tvl_usd": float(r["tvl_usd"]) if r.get("tvl_usd") else 0,
+                    "sii_scored": r.get("is_sii_scored", False),
+                    "sii_score": float(r["sii_score"]) if r.get("sii_score") else None,
+                }
+                for r in exposure_rows
+            ]
+    except Exception:
+        pass
+
+    # 4. CQI pairs
+    for symbol in ["usdc", "usdt", "dai"]:
+        try:
+            cqi = compute_cqi(symbol, "drift")
+            if "error" not in cqi:
+                result["cqi_pairs"][f"{symbol}_x_drift"] = {
+                    "cqi": cqi.get("cqi_score"),
+                    "cqi_grade": cqi.get("cqi_grade"),
+                    "sii": cqi.get("inputs", {}).get("sii", {}).get("score"),
+                    "psi": cqi.get("inputs", {}).get("psi", {}).get("score"),
+                }
+        except Exception:
+            pass
+
+    # 5. Market impact (DRIFT token from CoinGecko)
+    try:
+        from app.collectors.psi_collector import fetch_coingecko_token
+        token_data = fetch_coingecko_token("drift-protocol")
+        if token_data:
+            market = token_data.get("market_data", {})
+            result["market_impact"] = {
+                "drift_price": market.get("current_price", {}).get("usd"),
+                "drift_24h_change_pct": market.get("price_change_percentage_24h"),
+                "drift_market_cap": market.get("market_cap", {}).get("usd"),
+                "drift_volume_24h": market.get("total_volume", {}).get("usd"),
+            }
+    except Exception:
+        pass
+
+    # 6. Narrative
+    psi_score = result["drift_psi"]["current_score"] if result["drift_psi"] else "N/A"
+    psi_grade = result["drift_psi"]["grade"] if result["drift_psi"] else "N/A"
+    n_components = 24 - len(result["drift_psi"]["components_missing"]) if result["drift_psi"] else "N/A"
+    usdc_cqi = result["cqi_pairs"].get("usdc_x_drift", {}).get("cqi", "N/A")
+    usdc_sii = result["cqi_pairs"].get("usdc_x_drift", {}).get("sii", "N/A")
+    exposure_usdc = next(
+        (e["tvl_usd"] for e in (result["stablecoin_exposure"] or []) if e["symbol"] == "USDC"),
+        0,
+    )
+    exposure_usdc_m = round(exposure_usdc / 1e6, 1) if exposure_usdc else 0
+
+    result["narrative"] = {
+        "headline": f"Drift Protocol exploit: ~$270M drained. PSI score: {psi_score} ({psi_grade}). USDC×Drift CQI: {usdc_cqi}.",
+        "key_finding": f"Drift held ${exposure_usdc_m}M in USDC across its vaults. USDC's SII remained stable at {usdc_sii}, but the protocol-level failure demonstrates why CQI — the composition of stablecoin quality and protocol solvency — is the relevant risk surface.",
+        "basis_insight": "A high SII score for USDC did not protect depositors because protocol-level risk was the failure mode. This is exactly what CQI measures.",
+        "methodology_note": f"Drift is Basis's first Solana protocol. Governance components are not yet scored (Solana uses Realms, not Snapshot). The PSI score reflects {n_components}/24 available components.",
+    }
+
+    return result
 
 
 # =============================================================================

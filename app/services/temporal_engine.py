@@ -524,6 +524,12 @@ CRISIS_EVENTS = {
         "to": "2025-01-15",
         "description": "EU MiCA regulation enforcement began, affecting non-compliant stablecoins.",
     },
+    "drift_exploit_2026": {
+        "name": "Drift Protocol Exploit",
+        "from": "2026-04-01",
+        "to": "2026-04-07",
+        "description": "~$270M drained from Drift Protocol vaults on Solana. DRIFT token -37%. USDC held by Drift affected. Deposits/withdrawals suspended.",
+    },
 }
 
 

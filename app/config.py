@@ -15,6 +15,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "")
 COINGECKO_API_KEY = os.environ.get("COINGECKO_API_KEY", "")
 ETHERSCAN_API_KEY = os.environ.get("ETHERSCAN_API_KEY", "")
 ALCHEMY_API_KEY = os.environ.get("ALCHEMY_API_KEY", "")
+HELIUS_API_KEY = os.environ.get("HELIUS_API_KEY", "")
 
 # API settings
 API_HOST = os.environ.get("API_HOST", "0.0.0.0")

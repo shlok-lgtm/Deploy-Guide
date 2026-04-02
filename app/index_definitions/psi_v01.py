@@ -195,4 +195,5 @@ PSI_V01_DEFINITION = {
 TARGET_PROTOCOLS = [
     "aave", "lido", "eigenlayer", "sky", "compound-finance",
     "uniswap", "curve-finance", "morpho", "spark", "convex-finance",
+    "drift", "jupiter-perpetual-exchange", "raydium",
 ]
