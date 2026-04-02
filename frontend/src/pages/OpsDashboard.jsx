@@ -1079,6 +1079,95 @@ function Section({ title, actions, children }) {
   );
 }
 
+// ─── Chain Expansion Panel ────────────────────────────────────────────
+
+function ChainExpansionPanel() {
+  const [candidates, setCandidates] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [expanding, setExpanding] = useState(false);
+  const [specChain, setSpecChain] = useState(null);
+  const [specContent, setSpecContent] = useState(null);
+  const [flash, showFlash] = useFlash();
+
+  const scan = async () => {
+    setLoading(true);
+    try {
+      const res = await opsFetch("/api/ops/chain-candidates");
+      setCandidates(res.candidates || []);
+      showFlash(`Found ${res.count} chain candidate(s)`);
+    } catch (e) { showFlash(e.message, false); }
+    setLoading(false);
+  };
+
+  const expand = async () => {
+    setExpanding(true);
+    try {
+      const res = await opsFetch("/api/ops/chain-expand", { method: "POST" });
+      showFlash(`Generated ${res.specs_generated} spec(s) for ${(res.chains || []).join(", ")}`);
+      scan();
+    } catch (e) { showFlash(e.message, false); }
+    setExpanding(false);
+  };
+
+  const viewSpec = async (chain) => {
+    if (specChain === chain) { setSpecChain(null); setSpecContent(null); return; }
+    try {
+      const res = await opsFetch(`/api/ops/chain-spec/${chain}`);
+      setSpecChain(chain);
+      setSpecContent(res.spec);
+    } catch (e) { showFlash(e.message, false); }
+  };
+
+  return (
+    <Section title="CHAIN EXPANSION" actions={
+      <div style={{ display: "flex", gap: 4 }}>
+        <button onClick={expand} disabled={expanding} style={{ fontSize: 9, fontFamily: T.mono, padding: "2px 6px", border: `1px solid ${T.paper}44`, background: "transparent", color: T.paper, cursor: "pointer", opacity: expanding ? 0.5 : 1 }}>
+          {expanding ? "Generating..." : "Generate Specs"}
+        </button>
+        <button onClick={scan} disabled={loading} style={{ fontSize: 9, fontFamily: T.mono, padding: "2px 6px", border: `1px solid ${T.paper}44`, background: "transparent", color: T.paper, cursor: "pointer", opacity: loading ? 0.5 : 1 }}>
+          {loading ? "Scanning..." : "Scan Chains"}
+        </button>
+      </div>
+    }>
+      <Flash flash={flash} />
+      <div style={{ padding: "0 10px" }}>
+        {!candidates && <div style={{ color: T.inkFaint, fontSize: 12 }}>Click "Scan Chains" to discover expansion candidates.</div>}
+        {candidates && candidates.length === 0 && <div style={{ color: T.inkFaint, fontSize: 12 }}>No chains above threshold.</div>}
+        {candidates && candidates.length > 0 && (
+          <div style={{ fontSize: 11 }}>
+            {candidates.map((c) => (
+              <div key={c.chain} style={{ padding: "6px 0", borderBottom: `1px solid ${T.ruleLight}` }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <span style={{ fontFamily: T.mono, fontWeight: 600, minWidth: 90 }}>{c.chain}</span>
+                  <span style={{ fontFamily: T.mono, fontSize: 10, color: T.inkMid }}>
+                    ${(c.stablecoin_tvl / 1e6).toFixed(0)}M TVL
+                  </span>
+                  <span style={{ fontSize: 10, color: T.inkLight }}>{c.protocol_count} protocols</span>
+                  <span style={{ fontSize: 10, color: T.inkFaint }}>{(c.stablecoins || []).slice(0, 4).join(", ")}</span>
+                  <span style={{ marginLeft: "auto" }}>
+                    {c.spec_exists ? (
+                      <button onClick={() => viewSpec(c.chain)} style={{ fontSize: 9, fontFamily: T.mono, padding: "1px 5px", border: `1px solid ${T.ruleMid}`, background: specChain === c.chain ? T.ink : T.paper, color: specChain === c.chain ? T.paper : T.ink, cursor: "pointer" }}>
+                        {specChain === c.chain ? "Hide Spec" : "View Spec"}
+                      </button>
+                    ) : (
+                      <span style={{ fontSize: 9, fontFamily: T.mono, color: T.inkFaint }}>no spec</span>
+                    )}
+                  </span>
+                </div>
+                {specChain === c.chain && specContent && (
+                  <pre style={{ marginTop: 6, padding: 8, background: T.paperWarm, border: `1px solid ${T.ruleLight}`, fontSize: 10, fontFamily: T.mono, whiteSpace: "pre-wrap", maxHeight: 400, overflow: "auto" }}>
+                    {specContent}
+                  </pre>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </Section>
+  );
+}
+
 // ─── Discovery Panel (lazy-loaded) ────────────────────────────────────
 
 function DiscoveryPanel() {
@@ -2205,6 +2294,7 @@ export default function OpsDashboard() {
             </Section>
 
             <DiscoveryPanel />
+            <ChainExpansionPanel />
             <MilestonesPanel />
           </>
         )}

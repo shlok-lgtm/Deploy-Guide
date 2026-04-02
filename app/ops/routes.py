@@ -1198,6 +1198,48 @@ async def run_migration_033(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ─── Chain Expansion Endpoints ────────────────────────────────────────
+
+
+@router.get("/chain-candidates")
+async def ops_chain_candidates(request: Request):
+    """View chain expansion candidates and their specs."""
+    _check_admin_key(request)
+    from app.collectors.psi_collector import discover_chain_candidates
+
+    candidates = discover_chain_candidates()
+
+    # Check which have specs and serialise sets for JSON
+    for c in candidates:
+        spec_path = os.path.join("docs", "collector_specs", f"{c['chain'].lower()}_collector_spec.md")
+        c["spec_exists"] = os.path.exists(spec_path)
+        c["spec_path"] = spec_path if c["spec_exists"] else None
+        c["protocols"] = list(c.get("protocols", []))[:20]
+        c["stablecoins"] = list(c.get("stablecoins", []))
+
+    return {"candidates": candidates, "count": len(candidates)}
+
+
+@router.post("/chain-expand")
+async def ops_chain_expand(request: Request):
+    """Trigger chain discovery + spec generation manually."""
+    _check_admin_key(request)
+    from app.collectors.psi_collector import run_chain_discovery
+    result = run_chain_discovery()
+    return result
+
+
+@router.get("/chain-spec/{chain}")
+async def ops_chain_spec(request: Request, chain: str):
+    """Read a generated chain collector spec."""
+    _check_admin_key(request)
+    spec_path = os.path.join("docs", "collector_specs", f"{chain.lower()}_collector_spec.md")
+    if not os.path.exists(spec_path):
+        raise HTTPException(status_code=404, detail=f"No spec for {chain}. Run chain discovery first.")
+    with open(spec_path, "r") as f:
+        return {"chain": chain, "spec": f.read()}
+
+
 def register_ops_routes(app):
     """Register the ops router with the main FastAPI app."""
     app.include_router(router)

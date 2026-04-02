@@ -8,6 +8,7 @@ using the generic scoring engine with the PSI v0.1 definition.
 import hashlib
 import json
 import logging
+import os
 import time
 from datetime import datetime, timezone
 
@@ -1309,3 +1310,174 @@ def run_psi_scoring():
                     pass
 
     return results
+
+
+# =========================================================================
+# Chain Discovery — surface chains needing collector coverage
+# =========================================================================
+
+# Known RPC providers per chain (for spec generation)
+CHAIN_RPC_PROVIDERS = {
+    "Solana": {"provider": "Helius", "url": "https://helius.dev", "free_tier": "1M credits/month", "env_var": "HELIUS_API_KEY"},
+    "Sui": {"provider": "Shinami or Mysten Labs", "url": "https://shinami.com", "free_tier": "varies", "env_var": "SUI_RPC_URL"},
+    "Aptos": {"provider": "Nodereal or Aptos Labs", "url": "https://nodereal.io", "free_tier": "varies", "env_var": "APTOS_RPC_URL"},
+    "Avalanche": {"provider": "Infura or Alchemy", "url": "https://alchemy.com", "free_tier": "300M CU/month", "env_var": "AVAX_RPC_URL"},
+    "BSC": {"provider": "Nodereal or Ankr", "url": "https://nodereal.io", "free_tier": "varies", "env_var": "BSC_RPC_URL"},
+    "Polygon": {"provider": "Alchemy or Infura", "url": "https://alchemy.com", "free_tier": "300M CU/month", "env_var": "POLYGON_RPC_URL"},
+    "Optimism": {"provider": "Alchemy", "url": "https://alchemy.com", "free_tier": "300M CU/month", "env_var": "OP_RPC_URL"},
+}
+
+# Chains already supported (collector exists)
+COVERED_CHAINS = {"Ethereum", "Base", "Arbitrum", "Solana"}
+
+# Threshold: aggregate stablecoin TVL on a chain to consider it for expansion
+CHAIN_EXPANSION_TVL_THRESHOLD = float(os.environ.get("CHAIN_EXPANSION_TVL_THRESHOLD", "500000000"))  # $500M default
+
+
+def discover_chain_candidates() -> list:
+    """
+    Discover chains that need SII/PSI coverage based on stablecoin TVL concentration.
+
+    Scans DeFiLlama pool data (same source as protocol discovery) and aggregates
+    stablecoin TVL per chain. Chains not in COVERED_CHAINS that exceed the threshold
+    are candidates for collector development.
+
+    Returns list of candidates sorted by stablecoin TVL descending.
+    """
+    pools = fetch_protocol_pools()
+    if not pools:
+        return []
+
+    # Aggregate stablecoin TVL by chain
+    chain_tvl = {}  # chain -> {total_tvl, stablecoin_tvl, protocol_count, protocols, stablecoins}
+
+    for pool in pools:
+        chain = pool.get("chain", "")
+        if not chain or chain in COVERED_CHAINS:
+            continue
+
+        tvl = pool.get("tvlUsd") or 0
+        if tvl <= 0:
+            continue
+
+        project = pool.get("project", "")
+        pool_symbol = pool.get("symbol", "")
+        is_stable_pool = pool.get("stablecoin", False)
+
+        symbols = _extract_stablecoin_symbols(pool_symbol)
+        stable_tvl = 0
+        stable_symbols = set()
+
+        for sym in symbols:
+            if _is_stablecoin_token(sym, sym) or is_stable_pool:
+                stable_syms = [s for s in symbols if _is_stablecoin_token(s, s)]
+                stable_tvl += tvl / len(stable_syms) if stable_syms else tvl
+                stable_symbols.add(sym)
+
+        if chain not in chain_tvl:
+            chain_tvl[chain] = {
+                "chain": chain,
+                "total_tvl": 0,
+                "stablecoin_tvl": 0,
+                "protocol_count": 0,
+                "protocols": set(),
+                "stablecoins": set(),
+            }
+
+        chain_tvl[chain]["total_tvl"] += tvl
+        chain_tvl[chain]["stablecoin_tvl"] += stable_tvl
+        chain_tvl[chain]["stablecoins"].update(stable_symbols)
+        if project:
+            chain_tvl[chain]["protocols"].add(project)
+
+    # Filter to candidates above threshold
+    candidates = []
+    for chain, data in chain_tvl.items():
+        data["protocol_count"] = len(data["protocols"])
+        data["protocols"] = sorted(data["protocols"])[:20]  # top 20 for display
+        data["stablecoins"] = sorted(data["stablecoins"])
+        data["rpc_provider"] = CHAIN_RPC_PROVIDERS.get(chain, {"provider": "Unknown", "url": "", "free_tier": "check docs", "env_var": chain.upper() + "_RPC_URL"})
+
+        if data["stablecoin_tvl"] >= CHAIN_EXPANSION_TVL_THRESHOLD:
+            candidates.append(data)
+
+    candidates.sort(key=lambda x: x["stablecoin_tvl"], reverse=True)
+
+    if candidates:
+        logger.info(f"Chain discovery: {len(candidates)} chain(s) above ${CHAIN_EXPANSION_TVL_THRESHOLD/1e6:.0f}M threshold")
+        for c in candidates[:5]:
+            logger.info(f"  {c['chain']}: ${c['stablecoin_tvl']/1e6:.0f}M stablecoin TVL, {c['protocol_count']} protocols")
+
+    return candidates
+
+
+def run_chain_discovery() -> dict:
+    """
+    Run chain candidate discovery. If a new chain crosses the threshold,
+    generate a collector spec and create an assessment event for notification.
+    """
+    from app.services.chain_spec_generator import generate_collector_spec
+
+    candidates = discover_chain_candidates()
+    if not candidates:
+        return {"candidates": 0, "specs_generated": 0, "chains": []}
+
+    # Check which candidates are new (not already spec'd)
+    specs_generated = 0
+    for candidate in candidates:
+        chain = candidate["chain"]
+        spec_path = os.path.join("docs", "collector_specs", f"{chain.lower()}_collector_spec.md")
+
+        if os.path.exists(spec_path):
+            continue  # already spec'd
+
+        # Generate spec
+        try:
+            path = generate_collector_spec(candidate)
+            specs_generated += 1
+
+            # Create assessment event for notification
+            from app.agent.store import store_assessment
+            event = {
+                "wallet_address": f"chain:{chain.lower()}",
+                "chain": chain.lower(),
+                "trigger_type": "chain_expansion_ready",
+                "trigger_detail": {
+                    "entity_type": "chain",
+                    "entity_id": chain.lower(),
+                    "title": f"Chain expansion candidate: {chain}",
+                    "description": (
+                        f"{chain} crossed ${candidate['stablecoin_tvl']/1e6:,.0f}M stablecoin TVL "
+                        f"across {candidate['protocol_count']} protocols. "
+                        f"Collector spec generated at {path}. "
+                        f"Stablecoins present: {', '.join(candidate.get('stablecoins', [])[:5])}. "
+                        f"Recommended RPC: {candidate.get('rpc_provider', {}).get('provider', 'Unknown')}."
+                    ),
+                    "spec_path": path,
+                    "stablecoin_tvl": candidate["stablecoin_tvl"],
+                    "protocol_count": candidate["protocol_count"],
+                },
+                "wallet_risk_score": None,
+                "wallet_risk_grade": None,
+                "wallet_risk_score_prev": None,
+                "concentration_hhi": None,
+                "concentration_hhi_prev": None,
+                "coverage_ratio": None,
+                "total_stablecoin_value": candidate["stablecoin_tvl"],
+                "holdings_snapshot": [],
+                "severity": "notable",
+                "broadcast": True,
+                "content_hash": None,
+                "methodology_version": "chain-discovery-v1",
+            }
+            store_assessment(event)
+            logger.info(f"Chain expansion event created for {chain}: ${candidate['stablecoin_tvl']/1e6:,.0f}M")
+
+        except Exception as e:
+            logger.error(f"Chain spec generation failed for {chain}: {e}")
+
+    return {
+        "candidates": len(candidates),
+        "specs_generated": specs_generated,
+        "chains": [c["chain"] for c in candidates],
+    }

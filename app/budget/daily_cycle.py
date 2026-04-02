@@ -133,6 +133,18 @@ async def _run_psi_phase(budget: ApiBudgetManager):
     except Exception as e:
         logger.error(f"Protocol backlog cycle failed: {e}")
 
+    # Discover chains needing coverage
+    try:
+        from app.collectors.psi_collector import run_chain_discovery
+        chain_result = run_chain_discovery()
+        if chain_result.get("specs_generated", 0) > 0:
+            logger.info(
+                f"Chain discovery: {chain_result['specs_generated']} new spec(s) "
+                f"generated for {chain_result['chains']}"
+            )
+    except Exception as e:
+        logger.error(f"Chain discovery error: {e}")
+
     budget.mark_completed("psi")
 
 
