@@ -1,0 +1,27 @@
+{
+  "name": "io.github.shlok-lgtm/basis-mcp",
+  "description": "Verifiable risk intelligence for on-chain finance. Query stablecoin integrity scores, wallet risk profiles, transaction risk assessment, and methodology transparency.",
+  "repository": {
+    "url": "https://github.com/shlok-lgtm/basis-mcp",
+    "source": "https://github.com/shlok-lgtm/basis-mcp",
+    "homepage": "https://basisprotocol.xyz"
+  },
+  "version_detail": {
+    "version": "1.0.4",
+    "release_date": "2026-03-26",
+    "is_latest": true
+  },
+  "packages": [
+    {
+      "registry_name": "npm",
+      "name": "@basis-protocol/mcp-server",
+      "version": "1.0.4"
+    }
+  ],
+  "remotes": [
+    {
+      "transport_type": "streamable-http",
+      "url": "https://basisprotocol.xyz/mcp"
+    }
+  ]
+}

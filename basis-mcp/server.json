@@ -1,0 +1,21 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.shlok-lgtm/basis-mcp",
+  "title": "Basis Protocol",
+  "description": "Stablecoin risk scores, wallet risk profiles, and transaction risk assessment.",
+  "repository": {
+    "url": "https://github.com/shlok-lgtm/basis-mcp",
+    "source": "github"
+  },
+  "version": "1.0.3",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@basis-protocol/mcp-server",
+      "version": "1.0.3",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
