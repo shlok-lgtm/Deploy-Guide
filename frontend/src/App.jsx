@@ -1618,12 +1618,13 @@ function WalletSearchPanel({ mobile }) {
   );
 }
 
-function WalletsView({ mobile }) {
+function WalletsView({ mobile, integrity }) {
   const { data: topWallets, loading: topLoading } = useWalletTop(50);
   const { data: riskyWallets, loading: riskyLoading } = useWalletRiskiest(50);
   const { data: backlog, loading: backlogLoading } = useBacklog(50);
 
-  const queuedCount = (backlog || []).filter((a) => a.scoring_status === "queued" || a.scoring_status === "in_progress").length;
+  const walletDomain = integrity?.domains?.wallets || {};
+  const walletCount = walletDomain.row_count || (topWallets ? topWallets.length : 0);
 
   return (
     <div>
@@ -1633,9 +1634,9 @@ function WalletsView({ mobile }) {
         title={<><span style={{ fontWeight: 700 }}>Wallet</span> Risk <span style={{ fontWeight: 700 }}>Graph</span></>}
         formId="FORM WRG-001 · BASIS PROTOCOL"
         stats={[
-          `${topWallets ? topWallets.length : "—"} WALLETS TRACKED`,
-          `${backlog ? backlog.length : "—"} BACKLOG ASSETS`,
-          `${queuedCount} QUEUED FOR SCORING`,
+          `${walletCount ? walletCount.toLocaleString() : "—"} WALLETS TRACKED`,
+          "ETHEREUM MAINNET",
+          "UPDATED DAILY",
         ]}
         formulaLine="Risk = f(concentration, coverage quality, behavioral signals)"
         versionLabel="WRG v0.1.0"
@@ -2890,7 +2891,7 @@ export default function App() {
               {view === "detail" && selectedCoin && (
                 <DetailView coinId={selectedCoin} onBack={handleBack} mobile={mobile} />
               )}
-              {view === "wallets" && <WalletsView mobile={mobile} />}
+              {view === "wallets" && <WalletsView mobile={mobile} integrity={integrity} />}
               {view === "protocols" && <ProtocolsView mobile={mobile} />}
               {view === "witness" && <WitnessView mobile={mobile} onSelectIssuer={(sym) => { setWitnessSymbol(sym); setView("witness-detail"); window.scrollTo(0, 0); }} />}
               {view === "witness-detail" && witnessSymbol && <WitnessDetailView symbol={witnessSymbol} onBack={() => { setView("witness"); setWitnessSymbol(null); }} mobile={mobile} />}
