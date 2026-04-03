@@ -3406,12 +3406,33 @@ async def psi_definition():
 @app.get("/api/psi/scores/{slug}/at/{date_str}")
 async def psi_score_at_date(slug: str, date_str: str):
     """Reconstruct PSI score for a protocol at a historical date."""
-    from app.services.psi_temporal_engine import reconstruct_psi_score
     try:
-        target = date.fromisoformat(date_str)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
-    return reconstruct_psi_score(slug, target)
+        from datetime import date as date_type
+        from app.services.psi_temporal_engine import reconstruct_psi_score
+        from app.database import fetch_one
+
+        target = date_type.fromisoformat(date_str)
+
+        # Debug: query the database directly from the endpoint
+        debug_row = fetch_one(
+            "SELECT protocol_slug, record_date, tvl FROM historical_protocol_data "
+            "WHERE protocol_slug = %s AND record_date <= %s "
+            "ORDER BY record_date DESC LIMIT 1",
+            (slug, target),
+        )
+
+        result = reconstruct_psi_score(slug, target)
+        result["_debug"] = {
+            "direct_query": str(debug_row) if debug_row else "None",
+            "slug_received": slug,
+            "date_str_received": date_str,
+            "target_type": type(target).__name__,
+            "target_value": str(target),
+        }
+        return result
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
 
 
 @app.get("/api/psi/scores/{slug}/range")
