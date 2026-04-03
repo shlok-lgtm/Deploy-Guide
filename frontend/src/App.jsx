@@ -678,7 +678,7 @@ function PulseSummarySection({ mobile }) {
   );
 }
 
-function RankingsView({ scores, loading, onSelect, ts, mobile }) {
+function RankingsView({ scores, loading, onSelect, ts, mobile, meta }) {
   const [hoveredRow, setHoveredRow] = useState(null);
   const [tappedRow, setTappedRow] = useState(null);
   const hoverTimeout = useRef(null);
@@ -2885,7 +2885,7 @@ export default function App() {
           <div style={{ padding: mobile ? "0 8px 12px" : "0 24px 24px" }}>
             <main style={{ animation: "fadeIn 0.3s ease" }}>
               {view === "rankings" && (
-                <RankingsView scores={scores} loading={loading} onSelect={handleSelect} ts={ts} mobile={mobile} />
+                <RankingsView scores={scores} loading={loading} onSelect={handleSelect} ts={ts} mobile={mobile} meta={meta} />
               )}
               {view === "detail" && selectedCoin && (
                 <DetailView coinId={selectedCoin} onBack={handleBack} mobile={mobile} />
