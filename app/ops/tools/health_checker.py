@@ -35,7 +35,7 @@ def _safe_query(sql, params=None):
     """Execute a read-only query with statement timeout. Returns None on error."""
     try:
         with get_cursor(dict_cursor=True) as cur:
-            cur.execute(f"SET LOCAL statement_timeout = '{TIMEOUT_MS}'")
+            cur.execute("SET LOCAL statement_timeout = %s", (TIMEOUT_MS,))
             cur.execute(sql, params)
             rows = cur.fetchall()
             return [dict(r) for r in rows] if rows else []
