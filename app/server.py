@@ -319,6 +319,44 @@ async def startup():
     try:
         from app.ops.routes import register_ops_routes
         register_ops_routes(app)
+@app.get("/api/test/historical-data")
+async def test_historical_data():
+    from app.database import fetch_one, fetch_all
+    try:
+        count = fetch_one("SELECT COUNT(*) as cnt FROM historical_protocol_data")
+        sample = fetch_one("SELECT protocol_slug, record_date, tvl FROM historical_protocol_data ORDER BY id DESC LIMIT 1")
+        return {
+            "count": count["cnt"] if count else "no count",
+            "sample": dict(sample) if sample else "no sample",
+            "status": "ok"
+        }
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+
+        logger.info("Operations Hub routes registered")
+    except Exception as e:
+        logger.warning(f"Operations Hub not available: {e}")
+    # MCP HTTP endpoint
+    try:
+        from app.mcp_server import mcp as mcp_server
+        import asyncio
+
+        if hasattr(mcp_server, "streamable_http_app"):
+            mcp_asgi = mcp_server.streamable_http_app()
+            app.state.mcp_task = asyncio.get_event_loop().create_task(
+                _run_mcp_session_manager(mcp_server.session_manager)
+            )
+        elif hasattr(mcp_server, "asgi_app"):
+            mcp_asgi = mcp_server.asgi_app()
+            app.state.mcp_task = asyncio.get_event_loop().create_task(
+                _run_mcp_session_manager(mcp_server.session_manager)
+            )
+        else:
+            mcp_asgi = None
+
+        if mcp_asgi is not None:
             @app.post("/mcp")
             @app.get("/mcp")
             @app.delete("/mcp")
