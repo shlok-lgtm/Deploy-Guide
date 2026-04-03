@@ -5,6 +5,7 @@ modules = ["python-3.11", "nodejs-20", "postgresql-16"]
 
 [nix]
 channel = "stable-24_05"
+packages = ["freetype", "lcms2", "libimagequant", "libjpeg", "libtiff", "libwebp", "libxcrypt", "openjpeg", "pkg-config", "tcl", "tk", "xsimd", "zlib"]
 
 [env]
 PYTHONUNBUFFERED = "1"

@@ -10,9 +10,11 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@vitejs/plugin-react": "^5.1.4",
+    "@vitejs/plugin-react": "^6.0.1",
+    "picomatch": "^4.0.4",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "vite": "^7.3.1"
+    "rollup": "^4.60.1",
+    "vite": "^8.0.3"
   }
 }
