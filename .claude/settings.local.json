@@ -65,7 +65,10 @@
       "Bash(git -C artifacts/basis-mcp status)",
       "Bash(git -C /home/runner/workspace/basis-mcp diff HEAD -- artifacts/basis-mcp/src/ artifacts/basis-mcp/package.json artifacts/basis-mcp/README.md artifacts/basis-mcp/build/)",
       "Bash(git:*)",
-      "Bash(wc -l /home/runner/workspace/basis-mcp/artifacts/basis-mcp/src/*.ts)"
+      "Bash(wc -l /home/runner/workspace/basis-mcp/artifacts/basis-mcp/src/*.ts)",
+      "Bash(PORT=8080 WORKER_ENABLED=false python main.py)",
+      "Bash(kill %1)",
+      "Bash(npx -y esbuild src/App.jsx --bundle --loader:.jsx=jsx --outfile=/dev/null)"
     ]
   }
 }

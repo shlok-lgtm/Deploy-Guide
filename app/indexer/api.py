@@ -5,6 +5,7 @@ FastAPI routes for /api/wallets/* and /api/backlog/*.
 Registered on the app at startup, like governance routes.
 """
 
+import hmac
 import os
 import asyncio
 import logging
@@ -533,7 +534,7 @@ def register_wallet_routes(app: FastAPI) -> None:
     ):
         """Manually trigger a wallet indexing run (admin-only). Returns immediately; runs in background."""
         admin_key = os.environ.get("ADMIN_KEY", "")
-        if not admin_key or key != admin_key:
+        if not admin_key or not key or not hmac.compare_digest(key, admin_key):
             raise HTTPException(status_code=403, detail="Invalid admin key")
 
         from app.indexer.pipeline import run_pipeline
@@ -665,7 +666,7 @@ def register_wallet_routes(app: FastAPI) -> None:
         """Trigger edge building for wallets on a specific chain (admin-only)."""
         admin_key = os.environ.get("ADMIN_KEY", "")
         provided = key or request.headers.get("x-admin-key", "")
-        if not admin_key or provided != admin_key:
+        if not admin_key or not provided or not hmac.compare_digest(provided, admin_key):
             raise HTTPException(status_code=403, detail="Invalid admin key")
         from app.indexer.edges import run_edge_builder
         from app.indexer.config import SUPPORTED_CHAINS
@@ -687,7 +688,7 @@ def register_wallet_routes(app: FastAPI) -> None:
         """Discover Drift depositors and build their Solana wallet graph edges."""
         admin_key = os.environ.get("ADMIN_KEY", "")
         provided = key or request.headers.get("x-admin-key", "")
-        if not admin_key or provided != admin_key:
+        if not admin_key or not provided or not hmac.compare_digest(provided, admin_key):
             raise HTTPException(status_code=403, detail="Invalid admin key")
 
         try:
@@ -736,7 +737,7 @@ def register_wallet_routes(app: FastAPI) -> None:
         """Manually link wallets across chains as belonging to the same entity."""
         admin_key = os.environ.get("ADMIN_KEY", "")
         provided = request.query_params.get("key", "") or request.headers.get("x-admin-key", "")
-        if not admin_key or provided != admin_key:
+        if not admin_key or not provided or not hmac.compare_digest(provided, admin_key):
             raise HTTPException(status_code=403, detail="Invalid admin key")
 
         body = await request.json()

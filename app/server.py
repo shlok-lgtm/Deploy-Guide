@@ -6,6 +6,7 @@ Clean FastAPI server. Reads from database only. No data collection.
 
 import atexit
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -37,6 +38,33 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Log filter: redact API keys from httpx / urllib / requests log output
+# Catches patterns like apikey=XXX, api-key=XXX, x-cg-pro-api-key=XXX,
+# api_key=XXX in both URLs and headers.
+# ---------------------------------------------------------------------------
+_API_KEY_RE = re.compile(
+    r'((?:apikey|api-key|api_key|x-cg-pro-api-key|x-api-key)=)([^&\s\'"]+)',
+    re.IGNORECASE,
+)
+
+class _RedactApiKeysFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.args:
+            # Format the message early so we can redact it
+            try:
+                record.msg = record.msg % record.args
+                record.args = None
+            except Exception:
+                pass
+        record.msg = _API_KEY_RE.sub(r'\1***', str(record.msg))
+        return True
+
+_redact_filter = _RedactApiKeysFilter()
+for _logger_name in ("httpx", "httpcore", "urllib3", "requests"):
+    logging.getLogger(_logger_name).addFilter(_redact_filter)
 
 app = FastAPI(
     title="Basis Protocol API",
@@ -604,6 +632,19 @@ async def get_scores(methodology_version: Optional[str] = Query(default=None)):
             "computed_at": row["computed_at"].isoformat() if row.get("computed_at") else None,
         })
     
+    # Count active data sources
+    data_sources = {"CoinGecko", "DeFiLlama", "Etherscan/Blockscout", "Snapshot"}
+    if os.environ.get("HELIUS_API_KEY"):
+        data_sources.add("Helius")
+    try:
+        cda_count = fetch_one(
+            "SELECT COUNT(*) as cnt FROM cda_vendor_extractions WHERE extracted_at > NOW() - INTERVAL '7 days'"
+        )
+        if cda_count and cda_count["cnt"] > 0:
+            data_sources.add("Parallel.ai+Reducto")
+    except Exception:
+        pass
+
     return {
         "stablecoins": results,
         "count": len(results),
@@ -611,6 +652,8 @@ async def get_scores(methodology_version: Optional[str] = Query(default=None)):
         "methodology_version": FORMULA_VERSION,
         "methodology_version_pinned": pinned,
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "data_source_count": len(data_sources),
+        "sii_component_count": len(COMPONENT_NORMALIZATIONS),
     }
 
 
@@ -1211,7 +1254,7 @@ def _check_admin_key(request: Request):
         request.query_params.get("key", "")
         or request.headers.get("x-admin-key", "")
     )
-    if not admin_key or provided != admin_key:
+    if not admin_key or not provided or not hmac.compare_digest(provided, admin_key):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
@@ -2497,7 +2540,7 @@ async def admin_prune_edges(request: Request):
 async def trigger_cda_collection(key: str = Query(default=None)):
     """Manually trigger CDA collection pipeline. Requires admin key."""
     admin_key = os.environ.get("ADMIN_KEY", "")
-    if not admin_key or key != admin_key:
+    if not admin_key or not key or not hmac.compare_digest(key, admin_key):
         raise HTTPException(status_code=401, detail="Unauthorized — provide ?key=YOUR_ADMIN_KEY")
 
     try:
@@ -2516,7 +2559,7 @@ async def trigger_cda_collection(key: str = Query(default=None)):
 async def seed_cda_registry(key: str = Query(default=None)):
     """Seed CDA issuer registry from STABLECOIN_REGISTRY config. Requires admin key."""
     admin_key = os.environ.get("ADMIN_KEY", "")
-    if not admin_key or key != admin_key:
+    if not admin_key or not key or not hmac.compare_digest(key, admin_key):
         raise HTTPException(status_code=401, detail="Unauthorized — provide ?key=YOUR_ADMIN_KEY")
     try:
         _seed_cda_issuer_registry()
@@ -2542,7 +2585,7 @@ async def get_monitors():
 async def setup_cda_monitors(key: str = Query(default=None)):
     """Create Parallel Monitor watches for all web_extract issuers. Requires admin key."""
     admin_key = os.environ.get("ADMIN_KEY", "")
-    if not admin_key or key != admin_key:
+    if not admin_key or not key or not hmac.compare_digest(key, admin_key):
         raise HTTPException(status_code=401, detail="Unauthorized — provide ?key=YOUR_ADMIN_KEY")
 
     try:
@@ -3438,26 +3481,9 @@ async def psi_score_at_date(slug: str, date_str: str):
     try:
         from datetime import date as date_type
         from app.services.psi_temporal_engine import reconstruct_psi_score
-        from app.database import fetch_one
 
         target = date_type.fromisoformat(date_str)
-
-        # Debug: query the database directly from the endpoint
-        debug_row = fetch_one(
-            "SELECT protocol_slug, record_date, tvl FROM historical_protocol_data "
-            "WHERE protocol_slug = %s AND record_date <= %s "
-            "ORDER BY record_date DESC LIMIT 1",
-            (slug, target),
-        )
-
         result = reconstruct_psi_score(slug, target)
-        result["_debug"] = {
-            "direct_query": str(debug_row) if debug_row else "None",
-            "slug_received": slug,
-            "date_str_received": date_str,
-            "target_type": type(target).__name__,
-            "target_value": str(target),
-        }
         return result
     except Exception as e:
         import traceback
@@ -3516,13 +3542,21 @@ async def psi_backtest_event(slug: str, event: str):
 async def admin_psi_backfill(request: Request, background_tasks: BackgroundTasks):
     """Trigger historical data backfill for all PSI protocols. Admin-key protected."""
     _check_admin_key(request)
-    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
-    from_date = body.get("from_date", "2026-01-01")
+    try:
+        body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+        from_date = body.get("from_date", "2026-01-01")
 
-    from app.services.psi_backfill import backfill_all_protocols
-    background_tasks.add_task(backfill_all_protocols, from_date=from_date)
+        from app.services.psi_backfill import backfill_all_protocols, _backfill_running
+        if _backfill_running:
+            return {"status": "already_running", "message": "A backfill is already in progress."}
+        background_tasks.add_task(backfill_all_protocols, from_date=from_date)
 
-    return {"status": "started", "from_date": from_date, "message": "Backfill running in background. Check logs for progress."}
+        return {"status": "started", "from_date": from_date, "message": "Backfill running in background. Check logs for progress."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": traceback.format_exc()})
 
 
 @app.post("/api/admin/protocol-expansion")
@@ -4391,9 +4425,15 @@ async def get_composition_spec():
 async def admin_panel(request: Request):
     admin_key = os.environ.get("ADMIN_KEY", "")
     provided = request.query_params.get("key", "")
-    if not admin_key or provided != admin_key:
+    if not admin_key or not provided or not hmac.compare_digest(provided, admin_key):
         raise HTTPException(status_code=401, detail="Unauthorized — provide ?key=YOUR_ADMIN_KEY")
-    return HTMLResponse(content=ADMIN_HTML)
+    try:
+        return HTMLResponse(content=ADMIN_HTML)
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": traceback.format_exc()})
 
 
 # =============================================================================
@@ -4790,7 +4830,7 @@ async def get_discovery_unacknowledged():
 async def acknowledge_discovery_signal(signal_id: int, key: str = Query(default=None)):
     """Mark a discovery signal as acknowledged. Requires admin key."""
     admin_key = os.environ.get("ADMIN_KEY", "")
-    if not admin_key or key != admin_key:
+    if not admin_key or not key or not hmac.compare_digest(key, admin_key):
         raise HTTPException(status_code=401, detail="Unauthorized — provide ?key=YOUR_ADMIN_KEY")
     try:
         execute("""

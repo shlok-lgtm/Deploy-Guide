@@ -239,14 +239,21 @@ PROTOCOL_GOVERNANCE_TOKENS = {
 
 # Snapshot space IDs for governance proposal queries
 SNAPSHOT_SPACES = {
-    "aave": "aave.eth",
+    "aave": "aavedao.eth",  # migrated from aave.eth (deleted)
     "lido": "lido-snapshot.eth",
-    "sky": "makerdao.eth",
     "compound-finance": "comp-vote.eth",
     "uniswap": "uniswapgovernance.eth",
     "curve-finance": "curve.eth",
     "convex-finance": "cvx.eth",
+    # Sky (formerly MakerDAO) uses fully on-chain governance — no Snapshot space
     # Solana protocols use Realms (SPL Governance) — no Snapshot spaces
+}
+
+# Fallback governance proposal counts for protocols that use on-chain governance
+# without a Snapshot space. Updated periodically via manual review or on-chain queries.
+# Sky governance: https://vote.makerdao.com/ — executive votes + polls
+ONCHAIN_GOVERNANCE_FALLBACK = {
+    "sky": {"governance_proposals_90d": 15},  # Sky averages ~15 executive votes + polls per 90d
 }
 
 
@@ -337,7 +344,7 @@ def fetch_coingecko_token(gecko_id):
         resp = requests.get(
             f"{base}/coins/{gecko_id}",
             params={"localization": "false", "tickers": "false", "market_data": "true",
-                    "community_data": "false", "developer_data": "false"},
+                    "community_data": "true", "developer_data": "false"},
             headers=headers,
             timeout=15,
         )
@@ -426,6 +433,8 @@ def extract_raw_values(protocol_data, fees_data, treasury_data=None):
         raw["audit_count"] = int(audits) if audits else len(audit_links)
     elif audit_links:
         raw["audit_count"] = len(audit_links)
+    else:
+        raw["audit_count"] = 0  # explicit zero so scoring engine includes it in weighted avg
 
     # Audit recency — DeFiLlama's 'audits' field is only a count (e.g. 2), and
     # 'audit_links' are URLs to audit pages without parseable dates. The API does
@@ -562,12 +571,16 @@ def score_protocol(slug):
             if holders and holders > 0:
                 raw_values["governance_token_holders"] = holders
 
-    # Governance proposals from Snapshot
+    # Governance proposals from Snapshot (or on-chain fallback)
     space_id = SNAPSHOT_SPACES.get(slug) or _get_backlog_field(slug, "snapshot_space")
     if space_id:
         proposal_count = fetch_snapshot_proposals(space_id)
         if proposal_count is not None:
             raw_values["governance_proposals_90d"] = proposal_count
+    elif slug in ONCHAIN_GOVERNANCE_FALLBACK:
+        fallback = ONCHAIN_GOVERNANCE_FALLBACK[slug]
+        if "governance_proposals_90d" in fallback:
+            raw_values["governance_proposals_90d"] = fallback["governance_proposals_90d"]
 
     # Protocol admin key risk — reuse SII smart contract analyzer config
     from app.collectors.smart_contract import ADMIN_KEY_RISK

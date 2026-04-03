@@ -190,6 +190,7 @@ function useScores() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [ts, setTs] = useState(null);
+  const [meta, setMeta] = useState({});
 
   useEffect(() => {
     let mounted = true;
@@ -201,6 +202,7 @@ function useScores() {
         if (mounted) {
           setData(d.stablecoins || []);
           setTs(d.timestamp);
+          setMeta({ dataSourceCount: d.data_source_count, componentCount: d.sii_component_count });
           setLoading(false);
         }
       } catch (e) {
@@ -212,7 +214,7 @@ function useScores() {
     return () => { mounted = false; clearInterval(interval); };
   }, []);
 
-  return { data, loading, error, ts };
+  return { data, loading, error, ts, meta };
 }
 
 function useCoinDetail(coinId) {
@@ -582,7 +584,7 @@ function CategoryBar({ label, score, weight, useBlue }) {
   );
 }
 
-function PageHeader({ ts, mobile, coinCount }) {
+function PageHeader({ ts, mobile, coinCount, meta = {} }) {
   const [now, setNow] = useState(new Date());
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 60000);
@@ -601,7 +603,7 @@ function PageHeader({ ts, mobile, coinCount }) {
     <TabHeader
       title={<><span style={{ fontWeight: 700 }}>Stablecoin</span> Integrity <span style={{ fontWeight: 700 }}>Index</span></>}
       formId="FORM SII-001 · BASIS PROTOCOL"
-      stats={[`${coinCount || 14} STABLECOINS`, "37 SCORING COMPONENTS", "5 LIVE DATA SOURCES", "DETERMINISTIC METHODOLOGY", "UPDATED HOURLY"]}
+      stats={[`${coinCount || 14} STABLECOINS`, `${meta.componentCount || 37} SCORING COMPONENTS`, `${meta.dataSourceCount || 5} LIVE DATA SOURCES`, "DETERMINISTIC METHODOLOGY", "UPDATED HOURLY"]}
       formulaLine="SII = 0.30×Peg + 0.25×Liq + 0.20×Struct + 0.15×Flow + 0.10×Dist"
       versionLabel={`Methodology v1.0 · ${timestamp}`}
       accent="#fc988f"
@@ -919,7 +921,7 @@ function RankingsView({ scores, loading, onSelect, ts, mobile }) {
 
   return (
     <div>
-      <PageHeader ts={ts} mobile={mobile} coinCount={scores.length} />
+      <PageHeader ts={ts} mobile={mobile} coinCount={scores.length} meta={meta} />
 
       <div style={{ height: mobile ? 16 : 32 }} />
 
@@ -2804,7 +2806,7 @@ export default function App() {
   const [view, setView] = useState("rankings");
   const [selectedCoin, setSelectedCoin] = useState(null);
   const [witnessSymbol, setWitnessSymbol] = useState(null);
-  const { data: scores, loading, error, ts } = useScores();
+  const { data: scores, loading, error, ts, meta } = useScores();
   const mobile = useIsMobile();
   const integrity = useIntegrity();
 

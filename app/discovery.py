@@ -186,7 +186,7 @@ def run_discovery_cycle():
     try:
         run_dbt()
     except Exception as e:
-        logger.error(f"dbt run failed — continuing with graph detectors only: {e}")
+        logger.warning(f"dbt run failed — continuing with graph detectors only: {e}")
 
     # 2. Collect dbt-materialized signals
     dbt_signals = collect_dbt_signals()

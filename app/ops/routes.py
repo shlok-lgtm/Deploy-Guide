@@ -6,7 +6,9 @@ import os
 import json
 import logging
 from datetime import datetime
+import traceback as _traceback_mod
 from fastapi import APIRouter, BackgroundTasks, Request, HTTPException, Query
+from fastapi.responses import JSONResponse
 from typing import Optional
 
 from app.database import fetch_one, fetch_all, execute
@@ -17,12 +19,13 @@ router = APIRouter(prefix="/api/ops", tags=["ops"])
 
 
 def _check_admin_key(request: Request):
+    import hmac
     admin_key = os.environ.get("ADMIN_KEY", "")
     provided = (
         request.query_params.get("key", "")
         or request.headers.get("x-admin-key", "")
     )
-    if not admin_key or provided != admin_key:
+    if not admin_key or not provided or not hmac.compare_digest(provided, admin_key):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
@@ -41,8 +44,10 @@ async def run_migration(request: Request):
         )
         run_migration(migration_path)
         return {"status": "ok", "migration": "031_ops_hub"}
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 # =============================================================================
@@ -56,9 +61,11 @@ async def seed_data(request: Request):
         from app.ops.seed import seed_all
         counts = seed_all()
         return {"status": "ok", "inserted": counts}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Seed failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 # =============================================================================
@@ -73,91 +80,106 @@ async def list_targets(
     stage: Optional[str] = None,
 ):
     _check_admin_key(request)
-    conditions = []
-    params = []
-    if tier is not None:
-        conditions.append("tier = %s")
-        params.append(tier)
-    if track:
-        conditions.append("track = %s")
-        params.append(track)
-    if stage:
-        conditions.append("pipeline_stage = %s")
-        params.append(stage)
+    try:
+        conditions = []
+        params = []
+        if tier is not None:
+            conditions.append("tier = %s")
+            params.append(tier)
+        if track:
+            conditions.append("track = %s")
+            params.append(track)
+        if stage:
+            conditions.append("pipeline_stage = %s")
+            params.append(stage)
 
-    where = " WHERE " + " AND ".join(conditions) if conditions else ""
-    rows = fetch_all(f"SELECT * FROM ops_targets{where} ORDER BY tier, name", params or None)
-    return {"targets": rows}
+        where = " WHERE " + " AND ".join(conditions) if conditions else ""
+        rows = fetch_all(f"SELECT * FROM ops_targets{where} ORDER BY tier, name", params or None)
+        return {"targets": rows}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 @router.get("/targets/{target_id}")
 async def get_target(request: Request, target_id: int):
     _check_admin_key(request)
-    target = fetch_one("SELECT * FROM ops_targets WHERE id = %s", (target_id,))
-    if not target:
-        raise HTTPException(status_code=404, detail="Target not found")
+    try:
+        target = fetch_one("SELECT * FROM ops_targets WHERE id = %s", (target_id,))
+        if not target:
+            raise HTTPException(status_code=404, detail="Target not found")
 
-    contacts = fetch_all(
-        "SELECT * FROM ops_target_contacts WHERE target_id = %s", (target_id,)
-    )
-    content = fetch_all(
-        "SELECT * FROM ops_target_content WHERE target_id = %s ORDER BY scraped_at DESC LIMIT 20",
-        (target_id,),
-    )
-    engagement = fetch_all(
-        "SELECT * FROM ops_target_engagement_log WHERE target_id = %s ORDER BY created_at DESC LIMIT 20",
-        (target_id,),
-    )
-    exposure = fetch_one(
-        "SELECT * FROM ops_target_exposure_reports WHERE target_id = %s ORDER BY generated_at DESC LIMIT 1",
-        (target_id,),
-    )
+        contacts = fetch_all(
+            "SELECT * FROM ops_target_contacts WHERE target_id = %s", (target_id,)
+        )
+        content = fetch_all(
+            "SELECT * FROM ops_target_content WHERE target_id = %s ORDER BY scraped_at DESC LIMIT 20",
+            (target_id,),
+        )
+        engagement = fetch_all(
+            "SELECT * FROM ops_target_engagement_log WHERE target_id = %s ORDER BY created_at DESC LIMIT 20",
+            (target_id,),
+        )
+        exposure = fetch_one(
+            "SELECT * FROM ops_target_exposure_reports WHERE target_id = %s ORDER BY generated_at DESC LIMIT 1",
+            (target_id,),
+        )
 
-    return {
-        "target": target,
-        "contacts": contacts,
-        "recent_content": content,
-        "engagement_log": engagement,
-        "latest_exposure": exposure,
-    }
+        return {
+            "target": target,
+            "contacts": contacts,
+            "recent_content": content,
+            "engagement_log": engagement,
+            "latest_exposure": exposure,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 @router.put("/targets/{target_id}/stage")
 async def update_target_stage(request: Request, target_id: int):
     _check_admin_key(request)
-    body = await request.json()
-    new_stage = body.get("stage")
-    if not new_stage:
-        raise HTTPException(status_code=400, detail="stage required")
+    try:
+        body = await request.json()
+        new_stage = body.get("stage")
+        if not new_stage:
+            raise HTTPException(status_code=400, detail="stage required")
 
-    valid_stages = [
-        "not_started", "recognition", "familiarity", "direct",
-        "evaluating", "trying", "binding", "archived",
-    ]
-    if new_stage not in valid_stages:
-        raise HTTPException(status_code=400, detail=f"Invalid stage. Must be one of: {valid_stages}")
+        valid_stages = [
+            "not_started", "recognition", "familiarity", "direct",
+            "evaluating", "trying", "binding", "archived",
+        ]
+        if new_stage not in valid_stages:
+            raise HTTPException(status_code=400, detail=f"Invalid stage. Must be one of: {valid_stages}")
 
-    execute(
-        "UPDATE ops_targets SET pipeline_stage = %s, last_action_at = NOW(), updated_at = NOW() WHERE id = %s",
-        (new_stage, target_id),
-    )
-    return {"status": "ok", "target_id": target_id, "new_stage": new_stage}
+        execute(
+            "UPDATE ops_targets SET pipeline_stage = %s, last_action_at = NOW(), updated_at = NOW() WHERE id = %s",
+            (new_stage, target_id),
+        )
+        return {"status": "ok", "target_id": target_id, "new_stage": new_stage}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 @router.post("/targets/{target_id}/engagement")
 async def log_engagement(request: Request, target_id: int):
     _check_admin_key(request)
-    body = await request.json()
-    action_type = body.get("action_type")
-    if not action_type:
-        raise HTTPException(status_code=400, detail="action_type required")
-
-    # Verify target exists
-    target = fetch_one("SELECT id FROM ops_targets WHERE id = %s", (target_id,))
-    if not target:
-        raise HTTPException(status_code=404, detail="Target not found")
-
     try:
+        body = await request.json()
+        action_type = body.get("action_type")
+        if not action_type:
+            raise HTTPException(status_code=400, detail="action_type required")
+
+        # Verify target exists
+        target = fetch_one("SELECT id FROM ops_targets WHERE id = %s", (target_id,))
+        if not target:
+            raise HTTPException(status_code=404, detail="Target not found")
+
         execute(
             """INSERT INTO ops_target_engagement_log (target_id, contact_id, action_type, content, channel, next_action)
                VALUES (%s, %s, %s, %s, %s, %s)""",
@@ -174,23 +196,30 @@ async def log_engagement(request: Request, target_id: int):
             "UPDATE ops_targets SET last_action_at = NOW(), updated_at = NOW() WHERE id = %s",
             (target_id,),
         )
+        return {"status": "ok"}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Engagement log failed: {e}")
-        return {"status": "error", "detail": str(e)}
-    return {"status": "ok"}
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 @router.post("/targets/{target_id}/notes")
 async def append_notes(request: Request, target_id: int):
     _check_admin_key(request)
-    body = await request.json()
-    note_text = body.get("text", "")
-    timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
-    execute(
-        "UPDATE ops_targets SET notes = COALESCE(notes, '') || %s, updated_at = NOW() WHERE id = %s",
-        (f"\n[{timestamp}] {note_text}", target_id),
-    )
-    return {"status": "ok"}
+    try:
+        body = await request.json()
+        note_text = body.get("text", "")
+        timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+        execute(
+            "UPDATE ops_targets SET notes = COALESCE(notes, '') || %s, updated_at = NOW() WHERE id = %s",
+            (f"\n[{timestamp}] {note_text}", target_id),
+        )
+        return {"status": "ok"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 # =============================================================================
@@ -200,45 +229,55 @@ async def append_notes(request: Request, target_id: int):
 @router.get("/queue")
 async def get_action_queue(request: Request):
     _check_admin_key(request)
-    rows = fetch_all(
-        """SELECT c.*, t.name as target_name, t.tier, t.pipeline_stage
-           FROM ops_target_content c
-           JOIN ops_targets t ON c.target_id = t.id
-           WHERE c.bridge_found = TRUE AND c.founder_decision IS NULL
-           ORDER BY c.relevance_score DESC NULLS LAST, c.scraped_at DESC""",
-    )
-    return {"queue": rows}
+    try:
+        rows = fetch_all(
+            """SELECT c.*, t.name as target_name, t.tier, t.pipeline_stage
+               FROM ops_target_content c
+               JOIN ops_targets t ON c.target_id = t.id
+               WHERE c.bridge_found = TRUE AND c.founder_decision IS NULL
+               ORDER BY c.relevance_score DESC NULLS LAST, c.scraped_at DESC""",
+        )
+        return {"queue": rows}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 @router.post("/content/{content_id}/decide")
 async def decide_content(request: Request, content_id: int):
     _check_admin_key(request)
-    body = await request.json()
-    decision = body.get("decision")
-    if decision not in ("approved", "edited", "skipped", "posted"):
-        raise HTTPException(status_code=400, detail="decision must be: approved, edited, skipped, posted")
+    try:
+        body = await request.json()
+        decision = body.get("decision")
+        if decision not in ("approved", "edited", "skipped", "posted"):
+            raise HTTPException(status_code=400, detail="decision must be: approved, edited, skipped, posted")
 
-    updates = {"founder_decision": decision}
-    params = [decision]
+        updates = {"founder_decision": decision}
+        params = [decision]
 
-    if decision == "edited":
-        edited_text = body.get("edited_text", "")
-        execute(
-            "UPDATE ops_target_content SET founder_decision = %s, founder_edited_text = %s WHERE id = %s",
-            (decision, edited_text, content_id),
-        )
-    elif decision == "posted":
-        execute(
-            "UPDATE ops_target_content SET founder_decision = %s, posted_at = NOW() WHERE id = %s",
-            (decision, content_id),
-        )
-    else:
-        execute(
-            "UPDATE ops_target_content SET founder_decision = %s WHERE id = %s",
-            (decision, content_id),
-        )
+        if decision == "edited":
+            edited_text = body.get("edited_text", "")
+            execute(
+                "UPDATE ops_target_content SET founder_decision = %s, founder_edited_text = %s WHERE id = %s",
+                (decision, edited_text, content_id),
+            )
+        elif decision == "posted":
+            execute(
+                "UPDATE ops_target_content SET founder_decision = %s, posted_at = NOW() WHERE id = %s",
+                (decision, content_id),
+            )
+        else:
+            execute(
+                "UPDATE ops_target_content SET founder_decision = %s WHERE id = %s",
+                (decision, content_id),
+            )
 
-    return {"status": "ok", "content_id": content_id, "decision": decision}
+        return {"status": "ok", "content_id": content_id, "decision": decision}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 # =============================================================================
@@ -252,24 +291,29 @@ async def content_feed(
     limit: int = Query(default=50, le=200),
 ):
     _check_admin_key(request)
-    if target_id:
-        rows = fetch_all(
-            """SELECT c.*, t.name as target_name
-               FROM ops_target_content c
-               JOIN ops_targets t ON c.target_id = t.id
-               WHERE c.target_id = %s
-               ORDER BY c.scraped_at DESC LIMIT %s""",
-            (target_id, limit),
-        )
-    else:
-        rows = fetch_all(
-            """SELECT c.*, t.name as target_name
-               FROM ops_target_content c
-               JOIN ops_targets t ON c.target_id = t.id
-               ORDER BY c.scraped_at DESC LIMIT %s""",
-            (limit,),
-        )
-    return {"feed": rows}
+    try:
+        if target_id:
+            rows = fetch_all(
+                """SELECT c.*, t.name as target_name
+                   FROM ops_target_content c
+                   JOIN ops_targets t ON c.target_id = t.id
+                   WHERE c.target_id = %s
+                   ORDER BY c.scraped_at DESC LIMIT %s""",
+                (target_id, limit),
+            )
+        else:
+            rows = fetch_all(
+                """SELECT c.*, t.name as target_name
+                   FROM ops_target_content c
+                   JOIN ops_targets t ON c.target_id = t.id
+                   ORDER BY c.scraped_at DESC LIMIT %s""",
+                (limit,),
+            )
+        return {"feed": rows}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 # =============================================================================
@@ -279,36 +323,45 @@ async def content_feed(
 @router.get("/health")
 async def get_health(request: Request):
     _check_admin_key(request)
-    from app.ops.tools.health_checker import get_latest_health
-    checks = get_latest_health()
-    return {"health": checks}
+    try:
+        from app.ops.tools.health_checker import get_latest_health
+        checks = get_latest_health()
+        return {"health": checks}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 @router.post("/health/check")
 async def run_health_check(request: Request, background_tasks: BackgroundTasks):
     _check_admin_key(request)
-
-    def _run_health_checks():
-        import importlib
-        import app.ops.tools.health_checker as _hc_mod
-        importlib.reload(_hc_mod)
-        try:
-            results = _hc_mod.run_all_checks()
-            # Fire alerts for failures
-            import asyncio
+    try:
+        def _run_health_checks():
+            import importlib
+            import app.ops.tools.health_checker as _hc_mod
+            importlib.reload(_hc_mod)
             try:
-                from app.ops.tools.alerter import check_and_alert_health, check_and_alert_engagement
-                loop = asyncio.new_event_loop()
-                loop.run_until_complete(check_and_alert_health(results))
-                loop.run_until_complete(check_and_alert_engagement())
-                loop.close()
-            except Exception as alert_err:
-                logger.warning(f"Alert dispatch failed (non-fatal): {alert_err}")
-        except Exception as e:
-            logger.error(f"Health check run failed: {e}")
+                results = _hc_mod.run_all_checks()
+                # Fire alerts for failures
+                import asyncio
+                try:
+                    from app.ops.tools.alerter import check_and_alert_health, check_and_alert_engagement
+                    loop = asyncio.new_event_loop()
+                    loop.run_until_complete(check_and_alert_health(results))
+                    loop.run_until_complete(check_and_alert_engagement())
+                    loop.close()
+                except Exception as alert_err:
+                    logger.warning(f"Alert dispatch failed (non-fatal): {alert_err}")
+            except Exception as e:
+                logger.error(f"Health check run failed: {e}")
 
-    background_tasks.add_task(_run_health_checks)
-    return {"status": "accepted", "message": "Health checks running in background. GET /api/ops/health for results."}
+        background_tasks.add_task(_run_health_checks)
+        return {"status": "accepted", "message": "Health checks running in background. GET /api/ops/health for results."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 # =============================================================================
@@ -322,57 +375,67 @@ async def list_investors(
     stage: Optional[str] = None,
 ):
     _check_admin_key(request)
-    conditions = []
-    params = []
-    if tier is not None:
-        conditions.append("tier = %s")
-        params.append(tier)
-    if stage:
-        conditions.append("stage = %s")
-        params.append(stage)
+    try:
+        conditions = []
+        params = []
+        if tier is not None:
+            conditions.append("tier = %s")
+            params.append(tier)
+        if stage:
+            conditions.append("stage = %s")
+            params.append(stage)
 
-    where = " WHERE " + " AND ".join(conditions) if conditions else ""
-    rows = fetch_all(f"SELECT * FROM ops_investors{where} ORDER BY tier, name", params or None)
-    return {"investors": rows}
+        where = " WHERE " + " AND ".join(conditions) if conditions else ""
+        rows = fetch_all(f"SELECT * FROM ops_investors{where} ORDER BY tier, name", params or None)
+        return {"investors": rows}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 @router.put("/investors/{investor_id}/stage")
 async def update_investor_stage(request: Request, investor_id: int):
     _check_admin_key(request)
-    body = await request.json()
-    new_stage = body.get("stage")
-    if not new_stage:
-        raise HTTPException(status_code=400, detail="stage required")
+    try:
+        body = await request.json()
+        new_stage = body.get("stage")
+        if not new_stage:
+            raise HTTPException(status_code=400, detail="stage required")
 
-    valid_stages = [
-        "not_started", "researching", "warm_intro_sent", "meeting_scheduled",
-        "meeting_completed", "dd_in_progress", "term_sheet", "closed", "passed",
-        "advisor_in_place",
-    ]
-    if new_stage not in valid_stages:
-        raise HTTPException(status_code=400, detail=f"Invalid stage. Must be one of: {valid_stages}")
+        valid_stages = [
+            "not_started", "researching", "warm_intro_sent", "meeting_scheduled",
+            "meeting_completed", "dd_in_progress", "term_sheet", "closed", "passed",
+            "advisor_in_place",
+        ]
+        if new_stage not in valid_stages:
+            raise HTTPException(status_code=400, detail=f"Invalid stage. Must be one of: {valid_stages}")
 
-    execute(
-        "UPDATE ops_investors SET stage = %s, last_action_at = NOW(), updated_at = NOW() WHERE id = %s",
-        (new_stage, investor_id),
-    )
-    return {"status": "ok", "investor_id": investor_id, "new_stage": new_stage}
+        execute(
+            "UPDATE ops_investors SET stage = %s, last_action_at = NOW(), updated_at = NOW() WHERE id = %s",
+            (new_stage, investor_id),
+        )
+        return {"status": "ok", "investor_id": investor_id, "new_stage": new_stage}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 @router.post("/investors/{investor_id}/interaction")
 async def log_investor_interaction(request: Request, investor_id: int):
     _check_admin_key(request)
-    body = await request.json()
-    action_type = body.get("action_type")
-    if not action_type:
-        raise HTTPException(status_code=400, detail="action_type required")
-
-    # Verify investor exists
-    investor = fetch_one("SELECT id FROM ops_investors WHERE id = %s", (investor_id,))
-    if not investor:
-        raise HTTPException(status_code=404, detail="Investor not found")
-
     try:
+        body = await request.json()
+        action_type = body.get("action_type")
+        if not action_type:
+            raise HTTPException(status_code=400, detail="action_type required")
+
+        # Verify investor exists
+        investor = fetch_one("SELECT id FROM ops_investors WHERE id = %s", (investor_id,))
+        if not investor:
+            raise HTTPException(status_code=404, detail="Investor not found")
+
         execute(
             """INSERT INTO ops_investor_interactions (investor_id, action_type, content, response, next_step)
                VALUES (%s, %s, %s, %s, %s)""",
@@ -382,43 +445,55 @@ async def log_investor_interaction(request: Request, investor_id: int):
             "UPDATE ops_investors SET last_action_at = NOW(), updated_at = NOW() WHERE id = %s",
             (investor_id,),
         )
+        return {"status": "ok"}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Investor interaction log failed: {e}")
-        return {"status": "error", "detail": str(e)}
-    return {"status": "ok"}
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 @router.get("/investors/{investor_id}")
 async def get_investor(request: Request, investor_id: int):
     _check_admin_key(request)
-    investor = fetch_one("SELECT * FROM ops_investors WHERE id = %s", (investor_id,))
-    if not investor:
-        raise HTTPException(status_code=404, detail="Investor not found")
-    interactions = fetch_all(
-        "SELECT * FROM ops_investor_interactions WHERE investor_id = %s ORDER BY occurred_at DESC LIMIT 20",
-        (investor_id,),
-    )
-    return {"investor": investor, "interactions": interactions}
+    try:
+        investor = fetch_one("SELECT * FROM ops_investors WHERE id = %s", (investor_id,))
+        if not investor:
+            raise HTTPException(status_code=404, detail="Investor not found")
+        interactions = fetch_all(
+            "SELECT * FROM ops_investor_interactions WHERE investor_id = %s ORDER BY occurred_at DESC LIMIT 20",
+            (investor_id,),
+        )
+        return {"investor": investor, "interactions": interactions}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 @router.get("/fundraise/dashboard")
 async def fundraise_dashboard(request: Request):
     _check_admin_key(request)
-    investors = fetch_all("SELECT * FROM ops_investors ORDER BY tier, name")
-
-    # Compute seed trigger milestones from live data
-    from app.ops.tools.milestone_checker import check_all_milestones
     try:
-        full_milestones = check_all_milestones()
-        milestones = full_milestones.get("seed_triggers", _compute_milestones())
-    except Exception:
-        milestones = _compute_milestones()
+        investors = fetch_all("SELECT * FROM ops_investors ORDER BY tier, name")
 
-    return {
-        "investors": investors,
-        "milestones": milestones,
-        "raise": {"target": "$4M seed", "valuation": "$25-40M pre", "timing": "Jun-Jul 2026"},
-    }
+        # Compute seed trigger milestones from live data
+        from app.ops.tools.milestone_checker import check_all_milestones
+        try:
+            full_milestones = check_all_milestones()
+            milestones = full_milestones.get("seed_triggers", _compute_milestones())
+        except Exception:
+            milestones = _compute_milestones()
+
+        return {
+            "investors": investors,
+            "milestones": milestones,
+            "raise": {"target": "$4M seed", "valuation": "$25-40M pre", "timing": "Jun-Jul 2026"},
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 def _compute_milestones():
@@ -511,35 +586,42 @@ def _compute_milestones():
 @router.post("/exposure/generate")
 async def generate_exposure_report(request: Request):
     _check_admin_key(request)
-    body = await request.json()
-    target_id = body.get("target_id")
-    if not target_id:
-        raise HTTPException(status_code=400, detail="target_id required")
-
-    from app.ops.tools.exposure import generate_exposure
     try:
+        body = await request.json()
+        target_id = body.get("target_id")
+        if not target_id:
+            raise HTTPException(status_code=400, detail="target_id required")
+
+        from app.ops.tools.exposure import generate_exposure
         result = generate_exposure(target_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="Target not found")
+        if "error" in result:
+            return {"status": "error", "detail": result["error"]}
+
+        return result
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Exposure report generation failed: {e}")
-        return {"status": "error", "detail": f"Exposure report generation failed: {e}"}
-    if result is None:
-        raise HTTPException(status_code=404, detail="Target not found")
-    if "error" in result:
-        return {"status": "error", "detail": result["error"]}
-
-    return result
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 @router.get("/exposure/{target_id}/latest")
 async def get_latest_exposure(request: Request, target_id: int):
     _check_admin_key(request)
-    row = fetch_one(
-        "SELECT * FROM ops_target_exposure_reports WHERE target_id = %s ORDER BY generated_at DESC LIMIT 1",
-        (target_id,),
-    )
-    if not row:
-        raise HTTPException(status_code=404, detail="No exposure report found")
-    return row
+    try:
+        row = fetch_one(
+            "SELECT * FROM ops_target_exposure_reports WHERE target_id = %s ORDER BY generated_at DESC LIMIT 1",
+            (target_id,),
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="No exposure report found")
+        return row
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 # =============================================================================
@@ -549,46 +631,50 @@ async def get_latest_exposure(request: Request, target_id: int):
 @router.post("/scrape")
 async def scrape_url(request: Request):
     _check_admin_key(request)
-    body = await request.json()
-    target_id = body.get("target_id")
-    url = body.get("url")
-    source_type = body.get("source_type", "blog")
-
-    if not target_id or not url:
-        raise HTTPException(status_code=400, detail="target_id and url required")
-
-    from app.ops.tools.scraper import scrape_target
     try:
+        body = await request.json()
+        target_id = body.get("target_id")
+        url = body.get("url")
+        source_type = body.get("source_type", "blog")
+
+        if not target_id or not url:
+            raise HTTPException(status_code=400, detail="target_id and url required")
+
+        from app.ops.tools.scraper import scrape_target
         content_id = await scrape_target(target_id, url, source_type)
+        if content_id is None:
+            return {"status": "error", "detail": "Scrape returned no content"}
+
+        # Auto-trigger analysis
+        from app.ops.tools.analyzer import analyze_content
+        try:
+            analysis = await analyze_content(content_id)
+        except Exception as e:
+            logger.error(f"Auto-analysis failed after scrape: {e}")
+            analysis = None
+
+        return {"content_id": content_id, "analysis": analysis}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Scrape failed: {e}")
-        return {"status": "error", "detail": f"Scrape failed: {e}"}
-    if content_id is None:
-        return {"status": "error", "detail": "Scrape returned no content"}
-
-    # Auto-trigger analysis
-    from app.ops.tools.analyzer import analyze_content
-    try:
-        analysis = await analyze_content(content_id)
-    except Exception as e:
-        logger.error(f"Auto-analysis failed after scrape: {e}")
-        analysis = None
-
-    return {"content_id": content_id, "analysis": analysis}
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 @router.post("/analyze/{content_id}")
 async def analyze_content_endpoint(request: Request, content_id: int):
     _check_admin_key(request)
-    from app.ops.tools.analyzer import analyze_content
     try:
+        from app.ops.tools.analyzer import analyze_content
         result = await analyze_content(content_id)
+        if result is None:
+            return {"status": "error", "detail": "Analysis returned no result — Claude API may be unavailable"}
+        return {"content_id": content_id, "analysis": result}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Analysis failed: {e}")
-        return {"status": "error", "detail": f"Analysis failed: {e}"}
-    if result is None:
-        return {"status": "error", "detail": "Analysis returned no result — Claude API may be unavailable"}
-    return {"content_id": content_id, "analysis": result}
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 # =============================================================================
@@ -662,14 +748,19 @@ def _match_url_to_target(url: str):
 @router.post("/monitors/setup")
 async def setup_monitors_endpoint(request: Request):
     _check_admin_key(request)
-    body = await request.json()
-    webhook_base_url = body.get("webhook_base_url", "")
-    if not webhook_base_url:
-        raise HTTPException(status_code=400, detail="webhook_base_url required")
+    try:
+        body = await request.json()
+        webhook_base_url = body.get("webhook_base_url", "")
+        if not webhook_base_url:
+            raise HTTPException(status_code=400, detail="webhook_base_url required")
 
-    from app.ops.tools.scraper import setup_monitors
-    monitors = await setup_monitors(webhook_base_url)
-    return {"status": "ok", "monitors": monitors}
+        from app.ops.tools.scraper import setup_monitors
+        monitors = await setup_monitors(webhook_base_url)
+        return {"status": "ok", "monitors": monitors}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 # =============================================================================
@@ -683,41 +774,51 @@ async def list_content_items(
     type: Optional[str] = None,
 ):
     _check_admin_key(request)
-    conditions = []
-    params = []
-    if status:
-        conditions.append("status = %s")
-        params.append(status)
-    if type:
-        conditions.append("type = %s")
-        params.append(type)
+    try:
+        conditions = []
+        params = []
+        if status:
+            conditions.append("status = %s")
+            params.append(status)
+        if type:
+            conditions.append("type = %s")
+            params.append(type)
 
-    where = " WHERE " + " AND ".join(conditions) if conditions else ""
-    rows = fetch_all(
-        f"SELECT * FROM ops_content_items{where} ORDER BY scheduled_for ASC NULLS LAST, created_at DESC",
-        params or None,
-    )
-    return {"items": rows}
+        where = " WHERE " + " AND ".join(conditions) if conditions else ""
+        rows = fetch_all(
+            f"SELECT * FROM ops_content_items{where} ORDER BY scheduled_for ASC NULLS LAST, created_at DESC",
+            params or None,
+        )
+        return {"items": rows}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 @router.post("/content/items")
 async def create_content_item(request: Request):
     _check_admin_key(request)
-    body = await request.json()
-    execute(
-        """INSERT INTO ops_content_items (type, title, content, target_channel, related_target_id, status, scheduled_for)
-           VALUES (%s, %s, %s, %s, %s, %s, %s)""",
-        (
-            body.get("type"),
-            body.get("title"),
-            body.get("content"),
-            body.get("target_channel"),
-            body.get("related_target_id"),
-            body.get("status", "draft"),
-            body.get("scheduled_for"),
-        ),
-    )
-    return {"status": "ok"}
+    try:
+        body = await request.json()
+        execute(
+            """INSERT INTO ops_content_items (type, title, content, target_channel, related_target_id, status, scheduled_for)
+               VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+            (
+                body.get("type"),
+                body.get("title"),
+                body.get("content"),
+                body.get("target_channel"),
+                body.get("related_target_id"),
+                body.get("status", "draft"),
+                body.get("scheduled_for"),
+            ),
+        )
+        return {"status": "ok"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 # =============================================================================
@@ -727,52 +828,56 @@ async def create_content_item(request: Request):
 @router.post("/draft/dm")
 async def draft_dm_endpoint(request: Request):
     _check_admin_key(request)
-    body = await request.json()
-    target_id = body.get("target_id")
-    trigger = body.get("trigger") or body.get("trigger_context") or ""
-    if not target_id or not trigger:
-        raise HTTPException(status_code=400, detail="target_id and trigger (or trigger_context) required")
-
-    from app.ops.tools.drafter import draft_dm
     try:
+        body = await request.json()
+        target_id = body.get("target_id")
+        trigger = body.get("trigger") or body.get("trigger_context") or ""
+        if not target_id or not trigger:
+            raise HTTPException(status_code=400, detail="target_id and trigger (or trigger_context) required")
+
+        from app.ops.tools.drafter import draft_dm
         result = await draft_dm(target_id, trigger)
+        if "error" in result:
+            detail = result["error"]
+            if "Claude API" in detail:
+                return {"status": "error", "detail": "Claude API unavailable — check ANTHROPIC_API_KEY or try again later", "raw": result.get("raw")}
+            return {"status": "error", "detail": detail}
+        return result
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Draft DM failed: {e}")
-        return {"status": "error", "detail": f"Draft generation failed: {e}"}
-    if "error" in result:
-        detail = result["error"]
-        if "Claude API" in detail:
-            return {"status": "error", "detail": "Claude API unavailable — check ANTHROPIC_API_KEY or try again later", "raw": result.get("raw")}
-        return {"status": "error", "detail": detail}
-    return result
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 @router.post("/draft/forum")
 async def draft_forum_endpoint(request: Request):
     _check_admin_key(request)
-    body = await request.json()
-    forum = body.get("forum")
-    topic = body.get("topic")
-    if not forum or not topic:
-        raise HTTPException(status_code=400, detail="forum and topic required")
-
-    from app.ops.tools.drafter import draft_forum_post
     try:
+        body = await request.json()
+        forum = body.get("forum")
+        topic = body.get("topic")
+        if not forum or not topic:
+            raise HTTPException(status_code=400, detail="forum and topic required")
+
+        from app.ops.tools.drafter import draft_forum_post
         result = await draft_forum_post(
             forum=forum,
             topic=topic,
             target_id=body.get("target_id"),
             include_sii_data=body.get("include_sii_data", True),
         )
+        if "error" in result:
+            detail = result["error"]
+            if "Claude API" in detail:
+                return {"status": "error", "detail": "Claude API unavailable — check ANTHROPIC_API_KEY or try again later", "raw": result.get("raw")}
+            return {"status": "error", "detail": detail}
+        return result
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Draft forum post failed: {e}")
-        return {"status": "error", "detail": f"Draft generation failed: {e}"}
-    if "error" in result:
-        detail = result["error"]
-        if "Claude API" in detail:
-            return {"status": "error", "detail": "Claude API unavailable — check ANTHROPIC_API_KEY or try again later", "raw": result.get("raw")}
-        return {"status": "error", "detail": detail}
-    return result
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 # =============================================================================
@@ -786,13 +891,15 @@ async def scan_discovery_endpoint(
     min_magnitude: float = Query(default=0.0),
 ):
     _check_admin_key(request)
-    from app.ops.tools.discovery_scanner import scan_discovery
     try:
+        from app.ops.tools.discovery_scanner import scan_discovery
         result = scan_discovery(limit=limit, min_magnitude=min_magnitude)
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Discovery scan failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 # =============================================================================
@@ -802,12 +909,14 @@ async def scan_discovery_endpoint(
 @router.get("/milestones")
 async def get_milestones(request: Request):
     _check_admin_key(request)
-    from app.ops.tools.milestone_checker import check_all_milestones
     try:
+        from app.ops.tools.milestone_checker import check_all_milestones
         return check_all_milestones()
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Milestone check failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 # =============================================================================
@@ -821,65 +930,67 @@ async def backfill_target(request: Request):
     then scrape + analyze each URL.
     """
     _check_admin_key(request)
-    body = await request.json()
-    target_id = body.get("target_id")
-    query = body.get("query")  # e.g., "all blog posts on kpk.io"
-    max_results = body.get("max_results", 20)
-
-    if not target_id or not query:
-        raise HTTPException(status_code=400, detail="target_id and query required")
-
-    from app.services import parallel_client
-    from app.ops.tools.scraper import scrape_target
-    from app.ops.tools.analyzer import analyze_content
-
-    # Step 1: Search for URLs
     try:
+        body = await request.json()
+        target_id = body.get("target_id")
+        query = body.get("query")  # e.g., "all blog posts on kpk.io"
+        max_results = body.get("max_results", 20)
+
+        if not target_id or not query:
+            raise HTTPException(status_code=400, detail="target_id and query required")
+
+        from app.services import parallel_client
+        from app.ops.tools.scraper import scrape_target
+        from app.ops.tools.analyzer import analyze_content
+
+        # Step 1: Search for URLs
         search_result = await parallel_client.search(query, num_results=max_results)
+        if "error" in search_result:
+            return {"status": "error", "detail": f"Search failed: {search_result['error']}"}
+
+        # Parse URLs from search results
+        urls = []
+        results_data = search_result.get("results", search_result.get("search_results", []))
+        if isinstance(results_data, list):
+            for item in results_data:
+                if isinstance(item, dict):
+                    url = item.get("url") or item.get("link") or item.get("source_url")
+                    if url:
+                        urls.append(url)
+                elif isinstance(item, str):
+                    urls.append(item)
+
+        if not urls:
+            return {"status": "ok", "scraped": 0, "message": "No URLs found for query"}
+
+        # Step 2: Scrape + analyze each URL
+        scraped = 0
+        analyzed = 0
+        errors = []
+        for url in urls[:max_results]:
+            try:
+                content_id = await scrape_target(target_id, url, "blog")
+                if content_id:
+                    scraped += 1
+                    analysis = await analyze_content(content_id)
+                    if analysis:
+                        analyzed += 1
+            except Exception as e:
+                errors.append({"url": url, "error": str(e)})
+
+        return {
+            "status": "ok",
+            "query": query,
+            "urls_found": len(urls),
+            "scraped": scraped,
+            "analyzed": analyzed,
+            "errors": errors[:5],
+        }
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Backfill search failed: {e}")
-        return {"status": "error", "detail": f"Search failed: {e}"}
-    if "error" in search_result:
-        return {"status": "error", "detail": f"Search failed: {search_result['error']}"}
-
-    # Parse URLs from search results
-    urls = []
-    results_data = search_result.get("results", search_result.get("search_results", []))
-    if isinstance(results_data, list):
-        for item in results_data:
-            if isinstance(item, dict):
-                url = item.get("url") or item.get("link") or item.get("source_url")
-                if url:
-                    urls.append(url)
-            elif isinstance(item, str):
-                urls.append(item)
-
-    if not urls:
-        return {"status": "ok", "scraped": 0, "message": "No URLs found for query"}
-
-    # Step 2: Scrape + analyze each URL
-    scraped = 0
-    analyzed = 0
-    errors = []
-    for url in urls[:max_results]:
-        try:
-            content_id = await scrape_target(target_id, url, "blog")
-            if content_id:
-                scraped += 1
-                analysis = await analyze_content(content_id)
-                if analysis:
-                    analyzed += 1
-        except Exception as e:
-            errors.append({"url": url, "error": str(e)})
-
-    return {
-        "status": "ok",
-        "query": query,
-        "urls_found": len(urls),
-        "scraped": scraped,
-        "analyzed": analyzed,
-        "errors": errors[:5],
-    }
+        logger.error(f"Backfill failed: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 # =============================================================================
@@ -889,48 +1000,63 @@ async def backfill_target(request: Request):
 @router.get("/alerts")
 async def get_alerts(request: Request, limit: int = Query(default=50, le=200)):
     _check_admin_key(request)
-    from app.ops.tools.alerter import get_alert_log
-    return {"alerts": get_alert_log(limit)}
+    try:
+        from app.ops.tools.alerter import get_alert_log
+        return {"alerts": get_alert_log(limit)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 @router.post("/alerts/config")
 async def configure_alerts(request: Request):
     """Add or update alert channel config. Body: { channel, config, alert_types }"""
     _check_admin_key(request)
-    body = await request.json()
-    channel = body.get("channel")
-    config = body.get("config", {})
-    alert_types = body.get("alert_types", ["health_failure", "engagement_response", "milestone_change"])
+    try:
+        body = await request.json()
+        channel = body.get("channel")
+        config = body.get("config", {})
+        alert_types = body.get("alert_types", ["health_failure", "engagement_response", "milestone_change"])
 
-    if channel not in ("telegram", "email"):
-        raise HTTPException(status_code=400, detail="channel must be 'telegram' or 'email'")
+        if channel not in ("telegram", "email"):
+            raise HTTPException(status_code=400, detail="channel must be 'telegram' or 'email'")
 
-    # Upsert
-    existing = fetch_one("SELECT id FROM ops_alert_config WHERE channel = %s", (channel,))
-    if existing:
-        execute(
-            "UPDATE ops_alert_config SET config = %s, alert_types = %s, enabled = TRUE WHERE id = %s",
-            (json.dumps(config), alert_types, existing["id"]),
-        )
-    else:
-        execute(
-            "INSERT INTO ops_alert_config (channel, config, alert_types) VALUES (%s, %s, %s)",
-            (channel, json.dumps(config), alert_types),
-        )
-    return {"status": "ok", "channel": channel}
+        # Upsert
+        existing = fetch_one("SELECT id FROM ops_alert_config WHERE channel = %s", (channel,))
+        if existing:
+            execute(
+                "UPDATE ops_alert_config SET config = %s, alert_types = %s, enabled = TRUE WHERE id = %s",
+                (json.dumps(config), alert_types, existing["id"]),
+            )
+        else:
+            execute(
+                "INSERT INTO ops_alert_config (channel, config, alert_types) VALUES (%s, %s, %s)",
+                (channel, json.dumps(config), alert_types),
+            )
+        return {"status": "ok", "channel": channel}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 @router.post("/alerts/test")
 async def test_alert(request: Request):
     """Send a test alert to verify configuration."""
     _check_admin_key(request)
-    from app.ops.tools.alerter import send_alert
-    result = await send_alert(
-        "health_failure",
-        "*TEST ALERT*\nBasis Operations Hub alert system is working.",
-        {"test": True},
-    )
-    return {"status": "ok", "sent": result}
+    try:
+        from app.ops.tools.alerter import send_alert
+        result = await send_alert(
+            "health_failure",
+            "*TEST ALERT*\nBasis Operations Hub alert system is working.",
+            {"test": True},
+        )
+        return {"status": "ok", "sent": result}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 # =============================================================================
@@ -940,13 +1066,15 @@ async def test_alert(request: Request):
 @router.post("/news/scan")
 async def scan_news_endpoint(request: Request):
     _check_admin_key(request)
-    from app.ops.tools.news_monitor import scan_news
     try:
+        from app.ops.tools.news_monitor import scan_news
         result = await scan_news()
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"News scan failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 @router.get("/news/feed")
@@ -956,15 +1084,25 @@ async def get_news_feed(
     relevant_only: bool = Query(default=True),
 ):
     _check_admin_key(request)
-    from app.ops.tools.news_monitor import get_recent_news
-    return {"news": get_recent_news(limit, relevant_only)}
+    try:
+        from app.ops.tools.news_monitor import get_recent_news
+        return {"news": get_recent_news(limit, relevant_only)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 @router.get("/news/incidents")
 async def get_incidents(request: Request, days: int = Query(default=7)):
     _check_admin_key(request)
-    from app.ops.tools.news_monitor import get_incidents
-    return {"incidents": get_incidents(days)}
+    try:
+        from app.ops.tools.news_monitor import get_incidents
+        return {"incidents": get_incidents(days)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 # =============================================================================
@@ -974,23 +1112,27 @@ async def get_incidents(request: Request, days: int = Query(default=7)):
 @router.get("/analytics")
 async def get_analytics(request: Request):
     _check_admin_key(request)
-    from app.ops.tools.analytics import compute_analytics
     try:
+        from app.ops.tools.analytics import compute_analytics
         return compute_analytics()
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Analytics computation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 @router.post("/analytics/compute")
 async def compute_analytics_endpoint(request: Request):
     _check_admin_key(request)
-    from app.ops.tools.analytics import compute_analytics
     try:
+        from app.ops.tools.analytics import compute_analytics
         return compute_analytics()
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Analytics computation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 # =============================================================================
@@ -1001,13 +1143,18 @@ async def compute_analytics_endpoint(request: Request):
 async def update_target_surfaces(request: Request, target_id: int):
     """Update surface_urls for a target. Body: { surfaces: [...urls] }"""
     _check_admin_key(request)
-    body = await request.json()
-    surfaces = body.get("surfaces", [])
-    execute(
-        "UPDATE ops_targets SET surface_urls = %s, updated_at = NOW() WHERE id = %s",
-        (json.dumps(surfaces), target_id),
-    )
-    return {"status": "ok", "target_id": target_id, "surfaces": surfaces}
+    try:
+        body = await request.json()
+        surfaces = body.get("surfaces", [])
+        execute(
+            "UPDATE ops_targets SET surface_urls = %s, updated_at = NOW() WHERE id = %s",
+            (json.dumps(surfaces), target_id),
+        )
+        return {"status": "ok", "target_id": target_id, "surfaces": surfaces}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 # =============================================================================
@@ -1018,17 +1165,21 @@ async def update_target_surfaces(request: Request, target_id: int):
 async def scan_twitter(request: Request, background_tasks: BackgroundTasks, target_id: Optional[int] = None):
     """Scan Twitter for recent tweets from target contacts' handles."""
     _check_admin_key(request)
+    try:
+        async def _run():
+            from app.ops.tools.twitter_monitor import scan_target_tweets
+            try:
+                await scan_target_tweets(target_id=target_id)
+            except Exception as e:
+                logger.error(f"Twitter scan failed: {e}")
 
-    async def _run():
-        from app.ops.tools.twitter_monitor import scan_target_tweets
-        try:
-            await scan_target_tweets(target_id=target_id)
-        except Exception as e:
-            logger.error(f"Twitter scan failed: {e}")
-
-    import asyncio
-    background_tasks.add_task(lambda: asyncio.run(_run()))
-    return {"status": "accepted", "message": "Twitter scan running in background. GET /api/ops/twitter/feed for results."}
+        import asyncio
+        background_tasks.add_task(lambda: asyncio.run(_run()))
+        return {"status": "accepted", "message": "Twitter scan running in background. GET /api/ops/twitter/feed for results."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 @router.get("/twitter/feed")
@@ -1039,24 +1190,31 @@ async def get_twitter_feed(
 ):
     """Get recent tweets from ops_target_content."""
     _check_admin_key(request)
-    from app.ops.tools.twitter_monitor import get_recent_tweets
-    return {"tweets": get_recent_tweets(limit=limit, target_id=target_id)}
+    try:
+        from app.ops.tools.twitter_monitor import get_recent_tweets
+        return {"tweets": get_recent_tweets(limit=limit, target_id=target_id)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 @router.post("/twitter/keywords")
 async def scan_twitter_keywords(request: Request):
     """Search Twitter for stablecoin-related tweets by keyword."""
     _check_admin_key(request)
-    body = await request.json()
-    keywords = body.get("keywords")
-    max_results = body.get("max_results", 20)
-    from app.ops.tools.twitter_monitor import scan_keyword_tweets
     try:
+        body = await request.json()
+        keywords = body.get("keywords")
+        max_results = body.get("max_results", 20)
+        from app.ops.tools.twitter_monitor import scan_keyword_tweets
         result = await scan_keyword_tweets(keywords=keywords, max_results=max_results)
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Twitter keyword scan failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 # =============================================================================
@@ -1067,24 +1225,29 @@ async def scan_twitter_keywords(request: Request):
 async def scan_governance(request: Request, background_tasks: BackgroundTasks, target_id: Optional[int] = None):
     """Scan Snapshot + Tally for governance proposals from target DAOs."""
     _check_admin_key(request)
-    body = {}
     try:
-        body = await request.json()
-    except Exception:
-        pass
-    days_back = body.get("days_back", 14) if body else 14
-    tid = body.get("target_id", target_id) if body else target_id
-
-    async def _run():
-        from app.ops.tools.governance_monitor import scan_all_governance
+        body = {}
         try:
-            await scan_all_governance(target_id=tid, days_back=days_back)
-        except Exception as e:
-            logger.error(f"Governance scan failed: {e}")
+            body = await request.json()
+        except Exception:
+            pass
+        days_back = body.get("days_back", 14) if body else 14
+        tid = body.get("target_id", target_id) if body else target_id
 
-    import asyncio
-    background_tasks.add_task(lambda: asyncio.run(_run()))
-    return {"status": "accepted", "message": "Governance scan running in background. GET /api/ops/governance/feed for results."}
+        async def _run():
+            from app.ops.tools.governance_monitor import scan_all_governance
+            try:
+                await scan_all_governance(target_id=tid, days_back=days_back)
+            except Exception as e:
+                logger.error(f"Governance scan failed: {e}")
+
+        import asyncio
+        background_tasks.add_task(lambda: asyncio.run(_run()))
+        return {"status": "accepted", "message": "Governance scan running in background. GET /api/ops/governance/feed for results."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 @router.get("/governance/feed")
@@ -1096,22 +1259,32 @@ async def get_governance_feed(
 ):
     """Get recent governance proposals."""
     _check_admin_key(request)
-    from app.ops.tools.governance_monitor import get_recent_proposals
-    return {"proposals": get_recent_proposals(limit=limit, stablecoin_only=stablecoin_only, target_id=target_id)}
+    try:
+        from app.ops.tools.governance_monitor import get_recent_proposals
+        return {"proposals": get_recent_proposals(limit=limit, stablecoin_only=stablecoin_only, target_id=target_id)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 @router.get("/governance/snapshot/{space_id}")
 async def get_snapshot_space(request: Request, space_id: str):
     """Get proposals for a specific Snapshot space."""
     _check_admin_key(request)
-    from app.database import fetch_all as fa
-    proposals = fa(
-        """SELECT * FROM ops_governance_proposals
-           WHERE platform = 'snapshot' AND space_or_org = %s
-           ORDER BY fetched_at DESC LIMIT 20""",
-        (space_id,),
-    ) or []
-    return {"space": space_id, "proposals": proposals}
+    try:
+        from app.database import fetch_all as fa
+        proposals = fa(
+            """SELECT * FROM ops_governance_proposals
+               WHERE platform = 'snapshot' AND space_or_org = %s
+               ORDER BY fetched_at DESC LIMIT 20""",
+            (space_id,),
+        ) or []
+        return {"space": space_id, "proposals": proposals}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 # =============================================================================
@@ -1122,23 +1295,28 @@ async def get_snapshot_space(request: Request, space_id: str):
 async def scan_investor_content_endpoint(request: Request, background_tasks: BackgroundTasks):
     """Scan VC blogs and tweets for investor content."""
     _check_admin_key(request)
-    body = {}
     try:
-        body = await request.json()
-    except Exception:
-        pass
-    investor_id = body.get("investor_id") if body else None
-
-    async def _run():
-        from app.ops.tools.investor_monitor import scan_investor_content
+        body = {}
         try:
-            await scan_investor_content(investor_id=investor_id)
-        except Exception as e:
-            logger.error(f"Investor content scan failed: {e}")
+            body = await request.json()
+        except Exception:
+            pass
+        investor_id = body.get("investor_id") if body else None
 
-    import asyncio
-    background_tasks.add_task(lambda: asyncio.run(_run()))
-    return {"status": "accepted", "message": "Investor content scan running in background. GET /api/ops/investors/content/feed for results."}
+        async def _run():
+            from app.ops.tools.investor_monitor import scan_investor_content
+            try:
+                await scan_investor_content(investor_id=investor_id)
+            except Exception as e:
+                logger.error(f"Investor content scan failed: {e}")
+
+        import asyncio
+        background_tasks.add_task(lambda: asyncio.run(_run()))
+        return {"status": "accepted", "message": "Investor content scan running in background. GET /api/ops/investors/content/feed for results."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 @router.get("/investors/content/feed")
@@ -1150,16 +1328,21 @@ async def get_investor_content_feed(
 ):
     """Get recent investor content."""
     _check_admin_key(request)
-    from app.ops.tools.investor_monitor import get_investor_content
-    return {"content": get_investor_content(limit=limit, investor_id=investor_id, analyzed_only=analyzed_only)}
+    try:
+        from app.ops.tools.investor_monitor import get_investor_content
+        return {"content": get_investor_content(limit=limit, investor_id=investor_id, analyzed_only=analyzed_only)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 @router.post("/investors/content/{content_id}/analyze")
 async def analyze_investor_content_endpoint(request: Request, content_id: int):
     """Analyze investor content for thesis alignment."""
     _check_admin_key(request)
-    from app.ops.tools.investor_monitor import analyze_investor_content
     try:
+        from app.ops.tools.investor_monitor import analyze_investor_content
         result = await analyze_investor_content(content_id)
         if "error" in result:
             raise HTTPException(status_code=500, detail=result["error"])
@@ -1168,15 +1351,20 @@ async def analyze_investor_content_endpoint(request: Request, content_id: int):
         raise
     except Exception as e:
         logger.error(f"Investor content analysis failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 @router.get("/investors/content/signals")
 async def get_investor_timing_signals(request: Request, limit: int = Query(default=10, le=50)):
     """Get investor content with timing signals — high-priority outreach opportunities."""
     _check_admin_key(request)
-    from app.ops.tools.investor_monitor import get_timing_signals
-    return {"signals": get_timing_signals(limit=limit)}
+    try:
+        from app.ops.tools.investor_monitor import get_timing_signals
+        return {"signals": get_timing_signals(limit=limit)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 # =============================================================================
@@ -1194,8 +1382,10 @@ async def run_migration_033(request: Request):
         )
         run_migration(migration_path)
         return {"status": "ok", "migration": "033_ops_session6_expansion"}
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 # ─── Chain Expansion Endpoints ────────────────────────────────────────
@@ -1205,39 +1395,54 @@ async def run_migration_033(request: Request):
 async def ops_chain_candidates(request: Request):
     """View chain expansion candidates and their specs."""
     _check_admin_key(request)
-    from app.collectors.psi_collector import discover_chain_candidates
+    try:
+        from app.collectors.psi_collector import discover_chain_candidates
 
-    candidates = discover_chain_candidates()
+        candidates = discover_chain_candidates()
 
-    # Check which have specs and serialise sets for JSON
-    for c in candidates:
-        spec_path = os.path.join("docs", "collector_specs", f"{c['chain'].lower()}_collector_spec.md")
-        c["spec_exists"] = os.path.exists(spec_path)
-        c["spec_path"] = spec_path if c["spec_exists"] else None
-        c["protocols"] = list(c.get("protocols", []))[:20]
-        c["stablecoins"] = list(c.get("stablecoins", []))
+        # Check which have specs and serialise sets for JSON
+        for c in candidates:
+            spec_path = os.path.join("docs", "collector_specs", f"{c['chain'].lower()}_collector_spec.md")
+            c["spec_exists"] = os.path.exists(spec_path)
+            c["spec_path"] = spec_path if c["spec_exists"] else None
+            c["protocols"] = list(c.get("protocols", []))[:20]
+            c["stablecoins"] = list(c.get("stablecoins", []))
 
-    return {"candidates": candidates, "count": len(candidates)}
+        return {"candidates": candidates, "count": len(candidates)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 @router.post("/chain-expand")
 async def ops_chain_expand(request: Request):
     """Trigger chain discovery + spec generation manually."""
     _check_admin_key(request)
-    from app.collectors.psi_collector import run_chain_discovery
-    result = run_chain_discovery()
-    return result
+    try:
+        from app.collectors.psi_collector import run_chain_discovery
+        result = run_chain_discovery()
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 @router.get("/chain-spec/{chain}")
 async def ops_chain_spec(request: Request, chain: str):
     """Read a generated chain collector spec."""
     _check_admin_key(request)
-    spec_path = os.path.join("docs", "collector_specs", f"{chain.lower()}_collector_spec.md")
-    if not os.path.exists(spec_path):
-        raise HTTPException(status_code=404, detail=f"No spec for {chain}. Run chain discovery first.")
-    with open(spec_path, "r") as f:
-        return {"chain": chain, "spec": f.read()}
+    try:
+        spec_path = os.path.join("docs", "collector_specs", f"{chain.lower()}_collector_spec.md")
+        if not os.path.exists(spec_path):
+            raise HTTPException(status_code=404, detail=f"No spec for {chain}. Run chain discovery first.")
+        with open(spec_path, "r") as f:
+            return {"chain": chain, "spec": f.read()}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
 def register_ops_routes(app):

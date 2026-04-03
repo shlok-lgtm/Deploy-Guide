@@ -11,6 +11,7 @@ CoinGecko /coins/{id}/market_chart/range returns daily price/mcap/volume.
 import os
 import time
 import logging
+import threading
 from datetime import datetime, timezone, timedelta
 
 import httpx
@@ -20,6 +21,9 @@ from app.index_definitions.psi_v01 import TARGET_PROTOCOLS
 from app.collectors.psi_collector import PROTOCOL_GOVERNANCE_TOKENS
 
 logger = logging.getLogger(__name__)
+
+_backfill_lock = threading.Lock()
+_backfill_running = False
 
 DEFILLAMA_BASE = "https://api.llama.fi"
 CG_API_KEY = os.environ.get("COINGECKO_API_KEY", "")
@@ -185,21 +189,29 @@ def backfill_protocol_token(slug: str, gecko_id: str, from_date: str = "2024-01-
 
 def backfill_all_protocols(from_date: str = "2026-01-01") -> dict:
     """Backfill historical data for all PSI-scored protocols."""
-    _ensure_table()
+    global _backfill_running
+    if _backfill_running:
+        logger.warning("PSI backfill already running — skipping duplicate")
+        return {"status": "already_running"}
+    _backfill_running = True
+    try:
+        _ensure_table()
 
-    results = {}
-    for slug in TARGET_PROTOCOLS:
-        logger.info(f"Backfilling {slug}...")
+        results = {}
+        for slug in TARGET_PROTOCOLS:
+            logger.info(f"Backfilling {slug}...")
 
-        tvl_count = backfill_protocol_tvl(slug)
-        time.sleep(0.2)
+            tvl_count = backfill_protocol_tvl(slug)
+            time.sleep(0.2)
 
-        gecko_id = PROTOCOL_GOVERNANCE_TOKENS.get(slug)
-        token_count = 0
-        if gecko_id:
-            token_count = backfill_protocol_token(slug, gecko_id, from_date)
-            time.sleep(0.5)
+            gecko_id = PROTOCOL_GOVERNANCE_TOKENS.get(slug)
+            token_count = 0
+            if gecko_id:
+                token_count = backfill_protocol_token(slug, gecko_id, from_date)
+                time.sleep(0.5)
 
-        results[slug] = {"tvl_records": tvl_count, "token_records": token_count}
+            results[slug] = {"tvl_records": tvl_count, "token_records": token_count}
 
-    return results
+        return results
+    finally:
+        _backfill_running = False

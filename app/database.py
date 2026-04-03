@@ -106,7 +106,16 @@ def get_conn():
         yield conn
         conn.commit()
     except Exception as exc:
-        logger.error("Database error in get_conn(): %s", exc, exc_info=True)
+        # UndefinedTable is expected when optional dbt models haven't been
+        # materialized yet — log at DEBUG to avoid noisy ERROR-level alerts.
+        try:
+            from psycopg2.errors import UndefinedTable
+            if isinstance(exc, UndefinedTable):
+                logger.debug("Query referenced a missing table (expected if dbt models not yet built): %s", exc)
+            else:
+                logger.error("Database error in get_conn(): %s", exc, exc_info=True)
+        except ImportError:
+            logger.error("Database error in get_conn(): %s", exc, exc_info=True)
         try:
             conn.rollback()
         except Exception:
