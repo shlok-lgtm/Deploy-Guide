@@ -1624,7 +1624,9 @@ function WalletsView({ mobile, integrity }) {
   const { data: backlog, loading: backlogLoading } = useBacklog(50);
 
   const walletDomain = integrity?.domains?.wallets || {};
+  const edgeDomain = integrity?.domains?.edges || {};
   const walletCount = walletDomain.row_count || (topWallets ? topWallets.length : 0);
+  const edgeCount = edgeDomain.row_count || 0;
 
   return (
     <div>
@@ -1635,8 +1637,8 @@ function WalletsView({ mobile, integrity }) {
         formId="FORM WRG-001 · BASIS PROTOCOL"
         stats={[
           `${walletCount ? walletCount.toLocaleString() : "—"} WALLETS TRACKED`,
-          "ETHEREUM MAINNET",
-          "UPDATED DAILY",
+          `${edgeCount ? edgeCount.toLocaleString() : "—"} TRANSFER EDGES`,
+          "4 CHAINS",
         ]}
         formulaLine="Risk = f(concentration, coverage quality, behavioral signals)"
         versionLabel="WRG v0.1.0"
