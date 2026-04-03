@@ -133,7 +133,7 @@ def backfill_protocol_token(slug: str, gecko_id: str, from_date: str = "2024-01-
             )
             if resp.status_code == 429:
                 logger.warning("CoinGecko rate limit — sleeping 60s")
-                time.sleep(60)
+                time.sleep(5)
                 continue
             if resp.status_code != 200:
                 logger.warning(f"CoinGecko {gecko_id} returned {resp.status_code}")
@@ -177,13 +177,13 @@ def backfill_protocol_token(slug: str, gecko_id: str, from_date: str = "2024-01-
                 pass
 
         current = chunk_end
-        time.sleep(1.5)
+        time.sleep(0.2)
 
     logger.info(f"Backfilled {records} token records for {slug} ({gecko_id})")
     return records
 
 
-def backfill_all_protocols(from_date: str = "2024-01-01") -> dict:
+def backfill_all_protocols(from_date: str = "2026-01-01") -> dict:
     """Backfill historical data for all PSI-scored protocols."""
     _ensure_table()
 
@@ -192,13 +192,13 @@ def backfill_all_protocols(from_date: str = "2024-01-01") -> dict:
         logger.info(f"Backfilling {slug}...")
 
         tvl_count = backfill_protocol_tvl(slug)
-        time.sleep(1)
+        time.sleep(0.2)
 
         gecko_id = PROTOCOL_GOVERNANCE_TOKENS.get(slug)
         token_count = 0
         if gecko_id:
             token_count = backfill_protocol_token(slug, gecko_id, from_date)
-            time.sleep(2)
+            time.sleep(0.5)
 
         results[slug] = {"tvl_records": tvl_count, "token_records": token_count}
 

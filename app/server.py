@@ -3513,17 +3513,16 @@ async def psi_backtest_event(slug: str, event: str):
 
 
 @app.post("/api/admin/psi-backfill")
-async def admin_psi_backfill(request: Request):
+async def admin_psi_backfill(request: Request, background_tasks: BackgroundTasks):
     """Trigger historical data backfill for all PSI protocols. Admin-key protected."""
     _check_admin_key(request)
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-    from_date = body.get("from_date", "2024-01-01")
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    from_date = body.get("from_date", "2026-01-01")
+
     from app.services.psi_backfill import backfill_all_protocols
-    result = backfill_all_protocols(from_date=from_date)
-    return {"status": "complete", "results": result}
+    background_tasks.add_task(backfill_all_protocols, from_date=from_date)
+
+    return {"status": "started", "from_date": from_date, "message": "Backfill running in background. Check logs for progress."}
 
 
 @app.post("/api/admin/protocol-expansion")
