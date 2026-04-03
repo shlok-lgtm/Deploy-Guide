@@ -82,10 +82,11 @@ def import_sql_file(conn, filepath, table_name):
     columns = [c.strip().strip('"') for c in cols_match.group(1).split(',')]
     
     # Build INSERT ... ON CONFLICT DO NOTHING
-    col_list = ', '.join(f'"{c}"' for c in columns)
-    placeholders = ', '.join(['%s'] * len(columns))
-    
-    insert_sql = f'INSERT INTO {table_name} ({col_list}) VALUES ({placeholders}) ON CONFLICT DO NOTHING'
+    insert_sql = sql.SQL('INSERT INTO {} ({}) VALUES ({}) ON CONFLICT DO NOTHING').format(
+        sql.Identifier(table_name),
+        sql.SQL(', ').join(sql.Identifier(c) for c in columns),
+        sql.SQL(', ').join(sql.Placeholder() for _ in columns)
+    )
     
     # Parse tab-separated rows
     rows_imported = 0
