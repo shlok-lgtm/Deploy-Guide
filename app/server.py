@@ -319,21 +319,6 @@ async def startup():
     try:
         from app.ops.routes import register_ops_routes
         register_ops_routes(app)
-@app.get("/api/test/historical-data")
-async def test_historical_data():
-    from app.database import fetch_one, fetch_all
-    try:
-        count = fetch_one("SELECT COUNT(*) as cnt FROM historical_protocol_data")
-        sample = fetch_one("SELECT protocol_slug, record_date, tvl FROM historical_protocol_data ORDER BY id DESC LIMIT 1")
-        return {
-            "count": count["cnt"] if count else "no count",
-            "sample": dict(sample) if sample else "no sample",
-            "status": "ok"
-        }
-    except Exception as e:
-        import traceback
-        return {"error": str(e), "traceback": traceback.format_exc()}
-
 
         logger.info("Operations Hub routes registered")
     except Exception as e:
