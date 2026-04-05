@@ -1,0 +1,83 @@
+Run these SQL queries against the database using app.database.fetch_one and fetch_all, and print the results. No dashboard, no script file, just run it and show me the output.
+
+```python
+from app.database import fetch_one, fetch_all
+
+print("=== TOTAL STATE ===")
+tables = [
+    ("Score history records", "SELECT COUNT(*) AS cnt FROM score_history"),
+    ("Component readings", "SELECT COUNT(*) AS cnt FROM component_readings"),
+    ("Assessment events", "SELECT COUNT(*) AS cnt FROM assessment_events"),
+    ("Stablecoins scored", "SELECT COUNT(*) AS cnt FROM scores WHERE overall_score IS NOT NULL"),
+    ("Protocols scored", "SELECT COUNT(DISTINCT protocol_slug) AS cnt FROM psi_scores"),
+    ("Wallets discovered", "SELECT COUNT(*) AS cnt FROM wallet_graph.wallets"),
+    ("Wallets scored", "SELECT COUNT(DISTINCT wallet_address) AS cnt FROM wallet_graph.wallet_risk_scores WHERE risk_score IS NOT NULL"),
+    ("Graph edges", "SELECT COUNT(*) AS cnt FROM wallet_graph.wallet_edges"),
+    ("Wallet profiles", "SELECT COUNT(*) AS cnt FROM wallet_graph.wallet_profiles"),
+    ("CDA extractions", "SELECT COUNT(*) AS cnt FROM cda_vendor_extractions"),
+    ("Discovery signals", "SELECT COUNT(*) AS cnt FROM discovery_signals"),
+    ("Daily pulses", "SELECT COUNT(*) AS cnt FROM daily_pulses"),
+    ("Historical prices", "SELECT COUNT(*) AS cnt FROM historical_prices"),
+    ("Collateral exposure", "SELECT COUNT(*) AS cnt FROM protocol_collateral_exposure"),
+    ("Treasury holdings", "SELECT COUNT(*) AS cnt FROM protocol_treasury_holdings"),
+    ("Protocol backlog", "SELECT COUNT(*) AS cnt FROM protocol_backlog"),
+    ("Tracked USD", "SELECT COALESCE(SUM(total_stablecoin_value), 0) AS cnt FROM wallet_graph.wallet_risk_scores"),
+]
+total = 0
+for label, sql in tables:
+    try:
+        row = fetch_one(sql)
+        val = row["cnt"] if row else 0
+        print(f"  {label}: {val:,.0f}")
+        if label != "Tracked USD":
+            total += int(val or 0)
+    except Exception as e:
+        print(f"  {label}: ERROR - {e}")
+print(f"\n  TOTAL STATE RECORDS: {total:,}")
+
+print("\n=== LAST 7 DAYS GROWTH ===")
+growth = [
+    ("Score history", "SELECT COUNT(*) AS cnt FROM score_history WHERE created_at > NOW() - INTERVAL '7 days'"),
+    ("Component readings", "SELECT COUNT(*) AS cnt FROM component_readings WHERE collected_at > NOW() - INTERVAL '7 days'"),
+    ("Assessment events", "SELECT COUNT(*) AS cnt FROM assessment_events WHERE created_at > NOW() - INTERVAL '7 days'"),
+    ("New wallets", "SELECT COUNT(*) AS cnt FROM wallet_graph.wallets WHERE first_seen_at > NOW() - INTERVAL '7 days'"),
+    ("New edges", "SELECT COUNT(*) AS cnt FROM wallet_graph.wallet_edges WHERE created_at > NOW() - INTERVAL '7 days'"),
+    ("CDA extractions", "SELECT COUNT(*) AS cnt FROM cda_vendor_extractions WHERE extracted_at > NOW() - INTERVAL '7 days'"),
+    ("Discovery signals", "SELECT COUNT(*) AS cnt FROM discovery_signals WHERE created_at > NOW() - INTERVAL '7 days'"),
+    ("Historical prices", "SELECT COUNT(*) AS cnt FROM historical_prices WHERE created_at > NOW() - INTERVAL '7 days'"),
+    ("Pulses", "SELECT COUNT(*) AS cnt FROM daily_pulses WHERE created_at > NOW() - INTERVAL '7 days'"),
+]
+for label, sql in growth:
+    try:
+        row = fetch_one(sql)
+        val = row["cnt"] if row else 0
+        print(f"  {label}: +{val:,.0f}")
+    except Exception as e:
+        print(f"  {label}: ERROR - {e}")
+
+print("\n=== PIPELINE FRESHNESS ===")
+fresh = [
+    ("SII scoring", "SELECT MAX(computed_at) AS latest FROM scores"),
+    ("PSI scoring", "SELECT MAX(computed_at) AS latest FROM psi_scores"),
+    ("Wallet scoring", "SELECT MAX(computed_at) AS latest FROM wallet_graph.wallet_risk_scores"),
+    ("CDA extraction", "SELECT MAX(extracted_at) AS latest FROM cda_vendor_extractions"),
+    ("Edge builder", "SELECT MAX(created_at) AS latest FROM wallet_graph.wallet_edges"),
+    ("Pulse", "SELECT MAX(created_at) AS latest FROM daily_pulses"),
+    ("Events", "SELECT MAX(created_at) AS latest FROM assessment_events"),
+]
+from datetime import datetime, timezone
+now = datetime.now(timezone.utc)
+for label, sql in fresh:
+    try:
+        row = fetch_one(sql)
+        latest = row["latest"] if row else None
+        if latest:
+            if latest.tzinfo is None:
+                latest = latest.replace(tzinfo=timezone.utc)
+            hours = (now - latest).total_seconds() / 3600
+            print(f"  {label}: {hours:.1f}h ago")
+        else:
+            print(f"  {label}: NEVER RAN")
+    except Exception as e:
+        print(f"  {label}: ERROR - {e}")
+```
