@@ -108,12 +108,40 @@ def register_page_routes(app: FastAPI) -> None:
             ORDER BY created_at DESC LIMIT 10
         """, (address.lower(),))
 
+        # Full profile: behavioral signals + quality history
+        profile = None
+        try:
+            from app.wallet_profile import generate_wallet_profile
+            profile = generate_wallet_profile(address)
+        except Exception as e:
+            logger.warning(f"Profile generation failed for {address[:12]}...: {e}")
+
+        # Cross-chain unified profile
+        unified = fetch_one(
+            "SELECT * FROM wallet_graph.wallet_profiles WHERE LOWER(address) = LOWER(%s)",
+            (address.lower(),)
+        )
+
+        # Top connections by edge weight
+        connections = fetch_all("""
+            SELECT
+                CASE WHEN from_address = %s THEN to_address ELSE from_address END AS counterparty,
+                weight, total_value_usd
+            FROM wallet_graph.wallet_edges
+            WHERE from_address = %s OR to_address = %s
+            ORDER BY weight DESC
+            LIMIT 5
+        """, (address.lower(), address.lower(), address.lower()))
+
         context = {
             "address": address.lower(),
             "risk": dict(risk),
             "holdings": [dict(h) for h in holdings],
             "assessments": [dict(a) for a in recent_assessments],
-            "json_ld": _wallet_json_ld(address.lower(), risk, holdings),
+            "profile": profile,
+            "unified": dict(unified) if unified else None,
+            "connections": [dict(c) for c in connections],
+            "json_ld": _wallet_json_ld(address.lower(), risk, holdings, profile),
         }
 
         try:
@@ -314,19 +342,31 @@ def register_page_routes(app: FastAPI) -> None:
 
 # --- JSON-LD Generators ---
 
-def _wallet_json_ld(address: str, risk: dict, holdings: list) -> str:
+def _wallet_json_ld(address: str, risk: dict, holdings: list, profile: dict = None) -> str:
+    props = [
+        {"@type": "PropertyValue", "name": "risk_score", "value": risk.get("risk_score")},
+        {"@type": "PropertyValue", "name": "risk_grade", "value": risk.get("risk_grade")},
+        {"@type": "PropertyValue", "name": "concentration_hhi", "value": risk.get("concentration_hhi")},
+        {"@type": "PropertyValue", "name": "total_value", "value": risk.get("total_stablecoin_value")},
+        {"@type": "PropertyValue", "name": "holdings_count", "value": len(holdings)},
+    ]
+    if profile:
+        bs = profile.get("behavioral_signals", {})
+        qh = profile.get("quality_history", {})
+        if bs.get("days_tracked") is not None:
+            props.append({"@type": "PropertyValue", "name": "days_tracked", "value": bs["days_tracked"]})
+        if bs.get("score_stability_30d") is not None:
+            props.append({"@type": "PropertyValue", "name": "score_stability_30d", "value": bs["score_stability_30d"]})
+        if qh.get("pct_days_a_grade") is not None:
+            props.append({"@type": "PropertyValue", "name": "pct_days_a_grade", "value": qh["pct_days_a_grade"]})
+        if profile.get("profile_hash"):
+            props.append({"@type": "PropertyValue", "name": "profile_hash", "value": profile["profile_hash"]})
     ld = {
         "@context": "https://schema.org",
         "@type": "FinancialProduct",
         "name": f"Wallet Risk Profile: {address[:10]}...{address[-4:]}",
         "description": f"Stablecoin risk profile for Ethereum wallet {address}",
-        "additionalProperty": [
-            {"@type": "PropertyValue", "name": "risk_score", "value": risk.get("risk_score")},
-            {"@type": "PropertyValue", "name": "risk_grade", "value": risk.get("risk_grade")},
-            {"@type": "PropertyValue", "name": "concentration_hhi", "value": risk.get("concentration_hhi")},
-            {"@type": "PropertyValue", "name": "total_value", "value": risk.get("total_stablecoin_value")},
-            {"@type": "PropertyValue", "name": "holdings_count", "value": len(holdings)},
-        ],
+        "additionalProperty": props,
     }
     return json.dumps(ld, cls=_DecimalEncoder)
 
@@ -381,17 +421,34 @@ def _pulse_json_ld(pulse_date: str, summary: dict) -> str:
 def _fallback_wallet_html(ctx: dict) -> str:
     addr = ctx["address"]
     risk = ctx["risk"]
-    return f"""<!DOCTYPE html>
+    profile = ctx.get("profile")
+    parts = [
+        f"""<!DOCTYPE html>
 <html><head><title>Wallet {addr[:10]}... | Basis Protocol</title>
 <script type="application/ld+json">{ctx['json_ld']}</script>
 <link rel="alternate" type="application/json" href="/api/wallets/{addr}">
-</head><body>
+</head><body style="font-family:sans-serif;max-width:800px;margin:0 auto;padding:20px;background:#0a0a0a;color:#e0e0e0">
 <h1>Wallet Risk Profile</h1>
-<p><strong>{addr}</strong></p>
+<p style="font-family:monospace;color:#888;word-break:break-all">{addr}</p>
 <p>Risk Score: {risk.get('risk_score', 'N/A')} ({risk.get('risk_grade', 'N/A')})</p>
 <p>Concentration HHI: {risk.get('concentration_hhi', 'N/A')}</p>
-<p>Total Value: ${risk.get('total_stablecoin_value', 0):,.2f}</p>
-</body></html>"""
+<p>Total Value: ${risk.get('total_stablecoin_value', 0):,.2f}</p>""",
+    ]
+    if profile:
+        bs = profile.get("behavioral_signals", {})
+        qh = profile.get("quality_history", {})
+        parts.append("<h2>Behavioral Signals</h2>")
+        parts.append(f"<p>Days Tracked: {bs.get('days_tracked', '—')} · "
+                     f"Score Stability (30d): {bs.get('score_stability_30d', '—')} · "
+                     f"Avg Score (30d): {bs.get('avg_score_30d', '—')}</p>")
+        parts.append("<h2>Quality History</h2>")
+        parts.append(f"<p>A Grade: {qh.get('pct_days_a_grade', '—')}% · "
+                     f"Best: {qh.get('best_score_ever', '—')} · "
+                     f"Worst: {qh.get('worst_score_ever', '—')}</p>")
+        if profile.get("profile_hash"):
+            parts.append(f"<p style='font-family:monospace;font-size:0.75rem;color:#444'>Hash: {profile['profile_hash']}</p>")
+    parts.append("</body></html>")
+    return "\n".join(parts)
 
 
 def _fallback_asset_html(ctx: dict) -> str:

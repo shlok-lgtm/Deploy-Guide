@@ -1605,9 +1605,13 @@ function WalletRow({ wallet, rank, mobile, lowScoreHighlight }) {
       {mobile ? null : (
         <span style={{ fontFamily: T.mono, fontSize: 11, color: T.inkFaint }}>{rank}</span>
       )}
-      <span style={{ fontFamily: T.mono, fontSize: 11, color: T.inkMid, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+      <a href={`/wallet/${wallet.address}`}
+        style={{ fontFamily: T.mono, fontSize: 11, color: T.inkMid, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: "none" }}
+        onMouseEnter={(e) => e.target.style.textDecoration = "underline"}
+        onMouseLeave={(e) => e.target.style.textDecoration = "none"}
+      >
         {truncAddr(wallet.address)}
-      </span>
+      </a>
       <span style={{ fontFamily: T.mono, fontSize: 11, color: T.ink }}>{fmtB(wallet.total_stablecoin_value)}</span>
       <span style={{ fontFamily: T.mono, fontSize: 12, fontWeight: 600, color: scoreColor }}>
         {wallet.risk_score != null ? fmt(wallet.risk_score, 1) : "—"}
@@ -1699,7 +1703,7 @@ function WalletSearchPanel({ mobile }) {
           <div style={{ display: "grid", gridTemplateColumns: mobile ? "1fr" : "1fr 1fr", gap: mobile ? 8 : 24, marginBottom: 16 }}>
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               {[
-                { label: "Address", value: w.address },
+                { label: "Address", value: w.address, isLink: true },
                 { label: "Value", value: fmtB(r.total_stablecoin_value || w.total_stablecoin_value) },
                 { label: "Size Tier", value: (w.size_tier || "—").toUpperCase() },
                 { label: "Source", value: w.source || "—" },
@@ -1707,7 +1711,15 @@ function WalletSearchPanel({ mobile }) {
               ].map((item) => (
                 <div key={item.label} style={{ fontFamily: T.mono, fontSize: mobile ? 10 : 10.5 }}>
                   <span style={{ color: T.inkFaint }}>{item.label}: </span>
-                  <span style={{ color: T.inkMid, wordBreak: "break-all" }}>{item.value}</span>
+                  {item.isLink ? (
+                    <a href={`/wallet/${item.value}`}
+                      style={{ color: T.inkMid, wordBreak: "break-all", textDecoration: "none" }}
+                      onMouseEnter={(e) => e.target.style.textDecoration = "underline"}
+                      onMouseLeave={(e) => e.target.style.textDecoration = "none"}
+                    >{item.value}</a>
+                  ) : (
+                    <span style={{ color: T.inkMid, wordBreak: "break-all" }}>{item.value}</span>
+                  )}
                 </div>
               ))}
             </div>
@@ -2460,7 +2472,7 @@ function PulseView({ mobile, integrity }) {
                 <div>
                   <span style={{ fontFamily: T.mono, fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, color: T.inkLight }}>{evt.severity} · {evt.trigger}</span>
                   <div style={{ fontFamily: T.mono, fontSize: 11, color: T.ink, marginTop: 2 }}>
-                    {truncAddr(evt.wallet)} · Score: {evt.score != null ? fmt(evt.score, 1) : "—"}
+                    <a href={`/wallet/${evt.wallet}`} style={{ color: T.ink, textDecoration: "none" }} onMouseEnter={(e) => e.target.style.textDecoration = "underline"} onMouseLeave={(e) => e.target.style.textDecoration = "none"}>{truncAddr(evt.wallet)}</a> · Score: {evt.score != null ? fmt(evt.score, 1) : "—"}
                   </div>
                 </div>
               </div>

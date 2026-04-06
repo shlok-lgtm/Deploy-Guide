@@ -13,16 +13,30 @@
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background: #0a0a0a; color: #e0e0e0; }
         h1 { font-size: 1.4rem; color: #fff; }
+        h2 { font-size: 1.1rem; color: #ccc; margin-top: 32px; margin-bottom: 12px; }
         .address { font-family: monospace; font-size: 0.85rem; color: #888; word-break: break-all; }
-        .score-card { display: flex; gap: 24px; margin: 20px 0; }
-        .metric { background: #151515; border: 1px solid #222; border-radius: 8px; padding: 16px; flex: 1; }
+        .score-card { display: flex; gap: 24px; margin: 20px 0; flex-wrap: wrap; }
+        .metric { background: #151515; border: 1px solid #222; border-radius: 8px; padding: 16px; flex: 1; min-width: 140px; }
         .metric-label { font-size: 0.75rem; color: #666; text-transform: uppercase; }
         .metric-value { font-size: 1.8rem; font-weight: 700; margin: 4px 0; }
+        .metric-sm .metric-value { font-size: 1.2rem; }
         .grade-a { color: #22c55e; } .grade-b { color: #84cc16; } .grade-c { color: #eab308; } .grade-d { color: #f97316; } .grade-f { color: #ef4444; }
+        .trend-improving { color: #22c55e; } .trend-stable { color: #888; } .trend-deteriorating { color: #ef4444; }
         table { width: 100%; border-collapse: collapse; margin: 16px 0; }
         th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #222; }
         th { color: #666; font-size: 0.75rem; text-transform: uppercase; }
         .severity-silent { color: #666; } .severity-notable { color: #eab308; } .severity-alert { color: #f97316; } .severity-critical { color: #ef4444; }
+        .section { margin-top: 28px; padding-top: 16px; border-top: 1px solid #1a1a1a; }
+        .signal-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+        .signal-item { background: #111; border: 1px solid #1a1a1a; border-radius: 6px; padding: 12px; }
+        .signal-label { font-size: 0.7rem; color: #555; text-transform: uppercase; letter-spacing: 0.5px; }
+        .signal-value { font-size: 1rem; font-weight: 600; color: #ddd; margin-top: 2px; }
+        .hash { font-family: monospace; font-size: 0.7rem; color: #444; word-break: break-all; margin-top: 8px; }
+        .connection-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #1a1a1a; font-size: 0.85rem; }
+        .connection-addr { font-family: monospace; color: #888; }
+        .connection-weight { color: #666; }
+        a { color: #6b9fe3; text-decoration: none; }
+        a:hover { text-decoration: underline; }
         footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #222; color: #444; font-size: 0.75rem; }
     </style>
 </head>
@@ -30,6 +44,7 @@
     <h1>Wallet Risk Profile</h1>
     <p class="address">{{ address }}</p>
 
+    {# === SCORE CARD === #}
     <div class="score-card">
         <div class="metric">
             <div class="metric-label">Risk Score</div>
@@ -50,45 +65,164 @@
         </div>
     </div>
 
-    <h2>Holdings</h2>
-    <table>
-        <thead>
-            <tr><th>Asset</th><th>Value</th><th>% of Wallet</th><th>SII Score</th><th>SII Grade</th></tr>
-        </thead>
-        <tbody>
-        {% for h in holdings %}
-            <tr>
-                <td>{{ h.symbol }}</td>
-                <td>${{ '{:,.2f}'.format(h.value_usd or 0) }}</td>
-                <td>{{ h.pct_of_wallet }}%</td>
-                <td>{{ h.sii_score or '—' }}</td>
-                <td>{{ h.sii_grade or '—' }}</td>
-            </tr>
-        {% endfor %}
-        </tbody>
-    </table>
+    {# === BEHAVIORAL SIGNALS === #}
+    {% if profile and profile.behavioral_signals %}
+    <div class="section">
+        <h2>Behavioral Signals</h2>
+        <div class="signal-grid">
+            <div class="signal-item">
+                <div class="signal-label">Days Tracked</div>
+                <div class="signal-value">{{ profile.behavioral_signals.days_tracked or 0 }}</div>
+            </div>
+            <div class="signal-item">
+                <div class="signal-label">Score Stability (30d)</div>
+                <div class="signal-value">{{ profile.behavioral_signals.score_stability_30d if profile.behavioral_signals.score_stability_30d is not none else '—' }}</div>
+            </div>
+            <div class="signal-item">
+                <div class="signal-label">Avg Score (30d)</div>
+                <div class="signal-value">{{ profile.behavioral_signals.avg_score_30d if profile.behavioral_signals.avg_score_30d is not none else '—' }}</div>
+            </div>
+            <div class="signal-item">
+                <div class="signal-label">Max Drawdown (90d)</div>
+                <div class="signal-value">{{ profile.behavioral_signals.max_drawdown_90d if profile.behavioral_signals.max_drawdown_90d is not none else '—' }}</div>
+            </div>
+            <div class="signal-item">
+                <div class="signal-label">Diversification Trend</div>
+                <div class="signal-value trend-{{ profile.behavioral_signals.diversification_trend or 'stable' }}">
+                    {{ (profile.behavioral_signals.diversification_trend or 'stable') | capitalize }}
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
 
-    {% if assessments %}
-    <h2>Recent Assessments</h2>
-    <table>
-        <thead>
-            <tr><th>Date</th><th>Trigger</th><th>Severity</th><th>Score</th></tr>
-        </thead>
-        <tbody>
-        {% for a in assessments %}
-            <tr>
-                <td>{{ a.created_at.strftime('%Y-%m-%d %H:%M') if a.created_at else '' }}</td>
-                <td>{{ a.trigger_type }}</td>
-                <td class="severity-{{ a.severity }}">{{ a.severity }}</td>
-                <td>{{ a.wallet_risk_score or '—' }}</td>
-            </tr>
+    {# === QUALITY HISTORY === #}
+    {% if profile and profile.quality_history %}
+    <div class="section">
+        <h2>Quality History</h2>
+        <div class="signal-grid">
+            <div class="signal-item">
+                <div class="signal-label">% Days at A Grade</div>
+                <div class="signal-value grade-a">{{ profile.quality_history.pct_days_a_grade if profile.quality_history.pct_days_a_grade is not none else '—' }}{% if profile.quality_history.pct_days_a_grade is not none %}%{% endif %}</div>
+            </div>
+            <div class="signal-item">
+                <div class="signal-label">% Days at B+ Grade</div>
+                <div class="signal-value grade-b">{{ profile.quality_history.pct_days_b_grade if profile.quality_history.pct_days_b_grade is not none else '—' }}{% if profile.quality_history.pct_days_b_grade is not none %}%{% endif %}</div>
+            </div>
+            <div class="signal-item">
+                <div class="signal-label">Best Score</div>
+                <div class="signal-value">{{ profile.quality_history.best_score_ever if profile.quality_history.best_score_ever is not none else '—' }}</div>
+            </div>
+            <div class="signal-item">
+                <div class="signal-label">Worst Score</div>
+                <div class="signal-value">{{ profile.quality_history.worst_score_ever if profile.quality_history.worst_score_ever is not none else '—' }}</div>
+            </div>
+            <div class="signal-item">
+                <div class="signal-label">Worst Grade</div>
+                <div class="signal-value">{{ profile.quality_history.worst_grade_ever or '—' }}</div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {# === HOLDINGS === #}
+    <div class="section">
+        <h2>Holdings</h2>
+        <table>
+            <thead>
+                <tr><th>Asset</th><th>Value</th><th>% of Wallet</th><th>SII Score</th><th>SII Grade</th></tr>
+            </thead>
+            <tbody>
+            {% for h in holdings %}
+                <tr>
+                    <td><a href="/asset/{{ h.symbol | lower }}">{{ h.symbol }}</a></td>
+                    <td>${{ '{:,.2f}'.format(h.value_usd or 0) }}</td>
+                    <td>{{ h.pct_of_wallet }}%</td>
+                    <td>{{ h.sii_score or '—' }}</td>
+                    <td>{{ h.sii_grade or '—' }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {# === CONNECTIONS === #}
+    {% if connections and connections | length > 0 %}
+    <div class="section">
+        <h2>Top Connections</h2>
+        {% for c in connections %}
+        <div class="connection-row">
+            <a class="connection-addr" href="/wallet/{{ c.counterparty }}">{{ c.counterparty[:10] }}...{{ c.counterparty[-4:] }}</a>
+            <span class="connection-weight">weight: {{ '%.4f' | format(c.weight or 0) }}</span>
+        </div>
         {% endfor %}
-        </tbody>
-    </table>
+    </div>
+    {% endif %}
+
+    {# === CROSS-CHAIN === #}
+    {% if unified %}
+    <div class="section">
+        <h2>Cross-Chain Profile</h2>
+        <div class="signal-grid">
+            <div class="signal-item">
+                <div class="signal-label">Chains Active</div>
+                <div class="signal-value">{{ unified.chains_active if unified.chains_active is string else (unified.chains_active | join(', ') if unified.chains_active else '—') }}</div>
+            </div>
+            <div class="signal-item">
+                <div class="signal-label">Total Value (All Chains)</div>
+                <div class="signal-value">${{ '{:,.0f}'.format(unified.total_value_all_chains or 0) }}</div>
+            </div>
+            <div class="signal-item">
+                <div class="signal-label">Graph Edges</div>
+                <div class="signal-value">{{ unified.edge_count_all_chains or 0 }}</div>
+            </div>
+            <div class="signal-item">
+                <div class="signal-label">Aggregate Grade</div>
+                <div class="signal-value">{{ unified.risk_grade_aggregate or '—' }}</div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {# === ASSESSMENTS === #}
+    {% if assessments %}
+    <div class="section">
+        <h2>Recent Assessments</h2>
+        <table>
+            <thead>
+                <tr><th>Date</th><th>Trigger</th><th>Severity</th><th>Score</th></tr>
+            </thead>
+            <tbody>
+            {% for a in assessments %}
+                <tr>
+                    <td><a href="/assessment/{{ a.id }}">{{ a.created_at.strftime('%Y-%m-%d %H:%M') if a.created_at else '' }}</a></td>
+                    <td>{{ a.trigger_type }}</td>
+                    <td class="severity-{{ a.severity }}">{{ a.severity }}</td>
+                    <td>{{ a.wallet_risk_score or '—' }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+
+    {# === PROFILE HASH === #}
+    {% if profile and profile.profile_hash %}
+    <div class="section">
+        <h2>Verification</h2>
+        <div class="hash">Profile Hash: {{ profile.profile_hash }}</div>
+        <div class="hash">Schema: wallet-profile-v{{ profile.schema_version or '1.0.0' }}</div>
+        <div class="hash">Computed: {{ profile.computed_at or '' }}</div>
+    </div>
     {% endif %}
 
     <footer>
-        <p>Basis Protocol | Methodology: wallet-v1.0.0 | Data updates hourly</p>
+        <p>
+            <a href="/">Basis Protocol</a> ·
+            Methodology: wallet-v1.0.0 · Data updates hourly ·
+            <a href="/api/wallets/{{ address }}/profile">API</a> ·
+            <a href="/api/wallets/{{ address }}/profile/hash">Verify Hash</a>
+        </p>
     </footer>
 </body>
 </html>
