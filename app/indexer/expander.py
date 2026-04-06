@@ -40,6 +40,7 @@ def _get_coverage_gaps() -> list[dict]:
             s.symbol,
             s.contract,
             s.expansion_last_page,
+            s.expansion_exhausted,
             COUNT(DISTINCT wh.wallet_address) AS indexed_wallets
         FROM stablecoins s
         LEFT JOIN wallet_graph.wallet_holdings wh
@@ -47,7 +48,7 @@ def _get_coverage_gaps() -> list[dict]:
         WHERE s.contract IS NOT NULL
           AND s.scoring_enabled = TRUE
           AND (s.expansion_exhausted IS FALSE OR s.expansion_exhausted IS NULL)
-        GROUP BY s.id, s.symbol, s.contract, s.expansion_last_page
+        GROUP BY s.id, s.symbol, s.contract, s.expansion_last_page, s.expansion_exhausted
         ORDER BY indexed_wallets ASC
     """)
     return rows
