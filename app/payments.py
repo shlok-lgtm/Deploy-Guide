@@ -10,12 +10,16 @@ import os
 import json
 import logging
 import hashlib
+import time
+import secrets
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request, HTTPException, Query
 from typing import Optional
 
-from x402 import x402ResourceServer, FacilitatorConfig
+import jwt
+
+from x402 import x402ResourceServer
 from x402.http.facilitator_client import HTTPFacilitatorClient
 from x402.http.middleware.fastapi import PaymentMiddlewareASGI
 from x402.http.types import RouteConfig, PaymentOption
@@ -27,8 +31,40 @@ logger = logging.getLogger("payments")
 
 # --- Configuration ---
 BASIS_WALLET = os.environ.get("BASIS_PAYMENT_WALLET", "")
-X402_NETWORK = os.environ.get("X402_NETWORK", "eip155:84532")  # Base Sepolia testnet
-X402_FACILITATOR = os.environ.get("X402_FACILITATOR_URL", "https://x402.org/facilitator")
+
+# CDP credentials — if set, use Coinbase CDP facilitator on mainnet
+CDP_API_KEY_ID = os.environ.get("CDP_API_KEY_ID", "")
+CDP_API_KEY_SECRET = os.environ.get("CDP_API_KEY_SECRET", "")
+CDP_FACILITATOR_URL = os.environ.get(
+    "CDP_FACILITATOR_URL", "https://api.developer.coinbase.com/x402/facilitator"
+)
+
+_USE_CDP = bool(CDP_API_KEY_ID and CDP_API_KEY_SECRET)
+
+if _USE_CDP:
+    X402_NETWORK = os.environ.get("X402_NETWORK", "eip155:8453")   # Base mainnet
+    X402_FACILITATOR = CDP_FACILITATOR_URL
+else:
+    X402_NETWORK = os.environ.get("X402_NETWORK", "eip155:84532")  # Base Sepolia testnet
+    X402_FACILITATOR = os.environ.get("X402_FACILITATOR_URL", "https://x402.org/facilitator")
+
+
+def _cdp_create_headers() -> dict[str, dict[str, str]]:
+    """Build CDP JWT auth headers for the facilitator endpoints."""
+    now = int(time.time())
+    payload = {
+        "sub": CDP_API_KEY_ID,
+        "iss": "cdp",
+        "aud": ["cdp_service"],
+        "nbf": now,
+        "iat": now,
+        "exp": now + 120,
+        "jti": secrets.token_hex(8),
+    }
+    token = jwt.encode(payload, CDP_API_KEY_SECRET, algorithm="ES256",
+                       headers={"kid": CDP_API_KEY_ID, "typ": "JWT"})
+    auth = {"Authorization": f"Bearer {token}"}
+    return {"verify": auth, "settle": auth, "supported": auth}
 
 
 def _route(price: str, description: str) -> RouteConfig:
@@ -53,7 +89,12 @@ def create_x402_middleware():
     if not BASIS_WALLET:
         raise ValueError("BASIS_PAYMENT_WALLET env var not set")
 
-    facilitator = HTTPFacilitatorClient(FacilitatorConfig(url=X402_FACILITATOR))
+    if _USE_CDP:
+        facilitator = HTTPFacilitatorClient({"url": X402_FACILITATOR, "create_headers": _cdp_create_headers})
+        logger.info("x402: using CDP facilitator at %s (network %s)", X402_FACILITATOR, X402_NETWORK)
+    else:
+        facilitator = HTTPFacilitatorClient({"url": X402_FACILITATOR})
+        logger.info("x402: using x402.org facilitator (network %s)", X402_NETWORK)
     server = x402ResourceServer(facilitator_clients=facilitator)
     server.register(X402_NETWORK, ExactEvmServerScheme())
 

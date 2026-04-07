@@ -84,7 +84,9 @@
       "WebFetch(domain:docs.tribeca.so)",
       "WebFetch(domain:anchor.so)",
       "Bash(export WORKER_ENABLED=true)",
-      "Bash(pkill -f \"python main.py\")"
+      "Bash(pkill -f \"python main.py\")",
+      "Bash(pip list:*)",
+      "Bash(pkill -9 -f \"python main.py\")"
     ]
   }
 }
