@@ -155,7 +155,13 @@ def _store_risk_score(wallet_address: str, risk: dict) -> None:
 
 
 def _update_wallet_summary(wallet_address: str, total_value: float, size_tier: str, chain: str = "ethereum") -> None:
-    """Update wallet summary fields after scoring."""
+    """Update wallet summary fields after scoring.
+
+    NOTE: This only runs when the scoring pipeline processes this wallet.
+    Wallets not recently scored retain stale total_stablecoin_value.
+    Leaderboard and display queries should compute totals from wallet_holdings,
+    not from this cached field.
+    """
     execute(
         """
         UPDATE wallet_graph.wallets SET

@@ -31,52 +31,58 @@ def register_wallet_routes(app: FastAPI) -> None:
         size_tier: str = Query(None, description="Filter by size_tier: whale, institutional, retail"),
         limit: int = Query(50, ge=1, le=500),
     ):
-        """Top wallets by total stablecoin value."""
+        """Top wallets by current holdings value (computed from wallet_holdings)."""
+        rows = fetch_all(
+            """
+            SELECT
+                wh.wallet_address AS address,
+                SUM(wh.value_usd) AS total_stablecoin_value,
+                w.label, w.is_contract, w.last_indexed_at, w.source,
+                wrs.risk_score, wrs.risk_grade, wrs.concentration_hhi,
+                wrs.coverage_quality, wrs.num_total_holdings, wrs.dominant_asset
+            FROM wallet_graph.wallet_holdings wh
+            JOIN wallet_graph.wallets w ON w.address = wh.wallet_address
+            LEFT JOIN LATERAL (
+                SELECT * FROM wallet_graph.wallet_risk_scores
+                WHERE wallet_address = wh.wallet_address
+                ORDER BY computed_at DESC LIMIT 1
+            ) wrs ON TRUE
+            WHERE wh.indexed_at > NOW() - INTERVAL '7 days'
+              AND wh.value_usd >= 0.01
+            GROUP BY wh.wallet_address, w.label, w.is_contract, w.last_indexed_at,
+                     w.source, wrs.risk_score, wrs.risk_grade, wrs.concentration_hhi,
+                     wrs.coverage_quality, wrs.num_total_holdings, wrs.dominant_asset
+            HAVING SUM(wh.value_usd) > 0
+            ORDER BY SUM(wh.value_usd) DESC
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        # Compute size_tier from current holdings value
+        for row in rows:
+            val = float(row.get("total_stablecoin_value") or 0)
+            if val >= 10_000_000:
+                row["size_tier"] = "whale"
+            elif val >= 100_000:
+                row["size_tier"] = "institutional"
+            else:
+                row["size_tier"] = "retail"
+        # Apply size_tier filter in Python (computed from current holdings, not stale cache)
         if size_tier:
-            rows = fetch_all(
-                """
-                SELECT w.address, w.total_stablecoin_value, w.size_tier, w.label,
-                       w.is_contract, w.last_indexed_at, w.source,
-                       wrs.risk_score, wrs.risk_grade, wrs.concentration_hhi,
-                       wrs.coverage_quality, wrs.num_total_holdings, wrs.dominant_asset
-                FROM wallet_graph.wallets w
-                LEFT JOIN LATERAL (
-                    SELECT * FROM wallet_graph.wallet_risk_scores
-                    WHERE wallet_address = w.address
-                    ORDER BY computed_at DESC LIMIT 1
-                ) wrs ON TRUE
-                WHERE w.size_tier = %s
-                ORDER BY w.total_stablecoin_value DESC NULLS LAST
-                LIMIT %s
-                """,
-                (size_tier, limit),
-            )
-        else:
-            rows = fetch_all(
-                """
-                SELECT w.address, w.total_stablecoin_value, w.size_tier, w.label,
-                       w.is_contract, w.last_indexed_at, w.source,
-                       wrs.risk_score, wrs.risk_grade, wrs.concentration_hhi,
-                       wrs.coverage_quality, wrs.num_total_holdings, wrs.dominant_asset
-                FROM wallet_graph.wallets w
-                LEFT JOIN LATERAL (
-                    SELECT * FROM wallet_graph.wallet_risk_scores
-                    WHERE wallet_address = w.address
-                    ORDER BY computed_at DESC LIMIT 1
-                ) wrs ON TRUE
-                ORDER BY w.total_stablecoin_value DESC NULLS LAST
-                LIMIT %s
-                """,
-                (limit,),
-            )
+            rows = [r for r in rows if r.get("size_tier") == size_tier]
         return {"wallets": rows, "count": len(rows)}
 
     @app.get("/api/wallets/riskiest")
     async def wallets_riskiest(limit: int = Query(50, ge=1, le=500)):
-        """Wallets with lowest risk scores (most at-risk capital)."""
+        """Wallets with lowest risk scores that currently hold stablecoins."""
         rows = fetch_all(
             """
-            SELECT w.address, w.total_stablecoin_value, w.size_tier, w.label,
+            SELECT w.address,
+                   (SELECT COALESCE(SUM(value_usd), 0) FROM wallet_graph.wallet_holdings
+                    WHERE wallet_address = w.address
+                    AND indexed_at > NOW() - INTERVAL '7 days'
+                    AND value_usd >= 0.01) AS total_stablecoin_value,
+                   w.label,
                    wrs.risk_score, wrs.risk_grade, wrs.concentration_hhi,
                    wrs.unscored_pct, wrs.coverage_quality,
                    wrs.dominant_asset, wrs.dominant_asset_pct,
@@ -88,11 +94,26 @@ def register_wallet_routes(app: FastAPI) -> None:
                   SELECT MAX(wrs2.computed_at) FROM wallet_graph.wallet_risk_scores wrs2
                   WHERE wrs2.wallet_address = wrs.wallet_address
               )
+              AND EXISTS (
+                  SELECT 1 FROM wallet_graph.wallet_holdings wh
+                  WHERE wh.wallet_address = w.address
+                  AND wh.indexed_at > NOW() - INTERVAL '7 days'
+                  AND wh.value_usd >= 0.01
+              )
             ORDER BY wrs.risk_score ASC
             LIMIT %s
             """,
             (limit,),
         )
+        # Compute size_tier from current holdings value
+        for row in rows:
+            val = float(row.get("total_stablecoin_value") or 0)
+            if val >= 10_000_000:
+                row["size_tier"] = "whale"
+            elif val >= 100_000:
+                row["size_tier"] = "institutional"
+            else:
+                row["size_tier"] = "retail"
         return {"wallets": rows, "count": len(rows)}
 
     @app.get("/api/wallets/debug")
@@ -127,11 +148,21 @@ def register_wallet_routes(app: FastAPI) -> None:
             SELECT
                 COUNT(*) AS total_wallets,
                 COUNT(*) FILTER (WHERE last_indexed_at IS NOT NULL) AS indexed_wallets,
-                COALESCE(SUM(total_stablecoin_value), 0) AS total_value_tracked,
                 COUNT(*) FILTER (WHERE size_tier = 'whale') AS whale_count,
                 COUNT(*) FILTER (WHERE size_tier = 'institutional') AS institutional_count,
                 COUNT(*) FILTER (WHERE size_tier = 'retail') AS retail_count
             FROM wallet_graph.wallets
+            """
+        )
+        # Compute total value from current holdings, not stale wallets cache
+        holdings_stats = fetch_one(
+            """
+            SELECT
+                COALESCE(SUM(value_usd), 0) AS total_value_tracked,
+                COUNT(DISTINCT wallet_address) AS wallets_with_current_holdings
+            FROM wallet_graph.wallet_holdings
+            WHERE indexed_at > NOW() - INTERVAL '7 days'
+              AND value_usd >= 0.01
             """
         )
         score_stats = fetch_one(
@@ -160,6 +191,7 @@ def register_wallet_routes(app: FastAPI) -> None:
 
         return {
             **(stats or {}),
+            **(holdings_stats or {}),
             **(score_stats or {}),
             **(backlog_stats or {}),
         }
