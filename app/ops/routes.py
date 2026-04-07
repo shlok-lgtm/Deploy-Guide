@@ -1560,6 +1560,40 @@ async def state_growth(request: Request, days: int = Query(default=14, ge=1, le=
         return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
+# =============================================================================
+# Keeper wallet monitor
+# =============================================================================
+
+@router.get("/keeper/status")
+async def keeper_status(request: Request):
+    """Keeper wallet balance and gas burn across Base and Arbitrum."""
+    _check_admin_key(request)
+    try:
+        from app.ops.tools.keeper_monitor import get_keeper_status
+        result = await get_keeper_status()
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Keeper status error: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
+
+
+@router.get("/keeper/history")
+async def keeper_history(request: Request, limit: int = Query(default=50, ge=1, le=200)):
+    """Recent keeper transactions with gas costs."""
+    _check_admin_key(request)
+    try:
+        from app.ops.tools.keeper_monitor import get_keeper_history
+        result = await get_keeper_history(limit=limit)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Keeper history error: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
+
+
 def register_ops_routes(app):
     """Register the ops router with the main FastAPI app."""
     app.include_router(router)
