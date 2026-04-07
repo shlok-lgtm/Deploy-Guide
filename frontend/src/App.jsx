@@ -1560,8 +1560,8 @@ function MethodologyView({ mobile }) {
   );
 }
 
-const WALLET_COL_DESKTOP = "32px 180px 100px 68px 52px 80px 68px 80px";
-const WALLET_COL_MOBILE = "180px 90px 56px 48px";
+const WALLET_COL_DESKTOP = "32px 170px 90px 60px 52px 140px 80px";
+const WALLET_COL_MOBILE = "170px 80px 52px 48px";
 
 function WalletTableHeader({ mobile }) {
   return (
@@ -1588,8 +1588,7 @@ function WalletTableHeader({ mobile }) {
           <span>Value</span>
           <span>Risk</span>
           <span>Grade</span>
-          <span>Dominant</span>
-          <span>HHI</span>
+          <span>Concentration</span>
           <span>Coverage</span>
         </>
       )}
@@ -1633,8 +1632,14 @@ function WalletRow({ wallet, rank, mobile, lowScoreHighlight }) {
       </span>
       {!mobile && (
         <>
-          <span style={{ fontFamily: T.mono, fontSize: 11, color: T.inkMid }}>{wallet.dominant_asset || "—"}</span>
-          <span style={{ fontFamily: T.mono, fontSize: 11, color: T.inkLight }}>{fmtHHI(wallet.concentration_hhi)}</span>
+          <span style={{ fontFamily: T.mono, fontSize: 11, color: T.inkMid }}>
+            {wallet.dominant_asset_pct != null && wallet.dominant_asset_pct >= 95
+              ? `100% ${wallet.dominant_asset || "?"}`
+              : wallet.dominant_asset_pct != null && wallet.dominant_asset_pct >= 50
+                ? `${Math.round(wallet.dominant_asset_pct)}% ${wallet.dominant_asset || "?"}`
+                : "Mixed"
+            }
+          </span>
           <span style={{ fontFamily: T.mono, fontSize: 11, color: coverageColor(wallet.coverage_quality), textTransform: "uppercase" }}>
             {wallet.coverage_quality || "—"}
           </span>
@@ -1814,6 +1819,11 @@ function WalletsView({ mobile, integrity }) {
   const { data: topWallets, loading: topLoading } = useWalletTop(50);
   const { data: riskyWallets, loading: riskyLoading } = useWalletRiskiest(50);
   const { data: backlog, loading: backlogLoading } = useBacklog(50);
+  const [showDiversifiedOnly, setShowDiversifiedOnly] = useState(false);
+
+  const filteredTopWallets = showDiversifiedOnly
+    ? (topWallets || []).filter(w => w.concentration_hhi != null && w.concentration_hhi < 5000)
+    : topWallets;
 
   const walletDomain = integrity?.domains?.wallets || {};
   const edgeDomain = integrity?.domains?.edges || {};
@@ -1844,17 +1854,56 @@ function WalletsView({ mobile, integrity }) {
       <WalletSearchPanel mobile={mobile} />
 
       <div style={{ marginBottom: 32 }}>
-        <div style={{ fontFamily: T.mono, fontSize: 9, textTransform: "uppercase", letterSpacing: 1.5, color: T.inkLight, marginBottom: 10 }}>
-          Top Wallets · By Stablecoin Value
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <div style={{ fontFamily: T.mono, fontSize: 9, textTransform: "uppercase", letterSpacing: 1.5, color: T.inkLight }}>
+            Top Wallets · By Stablecoin Value
+          </div>
+          <div style={{ display: "flex", gap: 0 }}>
+            <button
+              onClick={() => setShowDiversifiedOnly(false)}
+              style={{
+                padding: "3px 10px",
+                border: `1px solid ${T.ruleMid}`,
+                borderRight: "none",
+                background: !showDiversifiedOnly ? T.ink : "transparent",
+                color: !showDiversifiedOnly ? T.paper : T.inkLight,
+                fontFamily: T.mono,
+                fontSize: 9,
+                textTransform: "uppercase",
+                letterSpacing: 1,
+                cursor: "pointer",
+              }}
+            >
+              All
+            </button>
+            <button
+              onClick={() => setShowDiversifiedOnly(true)}
+              style={{
+                padding: "3px 10px",
+                border: `1px solid ${T.ruleMid}`,
+                background: showDiversifiedOnly ? T.ink : "transparent",
+                color: showDiversifiedOnly ? T.paper : T.inkLight,
+                fontFamily: T.mono,
+                fontSize: 9,
+                textTransform: "uppercase",
+                letterSpacing: 1,
+                cursor: "pointer",
+              }}
+            >
+              Diversified
+            </button>
+          </div>
         </div>
         {topLoading ? (
           <div style={{ padding: 24, fontFamily: T.mono, fontSize: 12, color: T.inkFaint }}>Loading wallets...</div>
-        ) : !topWallets || topWallets.length === 0 ? (
-          <div style={{ padding: 24, fontFamily: T.mono, fontSize: 12, color: T.inkFaint }}>No wallet data yet. Run the indexer pipeline first.</div>
+        ) : !filteredTopWallets || filteredTopWallets.length === 0 ? (
+          <div style={{ padding: 24, fontFamily: T.mono, fontSize: 12, color: T.inkFaint }}>
+            {showDiversifiedOnly ? "No diversified wallets found (HHI < 5000). Try 'All' view." : "No wallet data yet. Run the indexer pipeline first."}
+          </div>
         ) : (
           <div style={{ border: `1px solid ${T.ruleMid}` }}>
             <WalletTableHeader mobile={mobile} />
-            {topWallets.map((w, i) => (
+            {filteredTopWallets.map((w, i) => (
               <WalletRow key={w.address} wallet={w} rank={i + 1} mobile={mobile} lowScoreHighlight={false} />
             ))}
           </div>
