@@ -16,14 +16,9 @@ run = ["python", "main.py"]
 [userenv]
 
 [userenv.shared]
+WORKER_ENABLED = "true"
 INDEXER_INTERVAL_HOURS = "24"
 BLOCK_EXPLORER_PROVIDER = "blockscout"
-
-[userenv.development]
-WORKER_ENABLED = "false"
-
-[userenv.production]
-WORKER_ENABLED = "true"
 
 [workflows]
 runButton = "Project"
