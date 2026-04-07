@@ -10,20 +10,24 @@ import os
 import json
 import logging
 import hashlib
+import base64
+import random
 import time
-import secrets
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Request, HTTPException, Query
 from typing import Optional
 
 import jwt
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from x402 import x402ResourceServer
 from x402.http.facilitator_client import HTTPFacilitatorClient
 from x402.http.middleware.fastapi import PaymentMiddlewareASGI
 from x402.http.types import RouteConfig, PaymentOption
 from x402.mechanisms.evm.exact import ExactEvmServerScheme
+from x402.schemas import SupportedKind, SupportedResponse
 
 from app.database import fetch_one, fetch_all
 
@@ -32,39 +36,103 @@ logger = logging.getLogger("payments")
 # --- Configuration ---
 BASIS_WALLET = os.environ.get("BASIS_PAYMENT_WALLET", "")
 
-# CDP credentials — if set, use Coinbase CDP facilitator on mainnet
+# CDP credentials — pass to x402.org facilitator to unlock mainnet
 CDP_API_KEY_ID = os.environ.get("CDP_API_KEY_ID", "")
 CDP_API_KEY_SECRET = os.environ.get("CDP_API_KEY_SECRET", "")
-CDP_FACILITATOR_URL = os.environ.get(
-    "CDP_FACILITATOR_URL", "https://api.developer.coinbase.com/x402/facilitator"
+
+X402_FACILITATOR = os.environ.get(
+    "X402_FACILITATOR_URL", "https://x402.org/facilitator"
 )
 
 _USE_CDP = bool(CDP_API_KEY_ID and CDP_API_KEY_SECRET)
 
 if _USE_CDP:
     X402_NETWORK = os.environ.get("X402_NETWORK", "eip155:8453")   # Base mainnet
-    X402_FACILITATOR = CDP_FACILITATOR_URL
 else:
     X402_NETWORK = os.environ.get("X402_NETWORK", "eip155:84532")  # Base Sepolia testnet
-    X402_FACILITATOR = os.environ.get("X402_FACILITATOR_URL", "https://x402.org/facilitator")
 
 
-def _cdp_create_headers() -> dict[str, dict[str, str]]:
-    """Build CDP JWT auth headers for the facilitator endpoints."""
+def _load_cdp_private_key() -> Ed25519PrivateKey | None:
+    """Load Ed25519 private key from CDP_API_KEY_SECRET (base64-encoded 64-byte seed+pub)."""
+    if not CDP_API_KEY_SECRET:
+        return None
+    try:
+        raw = base64.b64decode(CDP_API_KEY_SECRET)
+        if len(raw) == 64:
+            return Ed25519PrivateKey.from_private_bytes(raw[:32])
+        logger.error("CDP key secret decoded to %d bytes, expected 64", len(raw))
+        return None
+    except Exception as e:
+        logger.error("Failed to decode CDP key secret: %s", e)
+        return None
+
+
+_CDP_PRIVATE_KEY = _load_cdp_private_key() if _USE_CDP else None
+
+
+def _cdp_jwt(method: str, path: str) -> str:
+    """Build a CDP JWT for a specific facilitator endpoint."""
+    parsed = urlparse(X402_FACILITATOR)
+    host = parsed.hostname or "x402.org"
+    uri = f"{method} {host}{path}"
     now = int(time.time())
+    nonce = "".join([str(random.randint(0, 9)) for _ in range(16)])
     payload = {
         "sub": CDP_API_KEY_ID,
         "iss": "cdp",
-        "aud": ["cdp_service"],
         "nbf": now,
-        "iat": now,
         "exp": now + 120,
-        "jti": secrets.token_hex(8),
+        "uris": [uri],
     }
-    token = jwt.encode(payload, CDP_API_KEY_SECRET, algorithm="ES256",
-                       headers={"kid": CDP_API_KEY_ID, "typ": "JWT"})
-    auth = {"Authorization": f"Bearer {token}"}
-    return {"verify": auth, "settle": auth, "supported": auth}
+    headers = {
+        "kid": CDP_API_KEY_ID,
+        "typ": "JWT",
+        "nonce": nonce,
+    }
+    return jwt.encode(payload, _CDP_PRIVATE_KEY, algorithm="EdDSA", headers=headers)
+
+
+def _cdp_create_headers() -> dict[str, dict[str, str]]:
+    """Build per-endpoint CDP auth headers for the x402.org facilitator."""
+    parsed = urlparse(X402_FACILITATOR)
+    base_path = parsed.path.rstrip("/")
+    return {
+        "verify": {"Authorization": f"Bearer {_cdp_jwt('POST', f'{base_path}/verify')}"},
+        "settle": {"Authorization": f"Bearer {_cdp_jwt('POST', f'{base_path}/settle')}"},
+        "supported": {"Authorization": f"Bearer {_cdp_jwt('GET', f'{base_path}/supported')}"},
+    }
+
+
+class _MainnetFacilitatorClient:
+    """Wraps HTTPFacilitatorClient to inject mainnet into its supported networks.
+
+    The x402.org /supported endpoint doesn't advertise mainnet even with CDP auth,
+    but verify/settle work on mainnet when CDP auth headers are present.
+    This wrapper adds the mainnet network so route validation passes.
+    """
+
+    def __init__(self, inner: HTTPFacilitatorClient, network: str):
+        self._inner = inner
+        self._network = network
+
+    def get_supported(self) -> SupportedResponse:
+        try:
+            resp = self._inner.get_supported()
+        except Exception:
+            resp = SupportedResponse(kinds=[])
+
+        networks = {k.network for k in resp.kinds}
+        if self._network not in networks:
+            resp.kinds.append(
+                SupportedKind(x402_version=2, scheme="exact", network=self._network)
+            )
+        return resp
+
+    async def verify(self, payload, requirements):
+        return await self._inner.verify(payload, requirements)
+
+    async def settle(self, payload, requirements):
+        return await self._inner.settle(payload, requirements)
 
 
 def _route(price: str, description: str) -> RouteConfig:
@@ -90,11 +158,16 @@ def create_x402_middleware():
         raise ValueError("BASIS_PAYMENT_WALLET env var not set")
 
     if _USE_CDP:
-        facilitator = HTTPFacilitatorClient({"url": X402_FACILITATOR, "create_headers": _cdp_create_headers})
-        logger.info("x402: using CDP facilitator at %s (network %s)", X402_FACILITATOR, X402_NETWORK)
+        inner = HTTPFacilitatorClient({
+            "url": X402_FACILITATOR,
+            "create_headers": _cdp_create_headers,
+        })
+        facilitator = _MainnetFacilitatorClient(inner, X402_NETWORK)
+        logger.info("x402: CDP auth on %s, network %s", X402_FACILITATOR, X402_NETWORK)
     else:
         facilitator = HTTPFacilitatorClient({"url": X402_FACILITATOR})
         logger.info("x402: using x402.org facilitator (network %s)", X402_NETWORK)
+
     server = x402ResourceServer(facilitator_clients=facilitator)
     server.register(X402_NETWORK, ExactEvmServerScheme())
 
