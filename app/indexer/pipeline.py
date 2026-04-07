@@ -652,12 +652,14 @@ def run_pipeline_batch(batch_size: int = 500) -> dict:
         f"etherscan_key={'set (' + api_key[:6] + '...)' if api_key else 'not set (fallback disabled)'}"
     )
 
-    # Find the oldest wallets (not indexed in last 24h)
+    # Find the oldest EVM wallets (not indexed in last 24h)
+    # Solana addresses (base58, no 0x prefix) are skipped — they use a separate scanner
     try:
         stale_rows = fetch_all("""
             SELECT address FROM wallet_graph.wallets
-            WHERE last_indexed_at IS NULL
-               OR last_indexed_at < NOW() - INTERVAL '24 hours'
+            WHERE address LIKE '0x%%'
+              AND (last_indexed_at IS NULL
+                   OR last_indexed_at < NOW() - INTERVAL '24 hours')
             ORDER BY last_indexed_at ASC NULLS FIRST
             LIMIT %s
         """, (batch_size,))
@@ -676,11 +678,12 @@ def run_pipeline_batch(batch_size: int = 500) -> dict:
         _reindex_status["last_reindex_completed"] = datetime.now(timezone.utc).isoformat()
         return {"processed": 0, "remaining": 0, "message": "All wallets fresh"}
 
-    # Count total remaining for reporting
+    # Count total remaining for reporting (EVM only)
     remaining_row = fetch_one("""
         SELECT COUNT(*) AS cnt FROM wallet_graph.wallets
-        WHERE last_indexed_at IS NULL
-           OR last_indexed_at < NOW() - INTERVAL '24 hours'
+        WHERE address LIKE '0x%%'
+          AND (last_indexed_at IS NULL
+               OR last_indexed_at < NOW() - INTERVAL '24 hours')
     """)
     total_remaining = remaining_row["cnt"] if remaining_row else 0
 
@@ -696,14 +699,15 @@ def run_pipeline_batch(batch_size: int = 500) -> dict:
         nonlocal indexed, scored, errors, balances_updated
         async with httpx.AsyncClient() as client:
             reindex_logger.info("Starting batch_scan_all_holdings...")
-            all_holdings, failures, api_calls = await batch_scan_all_holdings(
+            all_holdings, failures, api_calls, failed_addrs = await batch_scan_all_holdings(
                 client, wallet_list, api_key, sii_scores
             )
             _reindex_status["batch_failures"] = failures
 
             reindex_logger.info(
                 f"Scan complete: {len(all_holdings)} wallets with holdings, "
-                f"{failures} batch failures, {api_calls} API calls"
+                f"{failures} batch failures, {api_calls} API calls, "
+                f"{len(failed_addrs)} wallets deferred for retry"
             )
 
             if failures > 0 and len(all_holdings) == 0:
@@ -715,6 +719,14 @@ def run_pipeline_batch(batch_size: int = 500) -> dict:
             for addr in wallet_list:
                 try:
                     addr_lower = addr.lower()
+
+                    # Skip wallets where the API call failed —
+                    # don't update last_indexed_at so they're retried next cycle
+                    if addr_lower in failed_addrs:
+                        reindex_logger.info(f"Skipping {addr[:10]}… — API failed, will retry next cycle")
+                        errors += 1
+                        continue
+
                     holdings = all_holdings.get(addr_lower, [])
 
                     if not holdings:
@@ -886,6 +898,12 @@ async def run_pipeline(holders_per_coin: int = None, force_reseed: bool = False)
                 "message": "All wallets already indexed today",
             }
 
+        # Filter to EVM addresses only — Solana (base58, no 0x prefix) use a separate scanner
+        non_evm = [w for w in wallet_list if not w.startswith("0x")]
+        if non_evm:
+            wallet_list = [w for w in wallet_list if w.startswith("0x")]
+            logger.info(f"Filtered out {len(non_evm)} non-EVM addresses (Solana etc), {len(wallet_list)} EVM wallets remain")
+
         logger.info(f"Total wallets to index: {len(wallet_list)} ({skipped} skipped as already indexed today)")
 
         # Step 1b: Discovery — find new ERC-20 contracts from top whale wallets
@@ -901,7 +919,7 @@ async def run_pipeline(holders_per_coin: int = None, force_reseed: bool = False)
                 f"Discovery Phase 2: tiered scan of {new_contracts_discovered} new contracts "
                 f"× {len(sampled_wallets)} sampled wallets"
             )
-            tiered_holdings, tiered_failures, tiered_scan_api_calls = (
+            tiered_holdings, tiered_failures, tiered_scan_api_calls, _ = (
                 await batch_scan_all_holdings(
                     client, sampled_wallets, api_key, {},
                     contract_override=new_contracts,
@@ -927,13 +945,12 @@ async def run_pipeline(holders_per_coin: int = None, force_reseed: bool = False)
             # Immediate demand signal update so backlog has real dollar values
             update_demand_signals()
 
-        # Phase A: Batch-fetch all holdings across all contracts (contract-first)
-        # tokenbalancemulti: 24 contracts × ⌈N/20⌉ batches instead of 24 × N individual calls
-        logger.info("Phase A: Batch balance scan (tokenbalancemulti, contract-first)")
-        all_holdings, scan_batch_failures, _ = await batch_scan_all_holdings(client, wallet_list, api_key, sii_scores)
+        # Phase A: Batch-fetch all holdings (per-address, filtered to known contracts)
+        logger.info("Phase A: Batch balance scan (addresstokenbalance, per-address)")
+        all_holdings, scan_batch_failures, _, failed_addrs = await batch_scan_all_holdings(client, wallet_list, api_key, sii_scores)
 
         # Phase B: Upsert all wallets, then score + store those with holdings
-        logger.info(f"Phase B: Score and store — {len(all_holdings)} wallets with holdings")
+        logger.info(f"Phase B: Score and store — {len(all_holdings)} wallets with holdings, {len(failed_addrs)} deferred for retry")
         results = []
         indexed = 0
         errors = 0
@@ -943,6 +960,14 @@ async def run_pipeline(holders_per_coin: int = None, force_reseed: bool = False)
                 addr_lower = addr.lower()
                 source = "known_holder" if addr in known_addrs else "top_holder"
                 _store_wallet(addr, source=source)
+
+                # Skip wallets where the API call failed —
+                # don't update last_indexed_at so they're retried next cycle
+                if addr_lower in failed_addrs:
+                    logger.info(f"Skipping {addr[:10]}… — API failed, will retry next cycle")
+                    results.append({"address": addr, "holdings": 0, "scored": False, "reason": "api_failed"})
+                    errors += 1
+                    continue
 
                 holdings = all_holdings.get(addr_lower, [])
 

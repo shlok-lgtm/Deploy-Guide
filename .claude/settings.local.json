@@ -82,7 +82,8 @@
       "WebFetch(domain:github.com)",
       "WebFetch(domain:app.realms.today)",
       "WebFetch(domain:docs.tribeca.so)",
-      "WebFetch(domain:anchor.so)"
+      "WebFetch(domain:anchor.so)",
+      "Bash(export WORKER_ENABLED=true)"
     ]
   }
 }

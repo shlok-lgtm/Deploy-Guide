@@ -105,7 +105,17 @@ def run_worker_loop():
     last_cda_at = 0  # Run CDA on first cycle
     last_expansion_at = 0  # Run PSI expansion on first cycle
     last_wallet_expansion_at = 0  # Run wallet expansion on first cycle
-    edge_cycle_counter = 0
+    # Seed edge build timestamp from DB so restarts don't re-trigger a fresh build
+    last_edge_build_at = 0
+    try:
+        from app.database import fetch_one as _fone
+        _edge_row = _fone("SELECT EXTRACT(EPOCH FROM MAX(last_built_at)) AS ts FROM wallet_graph.edge_build_status")
+        if _edge_row and _edge_row["ts"]:
+            last_edge_build_at = float(_edge_row["ts"])
+            _hours_ago = (time.time() - last_edge_build_at) / 3600
+            logger.info(f"Edge build last ran {_hours_ago:.1f}h ago — {'will rebuild' if _hours_ago >= 10 else 'fresh, skipping'}")
+    except Exception as e:
+        logger.warning(f"Could not read edge build timestamp: {e}")
 
     while True:
         # CDA collection before scoring so fresh off-chain data is available
@@ -124,6 +134,21 @@ def run_worker_loop():
             asyncio.run(run_scoring_cycle())
         except Exception as e:
             logger.error(f"Worker cycle error: {e}")
+
+        # Wallet batch re-indexing — rescan stale wallets every cycle
+        # Uses addresstokenbalance (Etherscan V2) or Blockscout per-address API
+        try:
+            from app.indexer.pipeline import run_pipeline_batch
+            logger.info("Running wallet batch re-index (500 stalest wallets)...")
+            reindex_result = run_pipeline_batch(batch_size=500)
+            logger.info(
+                f"Wallet re-index complete: {reindex_result.get('processed', 0)} processed, "
+                f"{reindex_result.get('scored', 0)} scored, "
+                f"{reindex_result.get('errors', 0)} errors, "
+                f"{reindex_result.get('remaining', '?')} remaining"
+            )
+        except Exception as e:
+            logger.warning(f"Wallet batch re-index failed: {e}")
 
         # PSI scoring — uses DeFiLlama only, no explorer API budget
         # Sleep to avoid API contention with SII cycle
@@ -198,13 +223,16 @@ def run_worker_loop():
         except Exception as e:
             logger.error(f"Agent cycle error: {e}")
 
-        # Edge building — run every 10th cycle (~10 hours)
-        edge_cycle_counter += 1
-        if edge_cycle_counter % 10 == 0:
+        # Edge building — time-based gate (~10 hours) instead of cycle counter.
+        # Uses DB staleness so container restarts don't reset the schedule.
+        hours_since_edge_build = (time.time() - last_edge_build_at) / 3600
+        edge_stale = hours_since_edge_build >= 10
+        if edge_stale:
             try:
                 from app.indexer.edges import run_edge_builder
                 logger.info("Running edge builder (top 200 unbuilt wallets by value)...")
                 edge_result = asyncio.run(run_edge_builder(max_wallets=200, priority="value"))
+                last_edge_build_at = time.time()
                 logger.info(
                     f"Edge builder complete: {edge_result.get('wallets_processed', 0)} wallets, "
                     f"{edge_result.get('total_edges_created', 0)} edges"
