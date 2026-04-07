@@ -106,6 +106,12 @@ def generate_wallet_profile(address):
         pct_b = round(sum(1 for g in grades if GRADE_ORDER.get(g, 0) >= GRADE_ORDER["B-"]) / len(grades) * 100, 1)
         worst_grade = min(grades, key=lambda g: GRADE_ORDER.get(g, 0))
 
+    # Data maturity — signals are meaningless without enough history
+    data_maturity = "mature" if days_tracked >= 90 else ("developing" if days_tracked >= 30 else "early")
+
+    # Compute actual total from current holdings (not stale risk score table)
+    actual_total = sum(float(h.get("value_usd") or 0) for h in holdings if float(h.get("value_usd") or 0) >= 0.01)
+
     # 5. Assemble profile
     profile = {
         "schema_version": "1.0.0",
@@ -116,21 +122,22 @@ def generate_wallet_profile(address):
             "risk_score": float(current["risk_score"]) if current.get("risk_score") is not None else None,
             "risk_grade": current.get("risk_grade"),
             "concentration_hhi": float(current["concentration_hhi"]) if current.get("concentration_hhi") is not None else None,
-            "total_value_usd": float(current["total_stablecoin_value"]) if current.get("total_stablecoin_value") is not None else None,
+            "total_value_usd": actual_total if actual_total > 0 else (float(current["total_stablecoin_value"]) if current.get("total_stablecoin_value") is not None else None),
             "holdings_count": current.get("num_total_holdings"),
             "dominant_asset": current.get("dominant_asset"),
             "dominant_pct": float(current["dominant_asset_pct"]) if current.get("dominant_asset_pct") is not None else None,
         },
         "behavioral_signals": {
             "days_tracked": days_tracked,
-            "score_stability_30d": score_stability,
-            "avg_score_30d": avg_score_30d,
-            "max_drawdown_90d": max_drawdown,
-            "diversification_trend": div_trend,
+            "score_stability_30d": score_stability if days_tracked >= 14 else None,
+            "avg_score_30d": avg_score_30d if days_tracked >= 7 else None,
+            "max_drawdown_90d": max_drawdown if days_tracked >= 30 else None,
+            "diversification_trend": div_trend if days_tracked >= 14 else "insufficient_data",
+            "data_maturity": data_maturity,
         },
         "quality_history": {
-            "pct_days_a_grade": pct_a,
-            "pct_days_b_grade": pct_b,
+            "pct_days_a_grade": pct_a if days_tracked >= 30 else None,
+            "pct_days_b_grade": pct_b if days_tracked >= 30 else None,
             "worst_grade_ever": worst_grade,
             "best_score_ever": round(max(scores), 2) if scores else None,
             "worst_score_ever": round(min(scores), 2) if scores else None,
@@ -144,6 +151,7 @@ def generate_wallet_profile(address):
                 "sii_grade": h.get("sii_grade"),
             }
             for h in holdings
+            if float(h.get("value_usd") or 0) >= 0.01
         ],
     }
 

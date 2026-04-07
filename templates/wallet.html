@@ -4,7 +4,7 @@
 
 {% block meta %}
     <meta property="og:title" content="Wallet Risk Profile: {{ address[:10] }}...{{ address[-4:] }}">
-    <meta property="og:description" content="Risk Score: {{ risk.risk_score }} ({{ risk.risk_grade }}) | ${{ '{:,.0f}'.format(risk.total_stablecoin_value or 0) }} tracked">
+    <meta property="og:description" content="Risk Score: {{ risk.risk_score }} ({{ risk.risk_grade }}) | ${{ '{:,.0f}'.format(display_total_value or 0) }} tracked">
     <meta property="og:type" content="website">
     <link rel="canonical" href="/wallet/{{ address }}">
     <link rel="alternate" type="application/json" href="/api/wallets/{{ address }}">
@@ -36,15 +36,29 @@
         </div>
         <div class="metric-card">
             <div class="metric-label">Total Value</div>
-            <div class="metric-value">${{ '{:,.0f}'.format(risk.total_stablecoin_value or 0) }}</div>
-            <div class="metric-sub">{{ risk.size_tier or '' }}</div>
+            <div class="metric-value">${{ '{:,.0f}'.format(display_total_value or 0) }}</div>
+            <div class="metric-sub">{{ display_size_tier or '' }}</div>
         </div>
     </div>
+
+    {# Show discrepancy note if risk score was computed on a different total #}
+    {% if value_discrepancy %}
+    <div style="font-family: var(--mono); font-size: 10px; color: var(--ink-faint); margin-top: -12px; margin-bottom: 12px;">
+        Risk score based on ${{ '{:,.0f}'.format(risk_table_value) }} at last scoring cycle
+    </div>
+    {% endif %}
 
     {# === BEHAVIORAL SIGNALS === #}
     {% if profile and profile.behavioral_signals %}
     <div class="section">
-        <div class="section-label">Behavioral Signals · 5 Metrics</div>
+        {% set maturity = profile.behavioral_signals.data_maturity or 'early' %}
+        {% if maturity == 'early' %}
+        <div class="section-label">Behavioral Signals</div>
+        <div style="font-family: var(--mono); font-size: 11px; color: var(--ink-faint); margin-top: 4px;">
+            Tracking started {{ profile.behavioral_signals.days_tracked or 0 }} days ago. Behavioral signals available after 30 days.
+        </div>
+        {% else %}
+        <div class="section-label">Behavioral Signals · {{ profile.behavioral_signals.days_tracked or 0 }}d tracked</div>
         <div class="signal-grid">
             <div class="signal-item">
                 <div class="signal-label">Days Tracked</div>
@@ -60,15 +74,24 @@
             </div>
             <div class="signal-item">
                 <div class="signal-label">Max Drawdown (90d)</div>
-                <div class="signal-value">{{ profile.behavioral_signals.max_drawdown_90d if profile.behavioral_signals.max_drawdown_90d is not none else '—' }}</div>
+                {% if profile.behavioral_signals.max_drawdown_90d is not none %}
+                <div class="signal-value">{{ profile.behavioral_signals.max_drawdown_90d }}</div>
+                {% else %}
+                <div class="signal-value" style="color: var(--ink-faint);">— <span style="font-size: 9px;">(needs 90d)</span></div>
+                {% endif %}
             </div>
             <div class="signal-item">
                 <div class="signal-label">Diversification Trend</div>
-                <div class="signal-value trend-{{ profile.behavioral_signals.diversification_trend or 'stable' }}">
-                    {{ (profile.behavioral_signals.diversification_trend or 'stable') | capitalize }}
+                {% if profile.behavioral_signals.diversification_trend and profile.behavioral_signals.diversification_trend != 'insufficient_data' %}
+                <div class="signal-value trend-{{ profile.behavioral_signals.diversification_trend }}">
+                    {{ profile.behavioral_signals.diversification_trend | capitalize }}
                 </div>
+                {% else %}
+                <div class="signal-value" style="color: var(--ink-faint);">—</div>
+                {% endif %}
             </div>
         </div>
+        {% endif %}
     </div>
     {% endif %}
 
@@ -76,6 +99,12 @@
     {% if profile and profile.quality_history %}
     <div class="section">
         <div class="section-label">Quality History</div>
+        {% set maturity = profile.behavioral_signals.data_maturity if profile.behavioral_signals else 'early' %}
+        {% if maturity == 'early' %}
+        <div style="font-family: var(--mono); font-size: 11px; color: var(--ink-faint); margin-top: 4px;">
+            Quality history available after 30 days of tracking.
+        </div>
+        {% else %}
         <div class="signal-grid">
             <div class="signal-item">
                 <div class="signal-label">% Days at A Grade</div>
@@ -98,12 +127,14 @@
                 <div class="signal-value">{{ profile.quality_history.worst_grade_ever or '—' }}</div>
             </div>
         </div>
+        {% endif %}
     </div>
     {% endif %}
 
     {# === HOLDINGS === #}
     <div class="section">
         <div class="section-label">Holdings · {{ holdings | length }} Assets</div>
+        {% if holdings | length > 0 %}
         <table>
             <thead>
                 <tr><th>Asset</th><th>Value</th><th>% of Wallet</th><th>SII Score</th><th>SII Grade</th></tr>
@@ -120,6 +151,11 @@
             {% endfor %}
             </tbody>
         </table>
+        {% else %}
+        <div style="font-family: var(--mono); font-size: 11px; color: var(--ink-faint); margin-top: 4px;">
+            No holdings above $0.01
+        </div>
+        {% endif %}
     </div>
 
     {# === CONNECTIONS === #}
@@ -135,14 +171,17 @@
     </div>
     {% endif %}
 
-    {# === CROSS-CHAIN === #}
-    {% if unified %}
+    {# === CROSS-CHAIN — only show for multi-chain wallets === #}
+    {% if unified and unified.chains_active %}
+        {% set chains = unified.chains_active %}
+        {% set is_multi_chain = (chains is string and ',' in chains) or (chains is iterable and chains is not string and chains | length > 1) %}
+        {% if is_multi_chain %}
     <div class="section">
         <div class="section-label">Cross-Chain Profile</div>
         <div class="signal-grid">
             <div class="signal-item">
                 <div class="signal-label">Chains Active</div>
-                <div class="signal-value">{{ unified.chains_active if unified.chains_active is string else (unified.chains_active | join(', ') if unified.chains_active else '—') }}</div>
+                <div class="signal-value">{{ chains if chains is string else (chains | join(', ') if chains else '—') }}</div>
             </div>
             <div class="signal-item">
                 <div class="signal-label">Total Value (All Chains)</div>
@@ -158,6 +197,7 @@
             </div>
         </div>
     </div>
+        {% endif %}
     {% endif %}
 
     {# === ASSESSMENTS === #}

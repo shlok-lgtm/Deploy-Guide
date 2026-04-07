@@ -40,7 +40,22 @@ def build_unified_profile(address: str) -> dict | None:
 
     chains_active = sorted(set(r["chain"] for r in wallet_rows))
     is_contract = any(r.get("is_contract") for r in wallet_rows)
-    total_value = sum(float(r["total_stablecoin_value"] or 0) for r in wallet_rows)
+
+    # Compute total from actual holdings, not stale wallet summary
+    holdings_value_row = fetch_one(
+        """
+        SELECT COALESCE(SUM(value_usd), 0) AS total_value
+        FROM wallet_graph.wallet_holdings
+        WHERE LOWER(wallet_address) = LOWER(%s)
+          AND indexed_at > NOW() - INTERVAL '7 days'
+          AND value_usd >= 0.01
+        """,
+        (addr,),
+    )
+    total_value = float(holdings_value_row["total_value"]) if holdings_value_row else 0
+    # Fall back to wallet summary if no recent holdings
+    if total_value == 0:
+        total_value = sum(float(r["total_stablecoin_value"] or 0) for r in wallet_rows)
 
     # Holdings by chain
     holdings_rows = fetch_all(

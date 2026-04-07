@@ -217,8 +217,8 @@ def register_wallet_routes(app: FastAPI) -> None:
             (addr,),
         )
 
-        # Latest holdings (all chains)
-        holdings = fetch_all(
+        # Latest holdings (all chains), filter dust for display
+        holdings_raw = fetch_all(
             """
             SELECT token_address, symbol, chain, balance, value_usd,
                    is_scored, sii_score, sii_grade, pct_of_wallet, indexed_at
@@ -229,6 +229,8 @@ def register_wallet_routes(app: FastAPI) -> None:
             """,
             (addr,),
         )
+        MIN_DISPLAY_VALUE_USD = 0.01
+        holdings = [h for h in holdings_raw if float(h.get("value_usd") or 0) >= MIN_DISPLAY_VALUE_USD]
 
         result = {
             "wallet": wallet,

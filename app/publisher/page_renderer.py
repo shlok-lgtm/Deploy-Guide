@@ -88,7 +88,7 @@ def register_page_routes(app: FastAPI) -> None:
         if not risk:
             raise HTTPException(status_code=404, detail="Wallet not found")
 
-        holdings = fetch_all("""
+        holdings_raw = fetch_all("""
             SELECT symbol, value_usd, pct_of_wallet, is_scored,
                    sii_score, sii_grade
             FROM wallet_graph.wallet_holdings
@@ -99,6 +99,27 @@ def register_page_routes(app: FastAPI) -> None:
             )
             ORDER BY value_usd DESC
         """, (address.lower(), address.lower()))
+
+        # Filter dust holdings (display only — scoring still sees all)
+        MIN_DISPLAY_VALUE_USD = 0.01
+        holdings = [h for h in holdings_raw if float(h.get("value_usd") or 0) >= MIN_DISPLAY_VALUE_USD]
+
+        # Compute display values from actual current holdings
+        holdings_total_value = sum(float(h.get("value_usd") or 0) for h in holdings)
+        risk_table_value = float(risk.get("total_stablecoin_value") or 0)
+        display_total_value = holdings_total_value if holdings_total_value > 0 else risk_table_value
+        value_discrepancy = (
+            abs(risk_table_value - holdings_total_value) > max(risk_table_value * 0.1, 1000)
+            if risk_table_value > 0 else False
+        )
+
+        # Recompute size tier from current holdings
+        if display_total_value >= 10_000_000:
+            display_size_tier = "whale"
+        elif display_total_value >= 100_000:
+            display_size_tier = "institutional"
+        else:
+            display_size_tier = "retail"
 
         recent_assessments = fetch_all("""
             SELECT id::text, created_at, trigger_type, severity,
@@ -143,6 +164,11 @@ def register_page_routes(app: FastAPI) -> None:
             "unified": dict(unified) if unified else None,
             "connections": [dict(c) for c in connections],
             "json_ld": _wallet_json_ld(address.lower(), risk, holdings, profile),
+            "display_total_value": display_total_value,
+            "holdings_total_value": holdings_total_value,
+            "risk_table_value": risk_table_value,
+            "value_discrepancy": value_discrepancy,
+            "display_size_tier": display_size_tier,
         }
 
         try:
