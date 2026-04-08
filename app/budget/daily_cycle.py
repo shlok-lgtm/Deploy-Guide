@@ -41,6 +41,15 @@ async def run_daily_cycle():
     logger.info("--- Phase 3: Wallet indexer ---")
     await _run_wallet_phase(budget)
 
+    # 3b. Treasury flow detection (runs after wallet phase, minimal API budget)
+    logger.info("--- Phase 3b: Treasury flow detection ---")
+    try:
+        from app.collectors.treasury_flows import collect_treasury_events
+        treasury_events = await collect_treasury_events()
+        logger.info(f"Treasury flow detection: {len(treasury_events)} events")
+    except Exception as e:
+        logger.error(f"Treasury flow detection failed: {e}")
+
     # 4. Metrics rollup (always runs, no budget impact)
     logger.info("--- Phase 4: Metrics rollup ---")
     try:

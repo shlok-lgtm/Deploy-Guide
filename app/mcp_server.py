@@ -259,3 +259,34 @@ async def query_template(template_name: str, params: dict = None) -> str:
         raise
     finally:
         _log_mcp_tool_call("query_template", {"template": template_name}, int((time.time() - _start) * 1000), _success)
+
+
+@mcp.tool()
+async def get_treasury_events(wallet_address: str = None, event_type: str = None, days: int = 30) -> str:
+    """Get recent behavioral events from labeled treasury wallets.
+
+    Detects: TWAP conversions, protocol rebalancing, concentration drift,
+    quality shifts, and large transfers (>$1M) from known treasury wallets.
+
+    Parameters:
+        wallet_address: Filter to a specific wallet (optional)
+        event_type: Filter by type: twap_conversion, rebalance, concentration_drift, quality_shift, large_transfer
+        days: Lookback period in days (default 30)
+    """
+    _start = time.time()
+    _success = True
+    try:
+        params = []
+        if wallet_address:
+            params.append(f"wallet={wallet_address}")
+        if event_type:
+            params.append(f"type={event_type}")
+        qs = "&".join(params)
+        path = f"/api/treasury/events?{qs}&limit=50" if qs else "/api/treasury/events?limit=50"
+        data = await _api_get(path)
+        return json.dumps(data, indent=2)
+    except Exception:
+        _success = False
+        raise
+    finally:
+        _log_mcp_tool_call("get_treasury_events", {"wallet": wallet_address, "type": event_type, "days": days}, int((time.time() - _start) * 1000), _success)

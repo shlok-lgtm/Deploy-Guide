@@ -4046,6 +4046,125 @@ async def stablecoin_protocol_exposure(symbol: str):
 
 
 # =============================================================================
+# Treasury Behavioral Events
+# =============================================================================
+
+@app.get("/api/treasury/events")
+async def get_treasury_events(
+    wallet: Optional[str] = Query(default=None),
+    type: Optional[str] = Query(default=None, alias="type"),
+    severity: Optional[str] = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    """Recent treasury behavioral events."""
+    conditions = ["1=1"]
+    params = []
+
+    if wallet:
+        conditions.append("te.wallet_address = %s")
+        params.append(wallet.lower())
+    if type:
+        conditions.append("te.event_type = %s")
+        params.append(type)
+    if severity:
+        conditions.append("te.severity = %s")
+        params.append(severity)
+
+    params.append(limit)
+    where = " AND ".join(conditions)
+
+    rows = fetch_all(f"""
+        SELECT te.*, tr.entity_name, tr.entity_type
+        FROM wallet_graph.treasury_events te
+        LEFT JOIN wallet_graph.treasury_registry tr ON tr.address = te.wallet_address
+        WHERE {where}
+        ORDER BY te.detected_at DESC
+        LIMIT %s
+    """, tuple(params))
+
+    return {
+        "events": [
+            {
+                "id": r["id"],
+                "wallet_address": r["wallet_address"],
+                "entity_name": r.get("entity_name"),
+                "entity_type": r.get("entity_type"),
+                "event_type": r["event_type"],
+                "event_data": r["event_data"],
+                "severity": r["severity"],
+                "confidence": r["confidence"],
+                "detected_at": r["detected_at"].isoformat() if r.get("detected_at") else None,
+                "stablecoins_involved": r.get("stablecoins_involved"),
+                "protocols_involved": r.get("protocols_involved"),
+                "risk_score_delta": float(r["risk_score_delta"]) if r.get("risk_score_delta") else None,
+            }
+            for r in (rows or [])
+        ],
+        "count": len(rows or []),
+    }
+
+
+@app.get("/api/treasury/{address}/profile")
+async def treasury_profile(address: str):
+    """Treasury risk profile — extends wallet profile with entity metadata and events."""
+    addr_lower = address.lower()
+    registry = fetch_one(
+        "SELECT * FROM wallet_graph.treasury_registry WHERE address = %s",
+        (addr_lower,)
+    )
+
+    # Get wallet risk profile
+    profile = None
+    try:
+        from app.wallet_profile import generate_wallet_profile
+        profile = generate_wallet_profile(addr_lower)
+    except Exception:
+        pass
+
+    # Get recent events
+    events = fetch_all("""
+        SELECT event_type, event_data, severity, confidence, detected_at
+        FROM wallet_graph.treasury_events
+        WHERE wallet_address = %s
+        ORDER BY detected_at DESC LIMIT 20
+    """, (addr_lower,))
+
+    if not registry and not profile:
+        raise HTTPException(status_code=404, detail=f"Treasury '{address}' not found")
+
+    return {
+        "address": addr_lower,
+        "entity": {
+            "name": registry["entity_name"] if registry else None,
+            "type": registry["entity_type"] if registry else None,
+            "purpose": registry.get("wallet_purpose") if registry else None,
+            "label_source": registry.get("label_source") if registry else None,
+        } if registry else None,
+        "risk_profile": profile,
+        "recent_events": [
+            {
+                "event_type": e["event_type"],
+                "event_data": e["event_data"],
+                "severity": e["severity"],
+                "detected_at": e["detected_at"].isoformat() if e.get("detected_at") else None,
+            }
+            for e in (events or [])
+        ],
+    }
+
+
+@app.get("/api/treasury/registry")
+async def treasury_registry():
+    """All registered treasury wallets."""
+    from app.collectors.treasury_flows import get_registered_treasuries
+    treasuries = get_registered_treasuries()
+    return {
+        "treasuries": [dict(t) for t in treasuries],
+        "count": len(treasuries),
+    }
+
+
+# =============================================================================
 # Collateral Exposure — what stablecoins protocols accept from users
 # =============================================================================
 
