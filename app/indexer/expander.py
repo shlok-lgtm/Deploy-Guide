@@ -135,7 +135,7 @@ async def run_wallet_expansion(max_etherscan_calls: int) -> dict:
                             VALUES (%s, 'expansion', %s, NOW(), NOW())
                             ON CONFLICT (address) DO NOTHING
                             """,
-                            (addr, f"expansion:{symbol}"),
+                            (addr.lower(), f"expansion:{symbol}"),
                         )
                         existing_addrs.add(addr.lower())
                         coin_new += 1

@@ -734,7 +734,7 @@ async def fetch_top_holders(
             for h in data["result"]:
                 addr = h.get("TokenHolderAddress") or h.get("address", "")
                 if addr:
-                    addresses.append(addr)
+                    addresses.append(addr.lower())
             return addresses
         return []
     except Exception as e:

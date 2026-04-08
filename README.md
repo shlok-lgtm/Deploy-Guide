@@ -1,5 +1,7 @@
 # Basis Protocol — SII Rebuild
 
+![E2E Tests](https://github.com/shlok-lgtm/Deploy-Guide/actions/workflows/e2e-tests.yml/badge.svg)
+
 Stablecoin Integrity Index. 3,200 lines replacing 100,000.
 
 ## Quick Start (Replit)

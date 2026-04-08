@@ -62,11 +62,12 @@ def _get_current_sii_scores() -> dict:
 def _get_existing_wallets(chain: str = "ethereum") -> set:
     """Get all wallet addresses already in the graph for a given chain."""
     rows = fetch_all("SELECT address FROM wallet_graph.wallets WHERE chain = %s", (chain,))
-    return {row["address"] for row in rows}
+    return {row["address"].lower() for row in rows}
 
 
 def _store_wallet(address: str, source: str, label: str = None, chain: str = "ethereum") -> None:
     """Upsert a wallet into the wallets table."""
+    address = address.lower()
     execute(
         """
         INSERT INTO wallet_graph.wallets (address, chain, source, label, created_at, updated_at)
@@ -80,6 +81,7 @@ def _store_wallet(address: str, source: str, label: str = None, chain: str = "et
 
 def _store_holdings(wallet_address: str, holdings: list[dict]) -> None:
     """Insert wallet holdings snapshot (one per wallet/token/day)."""
+    wallet_address = wallet_address.lower()
     for h in holdings:
         # Delete existing row for today, then insert fresh
         execute(
@@ -114,6 +116,7 @@ def _store_holdings(wallet_address: str, holdings: list[dict]) -> None:
 
 def _store_risk_score(wallet_address: str, risk: dict) -> None:
     """Insert wallet risk score snapshot (one per wallet/day)."""
+    wallet_address = wallet_address.lower()
     # Delete existing row for today, then insert fresh
     execute(
         """
@@ -162,6 +165,7 @@ def _update_wallet_summary(wallet_address: str, total_value: float, size_tier: s
     Leaderboard and display queries should compute totals from wallet_holdings,
     not from this cached field.
     """
+    wallet_address = wallet_address.lower()
     execute(
         """
         UPDATE wallet_graph.wallets SET
@@ -184,9 +188,9 @@ def get_coverage_diagnostic() -> dict:
         row = fetch_one(
             """
             SELECT
-                COUNT(DISTINCT address) AS total_wallets,
-                COUNT(DISTINCT address) FILTER (WHERE last_indexed_at IS NOT NULL) AS indexed_wallets,
-                COUNT(DISTINCT address) FILTER (WHERE total_stablecoin_value > 0) AS wallets_with_value
+                COUNT(DISTINCT LOWER(address)) AS total_wallets,
+                COUNT(DISTINCT LOWER(address)) FILTER (WHERE last_indexed_at IS NOT NULL) AS indexed_wallets,
+                COUNT(DISTINCT LOWER(address)) FILTER (WHERE total_stablecoin_value > 0) AS wallets_with_value
             FROM wallet_graph.wallets
             """
         )
@@ -287,7 +291,7 @@ def _seed_from_known_holders() -> set:
     addresses = set()
     for addr, label, category in KNOWN_HOLDERS:
         if addr and addr.startswith("0x"):
-            addresses.add(addr)
+            addresses.add(addr.lower())
     logger.info(f"Seeded {len(addresses)} addresses from known holder list")
     return addresses
 
@@ -601,7 +605,7 @@ def get_reindex_status() -> dict:
 
     # Active wallet count
     try:
-        row = fetch_one("SELECT COUNT(DISTINCT address) AS cnt FROM wallet_graph.wallets")
+        row = fetch_one("SELECT COUNT(DISTINCT LOWER(address)) AS cnt FROM wallet_graph.wallets")
         status["active_wallet_count"] = row["cnt"] if row else 0
     except Exception:
         status["active_wallet_count"] = 0
@@ -656,11 +660,11 @@ def run_pipeline_batch(batch_size: int = 500) -> dict:
     # Solana addresses (base58, no 0x prefix) are skipped — they use a separate scanner
     try:
         stale_rows = fetch_all("""
-            SELECT address FROM wallet_graph.wallets
+            SELECT DISTINCT ON (address) address FROM wallet_graph.wallets
             WHERE address LIKE '0x%%'
               AND (last_indexed_at IS NULL
                    OR last_indexed_at < NOW() - INTERVAL '24 hours')
-            ORDER BY last_indexed_at ASC NULLS FIRST
+            ORDER BY address, last_indexed_at ASC NULLS FIRST
             LIMIT %s
         """, (batch_size,))
     except Exception as e:
@@ -680,7 +684,7 @@ def run_pipeline_batch(batch_size: int = 500) -> dict:
 
     # Count total remaining for reporting (EVM only)
     remaining_row = fetch_one("""
-        SELECT COUNT(*) AS cnt FROM wallet_graph.wallets
+        SELECT COUNT(DISTINCT LOWER(address)) AS cnt FROM wallet_graph.wallets
         WHERE address LIKE '0x%%'
           AND (last_indexed_at IS NULL
                OR last_indexed_at < NOW() - INTERVAL '24 hours')

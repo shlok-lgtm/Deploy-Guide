@@ -109,7 +109,7 @@ def _wallets_scored_ratio():
         scored = fetch_one(
             "SELECT COUNT(DISTINCT wallet_address) AS cnt FROM wallet_graph.wallet_risk_scores WHERE risk_score IS NOT NULL"
         )
-        total = fetch_one("SELECT COUNT(DISTINCT address) AS cnt FROM wallet_graph.wallets")
+        total = fetch_one("SELECT COUNT(DISTINCT LOWER(address)) AS cnt FROM wallet_graph.wallets")
         scored_cnt = scored["cnt"] if scored else 0
         total_cnt = total["cnt"] if total else 0
         if total_cnt > 0 and scored_cnt / total_cnt < 0.01:
@@ -172,7 +172,7 @@ def _events_severity_consistency():
 
 def _edges_exist_if_wallets():
     try:
-        wallets = fetch_one("SELECT COUNT(DISTINCT address) AS cnt FROM wallet_graph.wallets")
+        wallets = fetch_one("SELECT COUNT(DISTINCT LOWER(address)) AS cnt FROM wallet_graph.wallets")
         edges = fetch_one("SELECT COUNT(*) AS cnt FROM wallet_graph.wallet_edges")
         w_cnt = wallets["cnt"] if wallets else 0
         e_cnt = edges["cnt"] if edges else 0
@@ -200,7 +200,7 @@ def _edges_coverage():
                 UNION SELECT to_address FROM wallet_graph.wallet_edges
             ) sub
         """)
-        wallets_total = fetch_one("SELECT COUNT(DISTINCT address) AS cnt FROM wallet_graph.wallets")
+        wallets_total = fetch_one("SELECT COUNT(DISTINCT LOWER(address)) AS cnt FROM wallet_graph.wallets")
         w_with = wallets_with["cnt"] if wallets_with else 0
         w_total = wallets_total["cnt"] if wallets_total else 0
 

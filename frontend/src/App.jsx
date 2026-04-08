@@ -1696,6 +1696,8 @@ function WalletSearchPanel({ mobile }) {
   const w = data?.wallet;
   const r = data?.risk;
   const holdings = data?.holdings || [];
+  // Compute actual value from current holdings — authoritative, never uses cached/inflated values
+  const holdingsValue = holdings.reduce((sum, h) => sum + (parseFloat(h.value_usd) || 0), 0);
 
   return (
     <div style={{ marginBottom: 32 }}>
@@ -1756,7 +1758,7 @@ function WalletSearchPanel({ mobile }) {
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               {[
                 { label: "Address", value: w.address, isLink: true },
-                { label: "Value", value: fmtB(data.holdings_value ?? r.total_stablecoin_value ?? w.total_stablecoin_value) },
+                { label: "Value", value: fmtB(holdingsValue || 0) },
                 { label: "Size Tier", value: (w.size_tier || "—").toUpperCase() },
                 { label: "Source", value: w.source || "—" },
                 { label: "Contract", value: w.is_contract ? "Yes" : "No" },
@@ -1824,7 +1826,7 @@ function WalletSearchPanel({ mobile }) {
                     <span style={{ fontFamily: T.mono, fontSize: 11, fontWeight: 600, color: T.ink }}>{h.symbol}</span>
                     <span style={{ fontFamily: T.mono, fontSize: 11, color: T.inkMid }}>{fmtB(h.value_usd)}</span>
                     <span style={{ fontFamily: T.mono, fontSize: 11, color: T.inkLight }}>
-                      {h.pct_of_wallet != null ? fmt(h.pct_of_wallet, 1) + "%" : "—"}
+                      {holdingsValue > 0 ? fmt((parseFloat(h.value_usd) || 0) / holdingsValue * 100, 1) + "%" : "—"}
                     </span>
                     <span style={{ fontFamily: T.mono, fontSize: 11, color: h.sii_score != null ? subScoreColor(h.sii_score) : T.inkFaint, fontWeight: h.sii_score != null ? 600 : 400 }}>
                       {h.sii_score != null ? fmt(h.sii_score, 1) : "—"}

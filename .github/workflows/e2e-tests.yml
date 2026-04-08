@@ -1,0 +1,60 @@
+name: E2E Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: 'Base URL to test against'
+        required: false
+        default: 'https://app.basisprotocol.xyz'
+  schedule:
+    - cron: '0 6 * * *'
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests pytest
+
+      - name: Run E2E tests
+        env:
+          BASE_URL: ${{ github.event.inputs.base_url || 'https://app.basisprotocol.xyz' }}
+        run: |
+          pytest tests/e2e_test.py -v --tb=short 2>&1 | tee test-results.txt
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: test-results.txt
+
+      - name: Comment on PR with failures
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const results = fs.readFileSync('test-results.txt', 'utf8');
+            const failedLines = results.split('\n').filter(l => l.includes('FAILED'));
+            if (failedLines.length === 0) return;
+
+            const body = `<details><summary>E2E Test Failures (${failedLines.length})</summary>\n\n\`\`\`\n${failedLines.join('\n')}\n\`\`\`\n\n</details>`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
