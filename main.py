@@ -228,17 +228,19 @@ def run_worker_loop():
         hours_since_edge_build = (time.time() - last_edge_build_at) / 3600
         edge_stale = hours_since_edge_build >= 10
         if edge_stale:
-            try:
-                from app.indexer.edges import run_edge_builder
-                logger.info("Running edge builder (top 200 unbuilt wallets by value)...")
-                edge_result = asyncio.run(run_edge_builder(max_wallets=200, priority="value"))
-                last_edge_build_at = time.time()
-                logger.info(
-                    f"Edge builder complete: {edge_result.get('wallets_processed', 0)} wallets, "
-                    f"{edge_result.get('total_edges_created', 0)} edges"
-                )
-            except Exception as e:
-                logger.warning(f"Edge building failed: {e}")
+            for edge_chain in ["ethereum", "base", "arbitrum", "solana"]:
+                try:
+                    from app.indexer.edges import run_edge_builder
+                    logger.info(f"Running edge builder for {edge_chain} (top 200 unbuilt wallets by value)...")
+                    edge_result = asyncio.run(run_edge_builder(max_wallets=200, priority="value", chain=edge_chain))
+                    logger.info(
+                        f"Edge builder ({edge_chain}) complete: {edge_result.get('wallets_processed', 0)} wallets, "
+                        f"{edge_result.get('total_edges_created', 0)} edges"
+                    )
+                except Exception as e:
+                    logger.warning(f"Edge building failed for {edge_chain}: {e}")
+
+            last_edge_build_at = time.time()
 
             # Decay + prune after edge building
             try:

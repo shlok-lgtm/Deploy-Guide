@@ -260,24 +260,22 @@ def check_coingecko_usage():
 
 
 def check_integrity():
-    """Check integrity status via public URL."""
+    """Check integrity status via direct DB query (not HTTP — avoids self-call latency)."""
     try:
-        resp = httpx.get(f"{_PUBLIC_BASE}/api/integrity", timeout=15)
-        if resp.status_code == 200:
-            data = resp.json()
-            domains = data.get("domains", {})
-            failing = [d for d, v in domains.items() if v.get("status") != "healthy"]
-            status = "healthy" if not failing else ("degraded" if len(failing) < 3 else "down")
-            return {
-                "system": "integrity",
-                "status": status,
-                "details": {
-                    "total_domains": len(domains),
-                    "healthy_domains": len(domains) - len(failing),
-                    "failing": failing,
-                },
-            }
-        return {"system": "integrity", "status": "degraded", "details": {"status_code": resp.status_code}}
+        from app.integrity import check_all
+        data = check_all()
+        domains = data.get("domains", {})
+        failing = [d for d, v in domains.items() if v.get("status") not in ("fresh", "healthy")]
+        status = "healthy" if not failing else ("degraded" if len(failing) < 3 else "down")
+        return {
+            "system": "integrity",
+            "status": status,
+            "details": {
+                "total_domains": len(domains),
+                "healthy_domains": len(domains) - len(failing),
+                "failing": failing,
+            },
+        }
     except Exception as e:
         return {"system": "integrity", "status": "down", "details": {"error": str(e)}}
 
