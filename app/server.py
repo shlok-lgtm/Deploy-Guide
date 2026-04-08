@@ -125,6 +125,40 @@ async def rate_limit_and_track(request: Request, call_next):
 
     ip = request.client.host if request.client else "unknown"
     ua = request.headers.get("user-agent", "")[:500]
+    accept_header = request.headers.get("accept", "")[:255]
+    referer = request.headers.get("referer", "")[:500]
+
+    # Classify internal vs external traffic
+    INTERNAL_UA_PATTERNS = [
+        "python-httpx",        # MCP server's internal calls to hub API
+        "basis-keeper",        # Oracle keeper
+        "basis-worker",        # Background worker
+        "uvicorn",             # Internal health checks
+    ]
+    is_internal = any(pat in ua.lower() for pat in INTERNAL_UA_PATTERNS)
+
+    # Parse entity from path
+    entity_type = None
+    entity_id = None
+    if "/api/scores/" in path:
+        parts = path.split("/api/scores/")
+        if len(parts) > 1 and parts[1]:
+            entity_type = "stablecoin"
+            entity_id = parts[1].split("/")[0].split("?")[0]
+    elif "/api/wallets/" in path:
+        parts = path.split("/api/wallets/")
+        if len(parts) > 1 and parts[1]:
+            entity_type = "wallet"
+            entity_id = parts[1].split("/")[0].split("?")[0][:42]
+    elif "/api/protocols/" in path or "/api/psi/" in path:
+        for prefix in ["/api/protocols/", "/api/psi/scores/"]:
+            if prefix in path:
+                parts = path.split(prefix)
+                if len(parts) > 1 and parts[1]:
+                    entity_type = "protocol"
+                    entity_id = parts[1].split("/")[0].split("?")[0]
+    elif path.startswith("/mcp"):
+        entity_type = "mcp"
 
     # Admin endpoints — exempt from rate limiting but still logged
     if path.startswith("/api/admin") or path.startswith("/api/ops"):
@@ -134,6 +168,8 @@ async def rate_limit_and_track(request: Request, call_next):
             endpoint=path, method=request.method,
             status_code=response.status_code, response_time_ms=elapsed_ms,
             ip=ip, api_key_id=api_key_id, api_key_hash=api_key_hash, user_agent=ua,
+            accept_header=accept_header, referer=referer, is_internal=is_internal,
+            entity_type=entity_type, entity_id=entity_id,
         )
         return response
 
@@ -168,6 +204,8 @@ async def rate_limit_and_track(request: Request, call_next):
             endpoint=path, method=request.method,
             status_code=429, response_time_ms=elapsed_ms,
             ip=ip, api_key_id=api_key_id, api_key_hash=api_key_hash, user_agent=ua,
+            accept_header=accept_header, referer=referer, is_internal=is_internal,
+            entity_type=entity_type, entity_id=entity_id,
         )
         origin = request.headers.get("origin", "")
         cors_header = "*" if (not origin or "*" in CORS_ORIGINS) else (origin if origin in CORS_ORIGINS else "")
@@ -190,6 +228,8 @@ async def rate_limit_and_track(request: Request, call_next):
         endpoint=path, method=request.method,
         status_code=response.status_code, response_time_ms=elapsed_ms,
         ip=ip, api_key_id=api_key_id, api_key_hash=api_key_hash, user_agent=ua,
+        accept_header=accept_header, referer=referer, is_internal=is_internal,
+        entity_type=entity_type, entity_id=entity_id,
     )
     response.headers["X-RateLimit-Remaining"] = str(remaining)
     response.headers["X-RateLimit-Limit"] = str(limit)
@@ -4592,6 +4632,32 @@ async def trigger_daily_cycle(request: Request):
     except Exception as e:
         import traceback
         return JSONResponse(status_code=500, content={"error": str(e), "traceback": traceback.format_exc()})
+
+
+@app.post("/api/admin/keeper-log")
+async def log_keeper_publish(request: Request):
+    """Log a keeper publish event. Called by the keeper after each on-chain update."""
+    _check_admin_key(request)
+    body = await request.json()
+    try:
+        from app.database import get_conn
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO keeper_publish_log (chain, scores_published, gas_used, tx_hash, success, error_message)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, (
+                    body.get("chain", "unknown"),
+                    body.get("scores_published", 0),
+                    body.get("gas_used"),
+                    body.get("tx_hash"),
+                    body.get("success", True),
+                    body.get("error_message"),
+                ))
+            conn.commit()
+        return {"status": "logged"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 
 # =============================================================================

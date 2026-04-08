@@ -171,6 +171,11 @@ def log_request(
     api_key_id: Optional[int],
     api_key_hash: Optional[str],
     user_agent: str,
+    accept_header: str = "",
+    referer: str = "",
+    is_internal: bool = False,
+    entity_type: Optional[str] = None,
+    entity_id: Optional[str] = None,
 ) -> None:
     """Non-blocking append to the in-memory buffer."""
     entry = {
@@ -182,6 +187,11 @@ def log_request(
         "api_key_id": api_key_id,
         "api_key_hash": api_key_hash,
         "user_agent": (user_agent or "")[:500],
+        "accept_header": (accept_header or "")[:255],
+        "referer": (referer or "")[:500],
+        "is_internal": is_internal,
+        "entity_type": entity_type,
+        "entity_id": (entity_id or "")[:100] if entity_id else None,
     }
     with _buffer_lock:
         _buffer.append(entry)
@@ -210,17 +220,34 @@ def _flush_sync() -> None:
         from app.database import get_conn
         with get_conn() as conn:
             with conn.cursor() as cur:
-                cur.executemany(
-                    """
-                    INSERT INTO api_request_log
-                        (endpoint, method, status_code, response_time_ms,
-                         ip_address, api_key_id, api_key_hash, user_agent)
-                    VALUES
-                        (%(endpoint)s, %(method)s, %(status_code)s, %(response_time_ms)s,
-                         %(ip_address)s, %(api_key_id)s, %(api_key_hash)s, %(user_agent)s)
-                    """,
-                    batch
-                )
+                try:
+                    cur.executemany(
+                        """
+                        INSERT INTO api_request_log
+                            (endpoint, method, status_code, response_time_ms,
+                             ip_address, api_key_id, api_key_hash, user_agent,
+                             accept_header, referer, is_internal, entity_type, entity_id)
+                        VALUES
+                            (%(endpoint)s, %(method)s, %(status_code)s, %(response_time_ms)s,
+                             %(ip_address)s, %(api_key_id)s, %(api_key_hash)s, %(user_agent)s,
+                             %(accept_header)s, %(referer)s, %(is_internal)s, %(entity_type)s, %(entity_id)s)
+                        """,
+                        batch
+                    )
+                except Exception:
+                    # Fallback if new columns don't exist yet (migration not run)
+                    conn.rollback()
+                    cur.executemany(
+                        """
+                        INSERT INTO api_request_log
+                            (endpoint, method, status_code, response_time_ms,
+                             ip_address, api_key_id, api_key_hash, user_agent)
+                        VALUES
+                            (%(endpoint)s, %(method)s, %(status_code)s, %(response_time_ms)s,
+                             %(ip_address)s, %(api_key_id)s, %(api_key_hash)s, %(user_agent)s)
+                        """,
+                        batch
+                    )
                 key_counts = Counter(e["api_key_id"] for e in batch if e["api_key_id"])
                 for key_id, count in key_counts.items():
                     cur.execute(

@@ -2206,6 +2206,194 @@ function InvestorContentPanel() {
 
 // ─── Main Dashboard ───────────────────────────────────────────────────
 
+function SeedMetricsPanel() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [flash, showFlash] = useFlash();
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const res = await opsFetch("/api/ops/seed-metrics");
+      setData(res);
+    } catch (e) { showFlash(e.message, false); }
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const statCard = (label, value, sub) => (
+    <div style={{ flex: 1, padding: "10px 12px", border: `1px solid ${T.ruleMid}`, background: T.paperWarm }}>
+      <div style={{ fontFamily: T.mono, fontSize: 9, textTransform: "uppercase", letterSpacing: 1.5, color: T.inkLight, marginBottom: 4 }}>{label}</div>
+      <div style={{ fontFamily: T.mono, fontSize: 22, fontWeight: 700, color: T.ink }}>{value}</div>
+      {sub && <div style={{ fontFamily: T.mono, fontSize: 10, color: T.inkFaint, marginTop: 2 }}>{sub}</div>}
+    </div>
+  );
+
+  const channelDot = (status) => {
+    if (status === true) return { bg: "#22c55e", label: "live" };
+    if (status === false) return { bg: "#9a9a9a", label: "not built" };
+    return { bg: "#eab308", label: status };
+  };
+
+  return (
+    <>
+      <Section title="SEED METRICS" actions={
+        <button onClick={load} disabled={loading} style={{ fontSize: 9, fontFamily: T.mono, padding: "2px 6px", border: `1px solid ${T.paper}44`, background: "transparent", color: T.paper, cursor: "pointer", opacity: loading ? 0.5 : 1 }}>
+          {loading ? "Loading..." : "Refresh"}
+        </button>
+      }>
+        <Flash flash={flash} />
+        <div style={{ padding: "0 10px" }}>
+          {!data && loading && <div style={{ color: T.inkFaint, fontSize: 12 }}>Loading seed metrics...</div>}
+          {!data && !loading && <div style={{ color: T.inkFaint, fontSize: 12 }}>No data yet.</div>}
+          {data && !data.error && (
+            <>
+              {/* Header cards */}
+              <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+                {statCard("External Requests Today", data.realtime?.external_requests_today ?? 0, `${data.realtime?.requests_today ?? 0} total`)}
+                {statCard("Active API Keys (7d)", data.active_api_keys_7d ?? 0)}
+                {statCard("MCP Tool Calls (30d)", data.month_totals?.mcp_tool_calls ?? 0)}
+                {statCard("Channels Live", data.channels_live_count ?? 0, `of ${Object.keys(data.channels || {}).length}`)}
+              </div>
+
+              {/* 7-day trend */}
+              {data.trend_7d && data.trend_7d.length > 0 && (
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ fontFamily: T.mono, fontSize: 10, textTransform: "uppercase", letterSpacing: 1.5, color: T.inkLight, marginBottom: 6 }}>7-Day Trend</div>
+                  <div style={{ display: "flex", gap: 4, alignItems: "flex-end", height: 60 }}>
+                    {[...data.trend_7d].reverse().map((d, i) => {
+                      const maxReq = Math.max(...data.trend_7d.map(r => r.external_api_requests || 1));
+                      const h = Math.max(4, ((d.external_api_requests || 0) / maxReq) * 56);
+                      return (
+                        <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                          <div style={{ fontFamily: T.mono, fontSize: 8, color: T.inkFaint }}>{d.external_api_requests || 0}</div>
+                          <div style={{ width: "100%", height: h, background: T.ink, borderRadius: 1 }} />
+                          <div style={{ fontFamily: T.mono, fontSize: 8, color: T.inkFaint }}>{String(d.date).slice(5)}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+          {data?.error && <div style={{ color: T.accent, fontSize: 11 }}>Error: {data.error}</div>}
+        </div>
+      </Section>
+
+      {data && !data.error && (
+        <>
+          {/* Top External Consumers */}
+          <Section title="TOP EXTERNAL CONSUMERS (7d)">
+            <div style={{ padding: "0 10px" }}>
+              {(data.top_external_consumers || []).length === 0
+                ? <div style={{ color: T.inkFaint, fontSize: 11 }}>No external consumers yet.</div>
+                : <table style={{ width: "100%", fontSize: 11, fontFamily: T.mono, borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr style={{ borderBottom: `1px solid ${T.ruleMid}`, fontSize: 10, color: T.inkLight, textAlign: "left" }}>
+                        <th style={{ padding: "4px 0" }}>IP</th><th>User Agent</th><th style={{ textAlign: "right" }}>Requests</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.top_external_consumers.map((c, i) => (
+                        <tr key={i} style={{ borderBottom: `1px solid ${T.ruleLight}` }}>
+                          <td style={{ padding: "3px 0", fontSize: 10 }}>{c.ip_address}</td>
+                          <td style={{ fontSize: 10, color: T.inkMid, maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.ua}</td>
+                          <td style={{ textAlign: "right", fontWeight: 600 }}>{c.requests}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+              }
+            </div>
+          </Section>
+
+          {/* MCP Tool Breakdown */}
+          <Section title="MCP TOOL CALLS (7d)">
+            <div style={{ padding: "0 10px" }}>
+              {(data.mcp_tool_breakdown || []).length === 0
+                ? <div style={{ color: T.inkFaint, fontSize: 11 }}>No MCP tool calls recorded yet.</div>
+                : <table style={{ width: "100%", fontSize: 11, fontFamily: T.mono, borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr style={{ borderBottom: `1px solid ${T.ruleMid}`, fontSize: 10, color: T.inkLight, textAlign: "left" }}>
+                        <th style={{ padding: "4px 0" }}>Tool</th><th style={{ textAlign: "right" }}>Calls</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.mcp_tool_breakdown.map((t, i) => (
+                        <tr key={i} style={{ borderBottom: `1px solid ${T.ruleLight}` }}>
+                          <td style={{ padding: "3px 0" }}>{t.tool_name}</td>
+                          <td style={{ textAlign: "right", fontWeight: 600 }}>{t.calls}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+              }
+            </div>
+          </Section>
+
+          {/* Top Entities */}
+          <Section title="MOST QUERIED ENTITIES (7d)">
+            <div style={{ padding: "0 10px" }}>
+              {(data.top_entities || []).length === 0
+                ? <div style={{ color: T.inkFaint, fontSize: 11 }}>No entity lookups yet.</div>
+                : <table style={{ width: "100%", fontSize: 11, fontFamily: T.mono, borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr style={{ borderBottom: `1px solid ${T.ruleMid}`, fontSize: 10, color: T.inkLight, textAlign: "left" }}>
+                        <th style={{ padding: "4px 0" }}>Type</th><th>Entity</th><th style={{ textAlign: "right" }}>Lookups</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.top_entities.map((e, i) => (
+                        <tr key={i} style={{ borderBottom: `1px solid ${T.ruleLight}` }}>
+                          <td style={{ padding: "3px 0", fontSize: 10, color: T.inkLight }}>{e.entity_type}</td>
+                          <td style={{ fontSize: 10 }}>{e.entity_id}</td>
+                          <td style={{ textAlign: "right", fontWeight: 600 }}>{e.lookups}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+              }
+            </div>
+          </Section>
+
+          {/* Channels Status */}
+          <Section title="DISTRIBUTION CHANNELS">
+            <div style={{ padding: "0 10px", display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
+              {Object.entries(data.channels || {}).map(([name, status]) => {
+                const dot = channelDot(status);
+                return (
+                  <div key={name} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontFamily: T.mono, padding: "3px 0" }}>
+                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: dot.bg, display: "inline-block", flexShrink: 0 }} />
+                    <span>{name.replace(/_/g, " ")}</span>
+                    {dot.label !== "live" && dot.label !== "not built" && (
+                      <span style={{ fontSize: 9, color: T.inkFaint }}>({dot.label})</span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </Section>
+
+          {/* Keeper Publishes */}
+          {data.keeper_publishes && data.keeper_publishes.length > 0 && (
+            <Section title="ORACLE KEEPER (7d)">
+              <div style={{ padding: "0 10px" }}>
+                {data.keeper_publishes.map((k, i) => (
+                  <div key={i} style={{ fontSize: 11, fontFamily: T.mono, padding: "3px 0", borderBottom: `1px solid ${T.ruleLight}` }}>
+                    <strong>{k.chain}</strong> — {k.publishes} publishes — last: {k.last_publish ? new Date(k.last_publish).toLocaleString() : "—"}
+                  </div>
+                ))}
+              </div>
+            </Section>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
 export default function OpsDashboard() {
   const [authed, setAuthed] = useState(!!getAdminKey());
   const [health, setHealth] = useState([]);
@@ -2372,7 +2560,7 @@ export default function OpsDashboard() {
 
         {/* Tabs */}
         <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
-          {["dashboard", "targets", "fundraise", "content", "signals", "analytics"].map((tb) => (
+          {["dashboard", "targets", "fundraise", "content", "signals", "analytics", "metrics"].map((tb) => (
             <button key={tb} onClick={() => setTab(tb)} style={{
               fontFamily: T.mono, fontSize: 11, padding: "4px 0", border: "none",
               background: "transparent", cursor: "pointer", fontWeight: tab === tb ? 700 : 400,
@@ -2488,6 +2676,9 @@ export default function OpsDashboard() {
             <AlertsPanel />
           </>
         )}
+
+        {/* Metrics tab — Seed fundraise dashboard */}
+        {tab === "metrics" && <SeedMetricsPanel />}
 
         <div style={{ fontFamily: T.mono, fontSize: 10, color: T.inkFaint, textAlign: "center", marginTop: 24, paddingBottom: 16 }}>
           Basis Protocol · Operations Hub · Internal Use Only

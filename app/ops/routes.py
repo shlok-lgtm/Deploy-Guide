@@ -1594,6 +1594,101 @@ async def keeper_history(request: Request, limit: int = Query(default=50, ge=1, 
         return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
+@router.get("/seed-metrics")
+async def seed_metrics(request: Request):
+    """Aggregated metrics for seed fundraise conversations. No auth required for read-only summary."""
+    try:
+        from datetime import timezone
+
+        # Real-time: today's requests
+        today = fetch_one(
+            "SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE is_internal = FALSE) as external FROM api_request_log WHERE timestamp >= NOW() - INTERVAL '1 day'"
+        )
+
+        # 7-day trend from rollup table
+        trend_7d = fetch_all(
+            "SELECT date, total_api_requests, external_api_requests, unique_external_ips, mcp_tool_calls, jsonld_requests FROM metrics_daily_rollup ORDER BY date DESC LIMIT 7"
+        ) or []
+
+        # 30-day totals
+        month = fetch_one(
+            "SELECT SUM(total_api_requests) as total, SUM(external_api_requests) as external, SUM(mcp_tool_calls) as mcp_tools FROM metrics_daily_rollup WHERE date >= NOW()::date - INTERVAL '30 days'"
+        )
+
+        # Active API keys
+        active_keys = fetch_one(
+            "SELECT COUNT(DISTINCT api_key_id) as c FROM api_request_log WHERE timestamp > NOW() - INTERVAL '7 days' AND api_key_id IS NOT NULL"
+        )
+
+        # MCP tool breakdown (last 7 days)
+        mcp_tools = fetch_all(
+            "SELECT tool_name, COUNT(*) as calls FROM mcp_tool_calls WHERE timestamp > NOW() - INTERVAL '7 days' GROUP BY tool_name ORDER BY calls DESC"
+        ) or []
+
+        # Oracle keeper publishes (last 7 days)
+        keeper = fetch_all(
+            "SELECT chain, COUNT(*) as publishes, MAX(timestamp) as last_publish FROM keeper_publish_log WHERE timestamp > NOW() - INTERVAL '7 days' GROUP BY chain"
+        ) or []
+
+        # Top external consumers (by IP, last 7 days)
+        top_consumers = fetch_all(
+            """SELECT ip_address, LEFT(user_agent, 80) as ua, COUNT(*) as requests
+               FROM api_request_log
+               WHERE timestamp > NOW() - INTERVAL '7 days' AND is_internal = FALSE
+               GROUP BY ip_address, LEFT(user_agent, 80)
+               ORDER BY requests DESC LIMIT 10"""
+        ) or []
+
+        # Most queried entities
+        top_entities = fetch_all(
+            """SELECT entity_type, entity_id, COUNT(*) as lookups
+               FROM api_request_log
+               WHERE timestamp > NOW() - INTERVAL '7 days' AND entity_id IS NOT NULL AND is_internal = FALSE
+               GROUP BY entity_type, entity_id
+               ORDER BY lookups DESC LIMIT 15"""
+        ) or []
+
+        # Channels live count
+        channels_live = {
+            "api": True,
+            "dashboard": True,
+            "mcp_server": True,
+            "oracle_base": bool(os.environ.get("BASE_ORACLE_ADDRESS")),
+            "oracle_arbitrum": bool(os.environ.get("ARBITRUM_ORACLE_ADDRESS")),
+            "assessment_pages": True,
+            "tradingview": True,
+            "snap": "audit_queue",
+            "safe_guard": "built",
+            "social_bots": False,
+            "dune_dashboard": False,
+            "weekly_digest": False,
+        }
+
+        return {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "realtime": {
+                "requests_today": today["total"] if today else 0,
+                "external_requests_today": today["external"] if today else 0,
+            },
+            "trend_7d": [dict(r) for r in trend_7d] if trend_7d else [],
+            "month_totals": {
+                "total_requests": int(month["total"]) if month and month["total"] else 0,
+                "external_requests": int(month["external"]) if month and month["external"] else 0,
+                "mcp_tool_calls": int(month["mcp_tools"]) if month and month["mcp_tools"] else 0,
+            },
+            "active_api_keys_7d": active_keys["c"] if active_keys else 0,
+            "mcp_tool_breakdown": [dict(r) for r in mcp_tools],
+            "keeper_publishes": [dict(r) for r in keeper],
+            "top_external_consumers": [dict(r) for r in top_consumers],
+            "top_entities": [dict(r) for r in top_entities],
+            "channels": channels_live,
+            "channels_live_count": sum(1 for v in channels_live.values() if v is True),
+        }
+    except Exception as e:
+        logger.error(f"Seed metrics computation failed: {e}")
+        return {"error": str(e)}
+
+
 def register_ops_routes(app):
     """Register the ops router with the main FastAPI app."""
     app.include_router(router)

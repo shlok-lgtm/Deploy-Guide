@@ -467,6 +467,7 @@ def _fallback_wallet_html(ctx: dict) -> str:
         f"""<!DOCTYPE html>
 <html><head><title>Wallet {addr[:10]}... | Basis Protocol</title>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;700&display=swap" rel="stylesheet">
+<script defer data-domain="basisprotocol.xyz" src="https://plausible.io/js/script.js"></script>
 <script type="application/ld+json">{ctx['json_ld']}</script>
 <link rel="alternate" type="application/json" href="/api/wallets/{addr}">
 </head><body style="{_FALLBACK_STYLE}">
@@ -498,6 +499,7 @@ def _fallback_asset_html(ctx: dict) -> str:
     return f"""<!DOCTYPE html>
 <html><head><title>{ctx['symbol']} | Basis Protocol</title>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;700&display=swap" rel="stylesheet">
+<script defer data-domain="basisprotocol.xyz" src="https://plausible.io/js/script.js"></script>
 <script type="application/ld+json">{ctx['json_ld']}</script>
 <link rel="alternate" type="application/json" href="/api/scores/{ctx['symbol'].lower()}">
 </head><body style="{_FALLBACK_STYLE}">
@@ -512,6 +514,7 @@ def _fallback_assessment_html(ctx: dict) -> str:
     return f"""<!DOCTYPE html>
 <html><head><title>Assessment {str(a.get('id', ''))[:8]}... | Basis Protocol</title>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;700&display=swap" rel="stylesheet">
+<script defer data-domain="basisprotocol.xyz" src="https://plausible.io/js/script.js"></script>
 <script type="application/ld+json">{ctx['json_ld']}</script>
 </head><body style="{_FALLBACK_STYLE}">
 <p style="{_FALLBACK_LABEL}">Assessment Event</p>
@@ -527,6 +530,7 @@ def _fallback_pulse_html(ctx: dict) -> str:
     return f"""<!DOCTYPE html>
 <html><head><title>Pulse {ctx['pulse_date']} | Basis Protocol</title>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;700&display=swap" rel="stylesheet">
+<script defer data-domain="basisprotocol.xyz" src="https://plausible.io/js/script.js"></script>
 <script type="application/ld+json">{ctx['json_ld']}</script>
 </head><body style="{_FALLBACK_STYLE}">
 <p style="{_FALLBACK_LABEL}">Daily Pulse</p>

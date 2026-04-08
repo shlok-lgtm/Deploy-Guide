@@ -41,7 +41,31 @@ async def run_daily_cycle():
     logger.info("--- Phase 3: Wallet indexer ---")
     await _run_wallet_phase(budget)
 
-    # 4. Log summary
+    # 4. Metrics rollup (always runs, no budget impact)
+    logger.info("--- Phase 4: Metrics rollup ---")
+    try:
+        from app.ops.tools.metrics_rollup import compute_and_store_daily_rollup
+        compute_and_store_daily_rollup()
+    except Exception as e:
+        logger.error(f"Metrics rollup failed: {e}")
+
+    # Flush MCP tool call buffer
+    try:
+        from app.mcp_server import _flush_mcp_log
+        _flush_mcp_log()
+    except Exception:
+        pass
+
+    # 5. Oracle monitor (poll on-chain events)
+    logger.info("--- Phase 5: Oracle monitor ---")
+    try:
+        from app.ops.tools.oracle_monitor import poll_oracle_events
+        import asyncio
+        await poll_oracle_events()
+    except Exception as e:
+        logger.error(f"Oracle monitor failed: {e}")
+
+    # 6. Log summary
     final = budget.get_or_create_today()
     total_used = (
         final["sii_calls_used"]
