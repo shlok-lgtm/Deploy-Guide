@@ -134,9 +134,15 @@ async def rate_limit_and_track(request: Request, call_next):
         "basis-keeper",        # Oracle keeper
         "basis-worker",        # Background worker
         "uvicorn",             # Internal health checks
+        "headlesschrome",      # Replit internal rendering
     ]
-    is_internal = any(pat in ua.lower() for pat in INTERNAL_UA_PATTERNS)
-
+    INTERNAL_IP_PREFIXES = [
+        "35.191.",             # GCP load balancer (Replit proxy)
+    ]
+    is_internal = (
+        any(pat in ua.lower() for pat in INTERNAL_UA_PATTERNS)
+        or any(ip.startswith(prefix) for prefix in INTERNAL_IP_PREFIXES)
+    )
     # Parse entity from path
     entity_type = None
     entity_id = None
