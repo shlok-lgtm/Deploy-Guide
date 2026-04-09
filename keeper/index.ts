@@ -14,7 +14,7 @@ import { logger } from "./logger.js";
 import { sendAlert, checkStaleness } from "./alerter.js";
 import { TOKEN_ADDRESSES } from "./converter.js";
 import { fetchOnChainScores, computeUpdates, type ApiScore } from "./differ.js";
-import { publishUpdates, publishReportHashes, publishStateRoot, sleep, type ReportHashUpdate } from "./publisher.js";
+import { publishUpdates, publishPsiScores, publishReportHashes, publishStateRoot, sleep, type ReportHashUpdate, type PsiScoreUpdate } from "./publisher.js";
 
 // Hub API response envelope
 interface HubScoresResponse {
@@ -53,6 +53,59 @@ async function fetchApiScores(apiUrl: string, endpoint: string): Promise<ApiScor
 
   logger.info("Fetched API scores", { count: scores.length });
   return scores;
+}
+
+// PSI API response envelope
+interface HubPsiResponse {
+  protocols: Array<{
+    protocol_slug: string;
+    score: number;
+    grade: string;
+    computed_at?: string;
+  }>;
+  count: number;
+}
+
+const PSI_VERSION = 100; // psi-v0.1.0
+
+function gradeToBytes2(grade: string): string {
+  const g = (grade || "--").slice(0, 2).padEnd(2, " ");
+  return (
+    "0x" +
+    g.charCodeAt(0).toString(16).padStart(2, "0") +
+    g.charCodeAt(1).toString(16).padStart(2, "0")
+  );
+}
+
+async function fetchPsiScores(apiUrl: string): Promise<PsiScoreUpdate[]> {
+  const url = `${apiUrl}/api/psi/scores`;
+  logger.info("Fetching PSI scores from API", { url });
+
+  const res = await fetch(url, {
+    headers: { "Accept": "application/json" },
+    signal: AbortSignal.timeout(30_000),
+  });
+
+  if (!res.ok) {
+    throw new Error(`PSI API returned HTTP ${res.status}: ${await res.text()}`);
+  }
+
+  const raw = (await res.json()) as HubPsiResponse;
+  const protocols = raw.protocols || [];
+  const cycleTimestamp = Math.floor(Date.now() / 1000);
+
+  const updates: PsiScoreUpdate[] = protocols
+    .filter((p) => p.score != null && p.grade)
+    .map((p) => ({
+      slug: p.protocol_slug,
+      score: Math.round(p.score * 100),
+      grade: gradeToBytes2(p.grade),
+      timestamp: cycleTimestamp,
+      version: PSI_VERSION,
+    }));
+
+  logger.info("Fetched PSI scores", { count: updates.length });
+  return updates;
 }
 
 /**
@@ -167,6 +220,32 @@ async function runCycle(
       config
     ),
   ]);
+
+  // 3b. Publish PSI scores to both chains in parallel
+  try {
+    const psiUpdates = await fetchPsiScores(config.apiUrl);
+    if (psiUpdates.length > 0) {
+      const [psiBase, psiArb] = await Promise.all([
+        publishPsiScores(
+          psiUpdates, providerBase, walletBase,
+          config.chains.base.oracleAddress, "base", config
+        ),
+        publishPsiScores(
+          psiUpdates, providerArb, walletArb,
+          config.chains.arbitrum.oracleAddress, "arbitrum", config
+        ),
+      ]);
+      const psiResults = [psiBase, psiArb].filter(Boolean);
+      logger.info("PSI scores published", {
+        count: psiUpdates.length,
+        chains: psiResults.map((r) => r!.chain),
+      });
+    }
+  } catch (err) {
+    logger.warn("PSI score publishing failed (non-blocking)", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   // 4. Log results
   const results = [resultBase, resultArb].filter(Boolean);

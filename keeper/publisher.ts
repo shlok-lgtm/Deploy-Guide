@@ -6,6 +6,7 @@ import type { KeeperConfig } from "./config.js";
 
 const ORACLE_ABI = [
   "function batchUpdateScores(address[] calldata tokens, uint16[] calldata scores, bytes2[] calldata grades, uint48[] calldata timestamps, uint16[] calldata versions) external",
+  "function batchUpdatePsiScores(string[] calldata slugs, uint16[] calldata scores, bytes2[] calldata grades, uint48[] calldata timestamps, uint16[] calldata versions) external",
   "function isStale(address token, uint256 maxAge) external view returns (bool)",
   "function publishReportHash(bytes32 entityId, bytes32 reportHash, bytes4 lensId) external",
   "function publishStateRoot(bytes32 stateRoot) external",
@@ -162,6 +163,105 @@ export async function publishUpdates(
       maxDelay: config.maxRetryDelayMs,
     },
     `batchUpdateScores on ${chainKey}`
+  );
+
+  return {
+    chain: chainKey,
+    txHash,
+    updatesCount: updates.length,
+  };
+}
+
+// ============================================================
+// PSI score publishing
+// ============================================================
+
+export interface PsiScoreUpdate {
+  slug: string;
+  score: number;       // uint16 (float * 100)
+  grade: string;       // bytes2 hex
+  timestamp: number;   // uint48 unix seconds
+  version: number;     // uint16
+}
+
+export async function publishPsiScores(
+  updates: PsiScoreUpdate[],
+  provider: ethers.JsonRpcProvider,
+  wallet: ethers.Wallet,
+  oracleAddress: string,
+  chainKey: string,
+  config: KeeperConfig
+): Promise<PublishResult | null> {
+  if (updates.length === 0) {
+    logger.info("No PSI updates to publish", { chain: chainKey });
+    return null;
+  }
+
+  if (config.dryRun) {
+    logger.info("DRY RUN — would publish PSI scores", {
+      chain: chainKey,
+      count: updates.length,
+      slugs: updates.map((u) => u.slug),
+    });
+    return null;
+  }
+
+  const feeData = await provider.getFeeData();
+  const gasPriceGwei = feeData.gasPrice
+    ? Number(ethers.formatUnits(feeData.gasPrice, "gwei"))
+    : 0;
+
+  if (gasPriceGwei > config.maxGasPriceGwei) {
+    const msg = `Gas price ${gasPriceGwei.toFixed(3)} gwei exceeds cap ${config.maxGasPriceGwei} gwei on ${chainKey}`;
+    logger.warn(msg);
+    await sendAlert(msg);
+    return null;
+  }
+
+  const oracle = new ethers.Contract(oracleAddress, ORACLE_ABI, wallet);
+
+  const slugs      = updates.map((u) => u.slug);
+  const scores     = updates.map((u) => u.score);
+  const grades     = updates.map((u) => u.grade);
+  const timestamps = updates.map((u) => u.timestamp);
+  const versions   = updates.map((u) => u.version);
+
+  const nonce = await nonceManager.getCurrentNonce(provider, wallet.address, chainKey);
+
+  const txHash = await withRetry(
+    async () => {
+      const tx = await (oracle.batchUpdatePsiScores as ethers.ContractMethod)(
+        slugs, scores, grades, timestamps, versions,
+        {
+          nonce,
+          gasLimit: 200_000n,
+        }
+      );
+
+      logger.info("PSI transaction submitted", {
+        chain: chainKey,
+        txHash: tx.hash,
+        nonce,
+        updatesCount: updates.length,
+      });
+
+      const receipt = await tx.wait(1);
+
+      logger.info("PSI transaction confirmed", {
+        chain: chainKey,
+        txHash: tx.hash,
+        blockNumber: receipt?.blockNumber,
+        gasUsed: receipt?.gasUsed?.toString(),
+      });
+
+      return tx.hash as string;
+    },
+    {
+      maxRetries: config.maxRetries,
+      baseDelay: config.baseRetryDelayMs,
+      maxDelay: config.maxRetryDelayMs,
+    },
+    `batchUpdatePsiScores on ${chainKey}`
   );
 
   return {

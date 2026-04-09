@@ -93,7 +93,11 @@
       "Bash(pytest tests/e2e_test.py --collect-only)",
       "Bash([ -e \"/home/runner/workspace/$f\" ])",
       "Bash(kill 69)",
-      "Bash(nohup python3:*)"
+      "Bash(nohup python3:*)",
+      "Bash(npx tsx:*)",
+      "Bash(npx tsx --eval ':*)",
+      "Bash(DRY_RUN=true npx tsx keeper/index.ts)",
+      "Bash(pkill -f \"tsx keeper/index.ts\")"
     ]
   }
 }
