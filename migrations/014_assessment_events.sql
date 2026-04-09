@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS assessment_events (
     onchain_posted_at TIMESTAMPTZ
 );
 
-CREATE INDEX idx_ae_wallet ON assessment_events(wallet_address, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ae_wallet ON assessment_events(wallet_address, created_at DESC);
 CREATE INDEX idx_ae_severity ON assessment_events(severity, created_at DESC);
 CREATE INDEX idx_ae_broadcast ON assessment_events(broadcast, created_at DESC);
 CREATE INDEX idx_ae_created ON assessment_events(created_at DESC);
