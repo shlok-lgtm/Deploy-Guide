@@ -128,12 +128,28 @@ const MICA_STATUS = {
   usdc: "Compliant", usdt: "Watchlist", dai: "Compliant", usde: "Watchlist",
   fdusd: "Compliant", pyusd: "Compliant", tusd: "Non-compliant",
   usdd: "Non-compliant", frax: "Watchlist", usd1: "Pending",
+  rlusd: "Pending", crvusd: "Pending", usdp: "Pending", usds: "Pending",
+  gho: "Pending", gusd: "Pending", lusd: "Pending", dola: "Pending",
+  mim: "Pending", susd: "Pending", rai: "Pending", eurs: "Pending",
+  eurc: "Pending", susde: "Pending", susds: "Pending", euri: "Pending",
+  eure: "Pending", steakusdc: "Pending", stkgho: "Pending", sdola: "Pending",
+  busd0: "Pending", ousd: "Pending", musd: "Pending", usdtb: "Pending",
+  frax_64d0: "Pending", usddbttcbridge: "Pending",
 };
 
 const RESERVE_TYPE = {
   usdc: "Fiat-backed", usdt: "Fiat-backed", dai: "Crypto-backed",
   usde: "Synthetic", fdusd: "Fiat-backed", pyusd: "Fiat-backed",
   tusd: "Fiat-backed", usdd: "Algorithmic", frax: "Synthetic", usd1: "Mixed",
+  rlusd: "Fiat-backed", crvusd: "Crypto-backed", usdp: "Fiat-backed",
+  usds: "Crypto-backed", gho: "Crypto-backed", gusd: "Fiat-backed",
+  lusd: "Crypto-backed", dola: "Crypto-backed", mim: "Crypto-backed",
+  susd: "Synthetic", rai: "Crypto-backed", eurs: "Fiat-backed",
+  eurc: "Fiat-backed", susde: "Synthetic", susds: "Crypto-backed",
+  euri: "Fiat-backed", eure: "Fiat-backed", steakusdc: "Crypto-backed",
+  stkgho: "Crypto-backed", sdola: "Crypto-backed", busd0: "Fiat-backed",
+  ousd: "Crypto-backed", musd: "Crypto-backed", usdtb: "Fiat-backed",
+  frax_64d0: "Synthetic", usddbttcbridge: "Algorithmic",
 };
 
 const subScoreColor = (s) => {
@@ -782,7 +798,7 @@ function PageHeader({ ts, mobile, coinCount, meta = {} }) {
     <TabHeader
       title={<><span style={{ fontWeight: 700 }}>Stablecoin</span> Integrity <span style={{ fontWeight: 700 }}>Index</span></>}
       formId="FORM SII-001 · BASIS PROTOCOL"
-      stats={[`${coinCount || 14} STABLECOINS`, `${meta.componentCount || 37} SCORING COMPONENTS`, `${meta.dataSourceCount || 5} LIVE DATA SOURCES`, "DETERMINISTIC METHODOLOGY", "UPDATED HOURLY"]}
+      stats={[`${coinCount || "—"} STABLECOINS`, `${meta.componentCount || 37} SCORING COMPONENTS`, `${meta.dataSourceCount || 5} LIVE DATA SOURCES`, "DETERMINISTIC METHODOLOGY", "UPDATED HOURLY"]}
       formulaLine="SII = 0.30×Peg + 0.25×Liq + 0.20×Struct + 0.15×Flow + 0.10×Dist"
       versionLabel={`Methodology v1.0 · ${timestamp}`}
       accent="#fc988f"
