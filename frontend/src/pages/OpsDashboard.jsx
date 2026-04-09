@@ -1661,6 +1661,486 @@ function ReportsPanel() {
   );
 }
 
+function QueryPanel() {
+  const [queryText, setQueryText] = useState("");
+  const [results, setResults] = useState(null);
+  const [templates, setTemplates] = useState([]);
+  const [schema, setSchema] = useState(null);
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    opsFetch("/api/query/templates").then(d => setTemplates(d.templates || d || [])).catch(() => {});
+    opsFetch("/api/query/schema").then(d => setSchema(d)).catch(() => {});
+  }, []);
+
+  async function runQuery() {
+    setRunning(true);
+    setError(null);
+    setResults(null);
+    try {
+      let parsed;
+      try { parsed = JSON.parse(queryText); } catch { throw new Error("Invalid JSON"); }
+      const data = await opsFetch("/api/query", { method: "POST", body: JSON.stringify(parsed) });
+      setResults(data);
+    } catch (e) { setError(e.message); }
+    setRunning(false);
+  }
+
+  function loadTemplate(t) {
+    const q = t.query || t;
+    setQueryText(JSON.stringify(q, null, 2));
+  }
+
+  return (
+    <>
+      <Section title="QUERY ENGINE">
+        {templates.length > 0 && (
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 9, fontFamily: T.mono, color: T.inkLight, marginBottom: 6, textTransform: "uppercase" }}>Templates</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {templates.map((t, i) => (
+                <button key={i} onClick={() => loadTemplate(t)} style={btn()}>
+                  {t.name || t.label || `Template ${i + 1}`}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <textarea
+          value={queryText}
+          onChange={e => setQueryText(e.target.value)}
+          placeholder='{"filters": {"min_score": 70, "max_hhi": 6000}, "limit": 50}'
+          style={{
+            width: "100%", height: 150, fontFamily: T.mono, fontSize: 11,
+            padding: 12, border: `1px solid ${T.ruleMid}`, background: T.paperWarm,
+            boxSizing: "border-box", resize: "vertical",
+          }}
+        />
+
+        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+          <button onClick={runQuery} disabled={running || !queryText.trim()} style={btnActive({ opacity: running ? 0.5 : 1 })}>
+            {running ? "Running..." : "Run Query"}
+          </button>
+          <button onClick={() => setQueryText("")} style={btn()}>Clear</button>
+        </div>
+
+        {error && <div style={{ marginTop: 8, fontSize: 11, color: T.accent, fontFamily: T.mono }}>{error}</div>}
+      </Section>
+
+      {results && (
+        <Section title={`RESULTS · ${Array.isArray(results.results || results) ? (results.results || results).length : "?"} rows`}>
+          <pre style={{
+            fontFamily: T.mono, fontSize: 10, background: T.paperWarm,
+            padding: 12, border: `1px solid ${T.ruleLight}`, overflow: "auto",
+            maxHeight: 500, whiteSpace: "pre-wrap",
+          }}>
+            {JSON.stringify(results, null, 2)}
+          </pre>
+        </Section>
+      )}
+
+      {schema && (
+        <Section title="SCHEMA">
+          <pre style={{
+            fontFamily: T.mono, fontSize: 9, color: T.inkLight,
+            background: T.paperWarm, padding: 8, border: `1px solid ${T.ruleLight}`,
+            overflow: "auto", maxHeight: 200, whiteSpace: "pre-wrap",
+          }}>
+            {JSON.stringify(schema, null, 2)}
+          </pre>
+        </Section>
+      )}
+    </>
+  );
+}
+
+function GraphPanel() {
+  const [address, setAddress] = useState("");
+  const [connections, setConnections] = useState(null);
+  const [contagion, setContagion] = useState(null);
+  const [actor, setActor] = useState(null);
+  const [profile, setProfile] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [graphStats, setGraphStats] = useState(null);
+  const [activeView, setActiveView] = useState("connections");
+
+  useEffect(() => {
+    opsFetch("/api/graph/stats").then(setGraphStats).catch(() => {});
+  }, []);
+
+  async function loadWallet() {
+    if (!address.trim()) return;
+    setLoading(true);
+    setConnections(null);
+    setContagion(null);
+    setActor(null);
+    setProfile(null);
+    const addr = address.trim().toLowerCase();
+    try {
+      const [conn, cont, act, prof] = await Promise.all([
+        opsFetch(`/api/wallets/${addr}/connections`).catch(() => null),
+        opsFetch(`/api/wallets/${addr}/contagion`).catch(() => null),
+        opsFetch(`/api/wallets/${addr}/actor`).catch(() => null),
+        opsFetch(`/api/wallets/${addr}/profile`).catch(() => null),
+      ]);
+      setConnections(conn);
+      setContagion(cont);
+      setActor(act);
+      setProfile(prof);
+    } catch (e) { console.error(e); }
+    setLoading(false);
+  }
+
+  const [topWallets, setTopWallets] = useState([]);
+  useEffect(() => {
+    opsFetch("/api/wallets/top?limit=10").then(d => setTopWallets(d.wallets || d || [])).catch(() => {});
+  }, []);
+
+  return (
+    <>
+      {graphStats && (
+        <Section title="GRAPH OVERVIEW">
+          <div style={{ display: "flex", gap: 24, flexWrap: "wrap", fontSize: 11, fontFamily: T.mono }}>
+            {Object.entries(graphStats).map(([k, v]) => (
+              <div key={k}>
+                <span style={{ color: T.inkLight }}>{k}: </span>
+                <span style={{ color: T.ink, fontWeight: 600 }}>{typeof v === "number" ? v.toLocaleString() : JSON.stringify(v)}</span>
+              </div>
+            ))}
+          </div>
+        </Section>
+      )}
+
+      <Section title="WALLET EXPLORER">
+        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+          <input
+            value={address}
+            onChange={e => setAddress(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && loadWallet()}
+            placeholder="0x... wallet address"
+            style={{ flex: 1, fontFamily: T.mono, fontSize: 11, padding: "6px 10px", border: `1px solid ${T.ruleMid}` }}
+          />
+          <button onClick={loadWallet} disabled={loading} style={btnActive()}>
+            {loading ? "Loading..." : "Explore"}
+          </button>
+        </div>
+
+        {topWallets.length > 0 && (
+          <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 12 }}>
+            <span style={{ fontSize: 9, color: T.inkFaint, fontFamily: T.mono }}>Top wallets: </span>
+            {topWallets.slice(0, 8).map((w, i) => (
+              <button key={i} onClick={() => { setAddress(w.address || w); setTimeout(loadWallet, 50); }}
+                style={{ ...btn(), fontSize: 9 }}>
+                {(w.address || w).slice(0, 6)}...{(w.address || w).slice(-4)}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {(connections || contagion || actor) && (
+          <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+            {["connections", "contagion", "actor", "profile"].map(v => (
+              <button key={v} onClick={() => setActiveView(v)}
+                style={activeView === v ? btnActive() : btn()}>
+                {v}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {profile && activeView === "profile" && (
+          <pre style={{ fontFamily: T.mono, fontSize: 10, background: T.paperWarm, padding: 12, border: `1px solid ${T.ruleLight}`, overflow: "auto", maxHeight: 400, whiteSpace: "pre-wrap" }}>
+            {JSON.stringify(profile, null, 2)}
+          </pre>
+        )}
+
+        {connections && activeView === "connections" && (
+          <div>
+            <div style={{ fontSize: 10, fontFamily: T.mono, color: T.inkLight, marginBottom: 8 }}>
+              {Array.isArray(connections.connections || connections) ? (connections.connections || connections).length : "?"} connections
+            </div>
+            <pre style={{ fontFamily: T.mono, fontSize: 10, background: T.paperWarm, padding: 12, border: `1px solid ${T.ruleLight}`, overflow: "auto", maxHeight: 400, whiteSpace: "pre-wrap" }}>
+              {JSON.stringify(connections, null, 2)}
+            </pre>
+          </div>
+        )}
+
+        {contagion && activeView === "contagion" && (
+          <div>
+            <div style={{ fontSize: 10, fontFamily: T.mono, color: T.accent, marginBottom: 8 }}>
+              Depth-3 contagion blast radius
+            </div>
+            <pre style={{ fontFamily: T.mono, fontSize: 10, background: T.paperWarm, padding: 12, border: `1px solid ${T.ruleLight}`, overflow: "auto", maxHeight: 400, whiteSpace: "pre-wrap" }}>
+              {JSON.stringify(contagion, null, 2)}
+            </pre>
+          </div>
+        )}
+
+        {actor && activeView === "actor" && (
+          <pre style={{ fontFamily: T.mono, fontSize: 10, background: T.paperWarm, padding: 12, border: `1px solid ${T.ruleLight}`, overflow: "auto", maxHeight: 400, whiteSpace: "pre-wrap" }}>
+            {JSON.stringify(actor, null, 2)}
+          </pre>
+        )}
+      </Section>
+    </>
+  );
+}
+
+function BacktestPanel() {
+  const [entityType, setEntityType] = useState("stablecoin");
+  const [entityId, setEntityId] = useState("usdc");
+  const [event, setEvent] = useState("svb");
+  const [results, setResults] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [entities, setEntities] = useState([]);
+  const [scoreHistory, setScoreHistory] = useState(null);
+
+  const events = [
+    { id: "svb", label: "SVB Crisis (Mar 2023)" },
+    { id: "terra_luna", label: "Terra/Luna Collapse (May 2022)" },
+    { id: "drift_exploit", label: "Drift Exploit (Apr 2026)" },
+  ];
+
+  useEffect(() => {
+    if (entityType === "stablecoin") {
+      opsFetch("/api/scores").then(d => {
+        setEntities((d.stablecoins || []).map(s => ({ id: s.id, label: s.symbol })));
+        setEntityId((d.stablecoins || [])[0]?.id || "usdc");
+      }).catch(() => {});
+    } else {
+      opsFetch("/api/psi/scores").then(d => {
+        setEntities((d.protocols || []).map(p => ({ id: p.slug || p.id, label: p.name })));
+        setEntityId((d.protocols || [])[0]?.slug || "aave");
+      }).catch(() => {});
+    }
+  }, [entityType]);
+
+  async function runBacktest() {
+    setLoading(true);
+    setResults(null);
+    setScoreHistory(null);
+    try {
+      let data;
+      if (entityType === "stablecoin") {
+        data = await opsFetch(`/api/backtest/${entityId}?event=${event}`);
+      } else {
+        data = await opsFetch(`/api/psi/scores/${entityId}/backtest/${event}`);
+      }
+      setResults(data);
+    } catch (e) {
+      setResults({ error: e.message });
+    }
+    try {
+      if (entityType === "stablecoin") {
+        const hist = await opsFetch(`/api/scores/${entityId}/history?days=365`);
+        setScoreHistory(hist);
+      }
+    } catch (e) {}
+    setLoading(false);
+  }
+
+  async function quickBacktest(type, id, evt) {
+    setEntityType(type);
+    setEntityId(id);
+    setEvent(evt);
+    setLoading(true);
+    setResults(null);
+    try {
+      const data = type === "stablecoin"
+        ? await opsFetch(`/api/backtest/${id}?event=${evt}`)
+        : await opsFetch(`/api/psi/scores/${id}/backtest/${evt}`);
+      setResults(data);
+    } catch (e) { setResults({ error: e.message }); }
+    setLoading(false);
+  }
+
+  return (
+    <>
+      <Section title="CRISIS BACKTESTER">
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+          <div>
+            <div style={{ fontSize: 9, fontFamily: T.mono, color: T.inkLight, marginBottom: 3, textTransform: "uppercase" }}>Type</div>
+            <select value={entityType} onChange={e => setEntityType(e.target.value)}
+              style={{ fontFamily: T.mono, fontSize: 11, padding: "4px 8px", border: `1px solid ${T.ruleMid}`, background: T.paper }}>
+              <option value="stablecoin">Stablecoin</option>
+              <option value="protocol">Protocol</option>
+            </select>
+          </div>
+          <div>
+            <div style={{ fontSize: 9, fontFamily: T.mono, color: T.inkLight, marginBottom: 3, textTransform: "uppercase" }}>Entity</div>
+            <select value={entityId} onChange={e => setEntityId(e.target.value)}
+              style={{ fontFamily: T.mono, fontSize: 11, padding: "4px 8px", border: `1px solid ${T.ruleMid}`, background: T.paper }}>
+              {entities.map(e => <option key={e.id} value={e.id}>{e.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <div style={{ fontSize: 9, fontFamily: T.mono, color: T.inkLight, marginBottom: 3, textTransform: "uppercase" }}>Crisis Event</div>
+            <select value={event} onChange={e => setEvent(e.target.value)}
+              style={{ fontFamily: T.mono, fontSize: 11, padding: "4px 8px", border: `1px solid ${T.ruleMid}`, background: T.paper }}>
+              {events.map(e => <option key={e.id} value={e.id}>{e.label}</option>)}
+            </select>
+          </div>
+          <div style={{ display: "flex", alignItems: "flex-end" }}>
+            <button onClick={runBacktest} disabled={loading} style={btnActive({ opacity: loading ? 0.5 : 1 })}>
+              {loading ? "Running..." : "Run Backtest"}
+            </button>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <button onClick={() => quickBacktest("stablecoin", "usdc", "svb")} style={btn()}>USDC × SVB</button>
+          <button onClick={() => quickBacktest("stablecoin", "usdt", "svb")} style={btn()}>USDT × SVB</button>
+          <button onClick={() => quickBacktest("stablecoin", "dai", "terra_luna")} style={btn()}>DAI × Terra</button>
+          <button onClick={() => quickBacktest("protocol", "drift", "drift_exploit")} style={btn()}>Drift × Exploit</button>
+          <button onClick={() => quickBacktest("stablecoin", "usdt", "terra_luna")} style={btn()}>USDT × Terra</button>
+        </div>
+      </Section>
+
+      {results && (
+        <Section title="BACKTEST RESULTS">
+          {results.error ? (
+            <div style={{ fontSize: 11, color: T.accent, fontFamily: T.mono }}>{results.error}</div>
+          ) : (
+            <pre style={{
+              fontFamily: T.mono, fontSize: 10, background: T.paperWarm,
+              padding: 12, border: `1px solid ${T.ruleLight}`, overflow: "auto",
+              maxHeight: 500, whiteSpace: "pre-wrap",
+            }}>
+              {JSON.stringify(results, null, 2)}
+            </pre>
+          )}
+        </Section>
+      )}
+
+      {scoreHistory && (
+        <Section title="SCORE HISTORY (365 DAYS)">
+          <pre style={{
+            fontFamily: T.mono, fontSize: 9, color: T.inkLight,
+            background: T.paperWarm, padding: 8, border: `1px solid ${T.ruleLight}`,
+            overflow: "auto", maxHeight: 200, whiteSpace: "pre-wrap",
+          }}>
+            {JSON.stringify(scoreHistory, null, 2)}
+          </pre>
+        </Section>
+      )}
+    </>
+  );
+}
+
+function CqiMatrixPanel() {
+  const [matrix, setMatrix] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [selectedPair, setSelectedPair] = useState(null);
+  const [pairDetail, setPairDetail] = useState(null);
+
+  async function loadMatrix() {
+    setLoading(true);
+    try {
+      const data = await opsFetch("/api/compose/cqi/matrix");
+      setMatrix(data);
+    } catch (e) {
+      console.error(e);
+    }
+    setLoading(false);
+  }
+
+  useEffect(() => { loadMatrix(); }, []);
+
+  async function loadPairDetail(asset, protocol) {
+    setSelectedPair(`${asset}×${protocol}`);
+    try {
+      const data = await opsFetch(`/api/compose/cqi?asset=${asset}&protocol=${protocol}`);
+      setPairDetail(data);
+    } catch (e) {
+      setPairDetail({ error: e.message });
+    }
+  }
+
+  const protocols = matrix ? [...new Set((matrix.pairs || matrix.matrix || []).map(p => p.protocol || p.protocol_slug))] : [];
+  const assets = matrix ? [...new Set((matrix.pairs || matrix.matrix || []).map(p => p.asset || p.stablecoin || p.symbol))] : [];
+
+  const pairMap = {};
+  (matrix?.pairs || matrix?.matrix || []).forEach(p => {
+    const key = `${p.asset || p.stablecoin || p.symbol}×${p.protocol || p.protocol_slug}`;
+    pairMap[key] = p;
+  });
+
+  function cqiColor(score) {
+    if (!score) return T.inkFaint;
+    if (score >= 80) return "#27ae60";
+    if (score >= 60) return "#f39c12";
+    return "#e74c3c";
+  }
+
+  return (
+    <>
+      <Section title={`CQI COMPOSITION MATRIX · ${assets.length} assets × ${protocols.length} protocols = ${Object.keys(pairMap).length} pairs`} actions={
+        <button onClick={loadMatrix} disabled={loading} style={btn()}>{loading ? "Loading..." : "Refresh"}</button>
+      }>
+        {!matrix ? (
+          <div style={{ fontSize: 11, color: T.inkFaint, fontStyle: "italic" }}>Loading matrix...</div>
+        ) : (
+          <div style={{ overflow: "auto", maxHeight: 500 }}>
+            <table style={{ borderCollapse: "collapse", fontSize: 10, fontFamily: T.mono }}>
+              <thead>
+                <tr>
+                  <th style={{ padding: "4px 8px", position: "sticky", left: 0, background: T.paper, borderBottom: `1px solid ${T.ruleMid}`, textAlign: "left", color: T.inkLight }}>
+                    Asset ↓ / Protocol →
+                  </th>
+                  {protocols.map(p => (
+                    <th key={p} style={{ padding: "4px 6px", borderBottom: `1px solid ${T.ruleMid}`, color: T.inkLight, whiteSpace: "nowrap" }}>
+                      {p}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {assets.map(a => (
+                  <tr key={a}>
+                    <td style={{ padding: "4px 8px", position: "sticky", left: 0, background: T.paper, borderBottom: `1px solid ${T.ruleLight}`, fontWeight: 600 }}>
+                      {a}
+                    </td>
+                    {protocols.map(p => {
+                      const pair = pairMap[`${a}×${p}`];
+                      const score = pair?.cqi_score || pair?.cqi || pair?.score;
+                      return (
+                        <td key={p}
+                          onClick={() => loadPairDetail(a, p)}
+                          style={{
+                            padding: "4px 6px", borderBottom: `1px solid ${T.ruleLight}`,
+                            color: cqiColor(score), fontWeight: 600, cursor: "pointer",
+                            textAlign: "center",
+                            background: selectedPair === `${a}×${p}` ? T.paperWarm : "transparent",
+                          }}>
+                          {score ? score.toFixed(1) : "—"}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Section>
+
+      {selectedPair && pairDetail && (
+        <Section title={`PAIR DETAIL: ${selectedPair}`}>
+          <pre style={{
+            fontFamily: T.mono, fontSize: 10, background: T.paperWarm,
+            padding: 12, border: `1px solid ${T.ruleLight}`, overflow: "auto",
+            maxHeight: 300, whiteSpace: "pre-wrap",
+          }}>
+            {JSON.stringify(pairDetail, null, 2)}
+          </pre>
+        </Section>
+      )}
+    </>
+  );
+}
+
 export default function OpsDashboard() {
   // Check for protocol deep-dive route
   const pathMatch = window.location.pathname.match(/^\/ops\/protocol\/([^/]+)/);
@@ -1800,7 +2280,7 @@ export default function OpsDashboard() {
 
         {/* Tabs */}
         <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
-          {["dashboard", "targets", "content", "metrics", "reports"].map((tb) => (
+          {["dashboard", "targets", "content", "metrics", "reports", "query", "graph", "backtest", "matrix"].map((tb) => (
             <button key={tb} onClick={() => setTab(tb)} style={{
               fontFamily: T.mono, fontSize: 11, padding: "4px 0", border: "none",
               background: "transparent", cursor: "pointer", fontWeight: tab === tb ? 700 : 400,
@@ -1891,6 +2371,11 @@ export default function OpsDashboard() {
         {tab === "metrics" && <SeedMetricsPanel />}
 
         {tab === "reports" && <ReportsPanel />}
+
+        {tab === "query" && <QueryPanel />}
+        {tab === "graph" && <GraphPanel />}
+        {tab === "backtest" && <BacktestPanel />}
+        {tab === "matrix" && <CqiMatrixPanel />}
 
         <div style={{ fontFamily: T.mono, fontSize: 10, color: T.inkFaint, textAlign: "center", marginTop: 24, paddingBottom: 16 }}>
           Basis Protocol · Operations Hub · Internal Use Only
