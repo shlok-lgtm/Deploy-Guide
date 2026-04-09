@@ -638,7 +638,176 @@ async def run_scoring_cycle():
     except Exception as e:
         logger.warning(f"PSI expansion pipeline failed: {e}")
 
-    # Generate daily pulse after scoring
+    # -------------------------------------------------------------------------
+    # CDA collection — daily gate via DB timestamp
+    # -------------------------------------------------------------------------
+    try:
+        cda_interval_hours = int(os.environ.get("CDA_COLLECTION_INTERVAL_HOURS", "24"))
+        last_cda = fetch_one(
+            "SELECT MAX(extracted_at) AS latest FROM cda_vendor_extractions"
+        )
+        cda_age_hours = 25  # default: run if no prior record
+        if last_cda and last_cda.get("latest"):
+            latest = last_cda["latest"]
+            if latest.tzinfo is None:
+                latest = latest.replace(tzinfo=timezone)
+            cda_age_hours = (datetime.now(timezone) - latest).total_seconds() / 3600
+
+        if cda_age_hours >= cda_interval_hours:
+            logger.info("Running CDA collection pipeline...")
+            from app.services.cda_collector import run_collection
+            asyncio.run(run_collection())
+            logger.info("CDA collection complete")
+        else:
+            logger.info(f"CDA collection skipped — last ran {cda_age_hours:.1f}h ago")
+    except Exception as e:
+        logger.warning(f"CDA collection failed: {e}")
+
+    # -------------------------------------------------------------------------
+    # Wallet batch re-index — every cycle (500 stalest wallets)
+    # -------------------------------------------------------------------------
+    try:
+        from app.indexer.pipeline import run_pipeline_batch
+        logger.info("Running wallet batch re-index (500 stalest wallets)...")
+        reindex_result = run_pipeline_batch(batch_size=500)
+        logger.info(
+            f"Wallet re-index complete: {reindex_result.get('processed', 0)} processed, "
+            f"{reindex_result.get('scored', 0)} scored, "
+            f"{reindex_result.get('errors', 0)} errors, "
+            f"{reindex_result.get('remaining', '?')} remaining"
+        )
+    except Exception as e:
+        logger.warning(f"Wallet batch re-index failed: {e}")
+
+    # -------------------------------------------------------------------------
+    # Wallet expansion + profile rebuild — daily gate via DB timestamp
+    # -------------------------------------------------------------------------
+    try:
+        last_expansion_row = fetch_one(
+            "SELECT MAX(created_at) AS latest FROM wallet_graph.wallets WHERE created_at > NOW() - INTERVAL '48 hours'"
+        )
+        wallet_expansion_age = 25
+        if last_expansion_row and last_expansion_row.get("latest"):
+            latest = last_expansion_row["latest"]
+            if latest.tzinfo is None:
+                latest = latest.replace(tzinfo=timezone)
+            wallet_expansion_age = (datetime.now(timezone) - latest).total_seconds() / 3600
+
+        if wallet_expansion_age >= 24:
+            # Wallet expansion — seed new addresses from under-covered stablecoins
+            try:
+                from app.indexer.expander import run_wallet_expansion
+                logger.info("Running wallet expansion pipeline...")
+                expansion_result = asyncio.run(run_wallet_expansion(max_etherscan_calls=50))
+                logger.info(
+                    f"Wallet expansion complete: {expansion_result.get('new_wallets_seeded', 0)} seeded, "
+                    f"{expansion_result.get('etherscan_calls_used', 0)} Etherscan calls used"
+                )
+            except Exception as e:
+                logger.warning(f"Wallet expansion failed: {e}")
+
+            # Profile rebuild — piggyback on daily gate so new wallets get profiled
+            try:
+                from app.indexer.profiles import rebuild_all_profiles
+                logger.info("Rebuilding wallet profiles...")
+                profile_result = rebuild_all_profiles()
+                logger.info(
+                    f"Profile rebuild complete: {profile_result.get('built', 0)} built, "
+                    f"{profile_result.get('errors', 0)} errors out of {profile_result.get('total', 0)} addresses"
+                )
+            except Exception as e:
+                logger.warning(f"Profile rebuild failed: {e}")
+        else:
+            logger.info(f"Wallet expansion skipped — last ran {wallet_expansion_age:.1f}h ago")
+    except Exception as e:
+        logger.warning(f"Wallet expansion gate check failed: {e}")
+
+    # -------------------------------------------------------------------------
+    # Verification agent cycle — every cycle
+    # -------------------------------------------------------------------------
+    try:
+        from app.agent.watcher import run_agent_cycle
+        result = run_agent_cycle()
+        if result:
+            logger.info(f"Agent cycle: {result.get('assessments', 0)} assessments")
+    except Exception as e:
+        logger.warning(f"Agent cycle error: {e}")
+
+    # -------------------------------------------------------------------------
+    # Treasury flow detection — every cycle, minimal API budget
+    # -------------------------------------------------------------------------
+    try:
+        from app.collectors.treasury_flows import collect_treasury_events
+        logger.info("Running treasury flow detection...")
+        treasury_events = asyncio.run(collect_treasury_events())
+        logger.info(f"Treasury flow detection: {len(treasury_events)} events")
+    except Exception as e:
+        logger.warning(f"Treasury flow detection failed: {e}")
+
+    # -------------------------------------------------------------------------
+    # Edge building — daily gate via edge_build_status table (~10h cycle)
+    # -------------------------------------------------------------------------
+    try:
+        edge_ts_row = fetch_one(
+            "SELECT EXTRACT(EPOCH FROM MAX(last_built_at)) AS ts FROM wallet_graph.edge_build_status"
+        )
+        edge_last_ts = float(edge_ts_row["ts"]) if edge_ts_row and edge_ts_row.get("ts") else 0
+        edge_age_hours = (time.time() - edge_last_ts) / 3600
+
+        if edge_age_hours >= 10:
+            for edge_chain in ["ethereum", "base", "arbitrum", "solana"]:
+                try:
+                    from app.indexer.edges import run_edge_builder
+                    logger.info(f"Running edge builder for {edge_chain} (top 200 unbuilt wallets by value)...")
+                    edge_result = asyncio.run(run_edge_builder(max_wallets=200, priority="value", chain=edge_chain))
+                    logger.info(
+                        f"Edge builder ({edge_chain}) complete: {edge_result.get('wallets_processed', 0)} wallets, "
+                        f"{edge_result.get('total_edges_created', 0)} edges"
+                    )
+                except Exception as e:
+                    logger.warning(f"Edge building failed for {edge_chain}: {e}")
+
+            # Decay + prune after edge building
+            try:
+                from app.indexer.edges import decay_edges, prune_stale_edges
+                decay_result = decay_edges()
+                logger.info(f"Edge decay: {decay_result.get('edges_decayed', 0)} edges recalculated")
+                prune_result = prune_stale_edges()
+                logger.info(f"Edge prune: {prune_result.get('edges_archived', 0)} archived")
+            except Exception as e:
+                logger.warning(f"Edge decay/prune failed: {e}")
+        else:
+            logger.info(f"Edge building skipped — last ran {edge_age_hours:.1f}h ago")
+    except Exception as e:
+        logger.warning(f"Edge build gate check failed: {e}")
+
+    # -------------------------------------------------------------------------
+    # Health sweep + alerting — every cycle
+    # -------------------------------------------------------------------------
+    try:
+        from app.ops.tools.health_checker import run_all_checks
+        logger.info("Running health sweep...")
+        health_results = run_all_checks()
+        healthy_count = sum(1 for r in health_results if r.get("status") == "healthy")
+        total_count = len(health_results)
+        logger.info(f"Health sweep: {healthy_count}/{total_count} healthy")
+
+        failures = [r for r in health_results if r.get("status") in ("degraded", "down")]
+        if failures:
+            try:
+                from app.ops.tools.alerter import check_and_alert_health
+                _aloop = asyncio.new_event_loop()
+                _aloop.run_until_complete(check_and_alert_health(health_results))
+                _aloop.close()
+                logger.info(f"Health alerts dispatched for {len(failures)} failing system(s)")
+            except Exception as alert_err:
+                logger.warning(f"Health alert dispatch failed: {alert_err}")
+    except Exception as e:
+        logger.warning(f"Health sweep failed: {e}")
+
+    # -------------------------------------------------------------------------
+    # Generate daily pulse after all scoring + indexing
+    # -------------------------------------------------------------------------
     try:
         from app.pulse_generator import run_daily_pulse
         run_daily_pulse()
