@@ -1359,6 +1359,308 @@ function ProtocolDeepDive({ slug }) {
   );
 }
 
+function ReportsPanel() {
+  const [entityType, setEntityType] = useState("protocol");
+  const [entityId, setEntityId] = useState("");
+  const [template, setTemplate] = useState("protocol_risk");
+  const [lens, setLens] = useState("");
+  const [format, setFormat] = useState("html");
+  const [entities, setEntities] = useState([]);
+  const [preview, setPreview] = useState(null);
+  const [previewFormat, setPreviewFormat] = useState(null);
+  const [attestation, setAttestation] = useState(null);
+  const [recentReports, setRecentReports] = useState([]);
+  const [generating, setGenerating] = useState(false);
+  const [batchResults, setBatchResults] = useState([]);
+
+  useEffect(() => {
+    loadEntities();
+  }, [entityType]);
+
+  useEffect(() => {
+    loadRecentReports();
+  }, []);
+
+  async function loadEntities() {
+    try {
+      if (entityType === "stablecoin") {
+        const data = await opsFetch("/api/scores");
+        setEntities((data.stablecoins || []).map(s => ({ id: s.id, label: `${s.symbol} — ${s.name} (${s.score})` })));
+        setEntityId((data.stablecoins || [])[0]?.id || "");
+      } else if (entityType === "protocol") {
+        const data = await opsFetch("/api/psi/scores");
+        setEntities((data.protocols || []).map(p => ({ id: p.slug || p.id, label: `${p.name} (${p.score})` })));
+        setEntityId((data.protocols || [])[0]?.slug || (data.protocols || [])[0]?.id || "");
+      } else {
+        setEntities([]);
+        setEntityId("");
+      }
+    } catch (e) {
+      console.error("Failed to load entities:", e);
+    }
+  }
+
+  async function loadRecentReports() {
+    try {
+      const data = await opsFetch("/api/ops/reports/recent").catch(() => ({ reports: [] }));
+      setRecentReports(data.reports || []);
+    } catch (e) {
+      setRecentReports([]);
+    }
+  }
+
+  async function generateReport() {
+    if (!entityId) return;
+    setGenerating(true);
+    setPreview(null);
+    setAttestation(null);
+    try {
+      const params = new URLSearchParams({ template, format });
+      if (lens) params.set("lens", lens);
+
+      const key = getAdminKey();
+      const resp = await fetch(`/api/reports/${entityType}/${entityId}?${params}`, {
+        headers: { "x-admin-key": key },
+      });
+
+      if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
+
+      if (format === "json") {
+        const data = await resp.json();
+        setPreview(JSON.stringify(data, null, 2));
+        setPreviewFormat("json");
+        if (data.attestation) setAttestation(data.attestation);
+      } else {
+        const html = await resp.text();
+        setPreview(html);
+        setPreviewFormat("html");
+      }
+
+      loadRecentReports();
+    } catch (e) {
+      setPreview(`Error: ${e.message}`);
+      setPreviewFormat("error");
+    }
+    setGenerating(false);
+  }
+
+  async function generateBatch(batchType) {
+    setGenerating(true);
+    setBatchResults([]);
+    const results = [];
+
+    let items = [];
+    if (batchType === "top5_basel") {
+      items = [
+        { type: "stablecoin", id: "usdc", template: "compliance", lens: "SCO60" },
+        { type: "stablecoin", id: "usdt", template: "compliance", lens: "SCO60" },
+        { type: "stablecoin", id: "dai", template: "compliance", lens: "SCO60" },
+        { type: "stablecoin", id: "usde", template: "compliance", lens: "SCO60" },
+        { type: "stablecoin", id: "fdusd", template: "compliance", lens: "SCO60" },
+      ];
+    } else if (batchType === "all_protocols") {
+      const data = await opsFetch("/api/psi/scores").catch(() => ({ protocols: [] }));
+      items = (data.protocols || []).map(p => ({
+        type: "protocol", id: p.slug || p.id, template: "protocol_risk", lens: "",
+      }));
+    }
+
+    for (const item of items) {
+      try {
+        const params = new URLSearchParams({ template: item.template, format: "json" });
+        if (item.lens) params.set("lens", item.lens);
+        const key = getAdminKey();
+        const resp = await fetch(`/api/reports/${item.type}/${item.id}?${params}`, {
+          headers: { "x-admin-key": key },
+        });
+        if (resp.ok) {
+          results.push({ ...item, status: "ok" });
+        } else {
+          results.push({ ...item, status: `error: ${resp.status}` });
+        }
+      } catch (e) {
+        results.push({ ...item, status: `error: ${e.message}` });
+      }
+    }
+
+    setBatchResults(results);
+    setGenerating(false);
+    loadRecentReports();
+  }
+
+  const templateOptions = entityType === "wallet"
+    ? ["wallet_risk"]
+    : ["protocol_risk", "compliance", "underwriting", "sbt_metadata"];
+
+  const lensOptions = ["", "SCO60", "MICA67", "GENIUS"];
+  const showLens = template === "compliance";
+
+  return (
+    <>
+      {/* Generator */}
+      <Section title="REPORT GENERATOR">
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+          {/* Entity Type */}
+          <div>
+            <div style={{ fontSize: 9, fontFamily: T.mono, color: T.inkLight, marginBottom: 3, textTransform: "uppercase" }}>Entity Type</div>
+            <select value={entityType} onChange={e => { setEntityType(e.target.value); setTemplate(e.target.value === "wallet" ? "wallet_risk" : "protocol_risk"); }}
+              style={{ fontFamily: T.mono, fontSize: 11, padding: "4px 8px", border: `1px solid ${T.ruleMid}`, background: T.paper }}>
+              <option value="protocol">Protocol</option>
+              <option value="stablecoin">Stablecoin</option>
+              <option value="wallet">Wallet</option>
+            </select>
+          </div>
+
+          {/* Entity ID */}
+          <div style={{ flex: 1, minWidth: 180 }}>
+            <div style={{ fontSize: 9, fontFamily: T.mono, color: T.inkLight, marginBottom: 3, textTransform: "uppercase" }}>Entity</div>
+            {entityType === "wallet" ? (
+              <input value={entityId} onChange={e => setEntityId(e.target.value)} placeholder="0x..."
+                style={{ fontFamily: T.mono, fontSize: 11, padding: "4px 8px", border: `1px solid ${T.ruleMid}`, width: "100%", boxSizing: "border-box" }} />
+            ) : (
+              <select value={entityId} onChange={e => setEntityId(e.target.value)}
+                style={{ fontFamily: T.mono, fontSize: 11, padding: "4px 8px", border: `1px solid ${T.ruleMid}`, background: T.paper, maxWidth: 300 }}>
+                {entities.map(e => <option key={e.id} value={e.id}>{e.label}</option>)}
+              </select>
+            )}
+          </div>
+
+          {/* Template */}
+          <div>
+            <div style={{ fontSize: 9, fontFamily: T.mono, color: T.inkLight, marginBottom: 3, textTransform: "uppercase" }}>Template</div>
+            <select value={template} onChange={e => setTemplate(e.target.value)}
+              style={{ fontFamily: T.mono, fontSize: 11, padding: "4px 8px", border: `1px solid ${T.ruleMid}`, background: T.paper }}>
+              {templateOptions.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </div>
+
+          {/* Lens */}
+          {showLens && (
+            <div>
+              <div style={{ fontSize: 9, fontFamily: T.mono, color: T.inkLight, marginBottom: 3, textTransform: "uppercase" }}>Lens</div>
+              <select value={lens} onChange={e => setLens(e.target.value)}
+                style={{ fontFamily: T.mono, fontSize: 11, padding: "4px 8px", border: `1px solid ${T.ruleMid}`, background: T.paper }}>
+                {lensOptions.map(l => <option key={l} value={l}>{l || "None"}</option>)}
+              </select>
+            </div>
+          )}
+
+          {/* Format */}
+          <div>
+            <div style={{ fontSize: 9, fontFamily: T.mono, color: T.inkLight, marginBottom: 3, textTransform: "uppercase" }}>Format</div>
+            <div style={{ display: "flex", gap: 4 }}>
+              <button onClick={() => setFormat("html")} style={format === "html" ? btnActive() : btn()}>HTML</button>
+              <button onClick={() => setFormat("json")} style={format === "json" ? btnActive() : btn()}>JSON</button>
+            </div>
+          </div>
+
+          {/* Generate */}
+          <div style={{ display: "flex", alignItems: "flex-end" }}>
+            <button onClick={generateReport} disabled={generating || !entityId}
+              style={btnActive({ opacity: generating ? 0.5 : 1, padding: "4px 16px" })}>
+              {generating ? "Generating..." : "Generate"}
+            </button>
+          </div>
+        </div>
+      </Section>
+
+      {/* Quick Actions */}
+      <Section title="QUICK ACTIONS">
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button onClick={() => { setEntityType("protocol"); setEntityId("aave"); setTemplate("protocol_risk"); setLens(""); setFormat("html"); setTimeout(generateReport, 100); }}
+            style={btn()}>Aave Protocol Risk</button>
+          <button onClick={() => { setEntityType("stablecoin"); setEntityId("usdc"); setTemplate("compliance"); setLens("SCO60"); setFormat("html"); setTimeout(generateReport, 100); }}
+            style={btn()}>USDC Basel SCO60</button>
+          <button onClick={() => { setEntityType("stablecoin"); setEntityId("usdc"); setTemplate("compliance"); setLens("MICA67"); setFormat("html"); setTimeout(generateReport, 100); }}
+            style={btn()}>USDC MiCA</button>
+          <button onClick={() => { setEntityType("stablecoin"); setEntityId("usdc"); setTemplate("compliance"); setLens("GENIUS"); setFormat("html"); setTimeout(generateReport, 100); }}
+            style={btn()}>USDC GENIUS Act</button>
+          <button onClick={() => generateBatch("top5_basel")} disabled={generating}
+            style={btn()}>Batch: Top 5 Basel SCO60</button>
+          <button onClick={() => generateBatch("all_protocols")} disabled={generating}
+            style={btn()}>Batch: All Protocol Risk</button>
+        </div>
+        {batchResults.length > 0 && (
+          <div style={{ marginTop: 12 }}>
+            {batchResults.map((r, i) => (
+              <div key={i} style={{ fontSize: 10, fontFamily: T.mono, color: r.status === "ok" ? "#27ae60" : T.accent, marginBottom: 2 }}>
+                {r.type}/{r.id} ({r.template}{r.lens ? `+${r.lens}` : ""}) — {r.status}
+              </div>
+            ))}
+          </div>
+        )}
+      </Section>
+
+      {/* Preview */}
+      {preview && (
+        <Section title="REPORT PREVIEW">
+          {previewFormat === "html" ? (
+            <iframe
+              srcDoc={preview}
+              style={{ width: "100%", height: 600, border: `1px solid ${T.ruleMid}`, borderRadius: 3, background: "#fff" }}
+              sandbox="allow-same-origin"
+            />
+          ) : previewFormat === "json" ? (
+            <pre style={{ fontFamily: T.mono, fontSize: 10, background: T.paperWarm, padding: 12, border: `1px solid ${T.ruleLight}`, overflow: "auto", maxHeight: 500, whiteSpace: "pre-wrap" }}>
+              {preview}
+            </pre>
+          ) : (
+            <div style={{ fontFamily: T.mono, fontSize: 11, color: T.accent, padding: 12 }}>{preview}</div>
+          )}
+          {attestation && (
+            <div style={{ marginTop: 12, padding: 10, background: T.paperWarm, border: `1px solid ${T.ruleLight}`, fontSize: 10, fontFamily: T.mono }}>
+              <div><strong>Report Hash:</strong> {attestation.report_hash}</div>
+              <div><strong>Generated:</strong> {attestation.generated_at}</div>
+              <div><strong>Methodology:</strong> {attestation.methodology_version}</div>
+              {attestation.lens && <div><strong>Lens:</strong> {attestation.lens} v{attestation.lens_version}</div>}
+              <div style={{ marginTop: 4 }}>
+                <a href={`/api/reports/verify/${attestation.report_hash}`} target="_blank" rel="noopener"
+                  style={{ color: T.accent, fontSize: 10 }}>Verify attestation →</a>
+              </div>
+            </div>
+          )}
+        </Section>
+      )}
+
+      {/* Recent Reports */}
+      <Section title="RECENT REPORTS" actions={
+        <button onClick={loadRecentReports} style={btn()}>Refresh</button>
+      }>
+        {recentReports.length === 0 ? (
+          <div style={{ fontSize: 11, color: T.inkFaint, fontStyle: "italic" }}>No reports generated yet</div>
+        ) : (
+          <table style={{ width: "100%", fontSize: 10, fontFamily: T.mono, borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${T.ruleMid}`, textAlign: "left" }}>
+                <th style={{ padding: "4px 8px", color: T.inkLight }}>Generated</th>
+                <th style={{ padding: "4px 8px", color: T.inkLight }}>Entity</th>
+                <th style={{ padding: "4px 8px", color: T.inkLight }}>Template</th>
+                <th style={{ padding: "4px 8px", color: T.inkLight }}>Lens</th>
+                <th style={{ padding: "4px 8px", color: T.inkLight }}>Hash</th>
+                <th style={{ padding: "4px 8px", color: T.inkLight }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {recentReports.map((r, i) => (
+                <tr key={i} style={{ borderBottom: `1px solid ${T.ruleLight}` }}>
+                  <td style={{ padding: "4px 8px" }}>{new Date(r.generated_at).toLocaleString()}</td>
+                  <td style={{ padding: "4px 8px" }}>{r.entity_type}/{r.entity_id}</td>
+                  <td style={{ padding: "4px 8px" }}>{r.template}</td>
+                  <td style={{ padding: "4px 8px" }}>{r.lens || "—"}</td>
+                  <td style={{ padding: "4px 8px", color: T.inkFaint }}>{(r.report_hash || "").slice(0, 16)}…</td>
+                  <td style={{ padding: "4px 8px" }}>
+                    <a href={`/api/reports/verify/${r.report_hash}`} target="_blank" rel="noopener" style={{ color: T.accent }}>verify</a>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Section>
+    </>
+  );
+}
+
 export default function OpsDashboard() {
   // Check for protocol deep-dive route
   const pathMatch = window.location.pathname.match(/^\/ops\/protocol\/([^/]+)/);
@@ -1498,7 +1800,7 @@ export default function OpsDashboard() {
 
         {/* Tabs */}
         <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
-          {["dashboard", "targets", "content", "metrics"].map((tb) => (
+          {["dashboard", "targets", "content", "metrics", "reports"].map((tb) => (
             <button key={tb} onClick={() => setTab(tb)} style={{
               fontFamily: T.mono, fontSize: 11, padding: "4px 0", border: "none",
               background: "transparent", cursor: "pointer", fontWeight: tab === tb ? 700 : 400,
@@ -1587,6 +1889,8 @@ export default function OpsDashboard() {
 
         {/* Metrics tab */}
         {tab === "metrics" && <SeedMetricsPanel />}
+
+        {tab === "reports" && <ReportsPanel />}
 
         <div style={{ fontFamily: T.mono, fontSize: 10, color: T.inkFaint, textAlign: "center", marginTop: 24, paddingBottom: 16 }}>
           Basis Protocol · Operations Hub · Internal Use Only

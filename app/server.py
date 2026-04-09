@@ -4840,6 +4840,33 @@ async def trigger_daily_cycle(request: Request):
         return JSONResponse(status_code=500, content={"error": str(e), "traceback": traceback.format_exc()})
 
 
+@app.get("/api/ops/reports/recent")
+async def ops_recent_reports(request: Request):
+    _check_admin_key(request)
+    rows = fetch_all("""
+        SELECT entity_type, entity_id, template, lens, lens_version,
+               report_hash, methodology_version, generated_at
+        FROM report_attestations
+        ORDER BY generated_at DESC
+        LIMIT 20
+    """)
+    return {
+        "reports": [
+            {
+                "entity_type": r["entity_type"],
+                "entity_id": r["entity_id"],
+                "template": r["template"],
+                "lens": r.get("lens"),
+                "lens_version": r.get("lens_version"),
+                "report_hash": r["report_hash"],
+                "methodology_version": r.get("methodology_version"),
+                "generated_at": r["generated_at"].isoformat() if r.get("generated_at") else None,
+            }
+            for r in (rows or [])
+        ]
+    }
+
+
 @app.post("/api/admin/keeper-log")
 async def log_keeper_publish(request: Request):
     """Log a keeper publish event. Called by the keeper after each on-chain update."""
