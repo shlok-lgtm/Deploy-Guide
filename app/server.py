@@ -5713,76 +5713,87 @@ async def generate_report(
     format: str = Query(default="html"),
 ):
     """Generate an attested report for an entity."""
-    from app.report import assemble_report_data
-    from app.report_attestation import compute_report_hash, store_report_attestation
-    from app.templates import get_template
-    from app.lenses import load_lens, apply_lens
+    try:
+        from app.report import assemble_report_data
+        from app.report_attestation import compute_report_hash, store_report_attestation
+        from app.templates import get_template
+        from app.lenses import load_lens, apply_lens
 
-    if entity_type not in ("stablecoin", "protocol", "wallet"):
-        raise HTTPException(status_code=400, detail=f"Invalid entity_type: {entity_type}. Use stablecoin, protocol, or wallet.")
+        if entity_type not in ("stablecoin", "protocol", "wallet"):
+            raise HTTPException(status_code=400, detail=f"Invalid entity_type: {entity_type}. Use stablecoin, protocol, or wallet.")
 
-    # Default template per entity type
-    if template is None:
-        template = {"stablecoin": "compliance", "protocol": "protocol_risk", "wallet": "wallet_risk"}.get(entity_type, "protocol_risk")
+        # Default template per entity type
+        if template is None:
+            template = {"stablecoin": "compliance", "protocol": "protocol_risk", "wallet": "wallet_risk"}.get(entity_type, "protocol_risk")
 
-    render_fn = get_template(template)
-    if not render_fn:
-        raise HTTPException(status_code=400, detail=f"Unknown template: {template}")
+        render_fn = get_template(template)
+        if not render_fn:
+            raise HTTPException(status_code=400, detail=f"Unknown template: {template}")
 
-    data = assemble_report_data(entity_type, entity_id)
-    if not data:
-        raise HTTPException(status_code=404, detail=f"{entity_type} '{entity_id}' not found")
+        data = assemble_report_data(entity_type, entity_id)
+        if not data:
+            raise HTTPException(status_code=404, detail=f"{entity_type} '{entity_id}' not found")
 
-    # Apply lens if specified
-    lens_result = None
-    lens_version = None
-    if lens:
-        lens_config = load_lens(lens)
-        if not lens_config:
-            raise HTTPException(status_code=400, detail=f"Unknown lens: {lens}. Available: SCO60, MiCA67, GENIUS")
-        lens_result = apply_lens(lens_config, data)
-        lens_version = lens_config.get("lens_version")
+        # Apply lens if specified
+        lens_result = None
+        lens_version = None
+        if lens:
+            lens_config = load_lens(lens)
+            if not lens_config:
+                raise HTTPException(status_code=400, detail=f"Unknown lens: {lens}. Available: SCO60, MiCA67, GENIUS")
+            lens_result = apply_lens(lens_config, data)
+            lens_version = lens_config.get("lens_version")
 
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    report_hash = compute_report_hash(data, template, lens, lens_version, ts,
-                                      state_hashes=data.get("state_hashes"))
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        report_hash = compute_report_hash(data, template, lens, lens_version, ts,
+                                          state_hashes=data.get("state_hashes"))
 
-    # Store attestation
-    store_report_attestation(
-        entity_type, entity_id, template, lens, lens_version,
-        report_hash, data.get("score_hashes", []),
-        data.get("cqi_hashes"),
-        data.get("formula_version", FORMULA_VERSION),
-    )
-
-    # SBT metadata always returns JSON
-    if template == "sbt_metadata" or format == "json":
-        from app.templates.sbt_metadata import render as render_sbt
-        if template == "sbt_metadata":
-            content = render_sbt(data, lens_result, report_hash, ts)
-        else:
-            import json as _json
-            content = _json.dumps({
-                "entity_type": entity_type,
-                "entity_id": entity_id,
-                "report_data": data,
-                "lens_result": lens_result,
-                "report_hash": report_hash,
-                "generated_at": ts,
-            }, default=str, indent=2)
-        return JSONResponse(
-            content=_json.loads(content) if isinstance(content, str) else content,
-            headers={"X-Report-Hash": report_hash},
+        # Store attestation
+        store_report_attestation(
+            entity_type, entity_id, template, lens, lens_version,
+            report_hash, data.get("score_hashes", []),
+            data.get("cqi_hashes"),
+            data.get("formula_version", FORMULA_VERSION),
         )
 
-    html = render_fn(data, lens_result, report_hash, ts, format)
-    return HTMLResponse(
-        content=html,
-        headers={
-            "X-Report-Hash": report_hash,
-            "Cache-Control": "public, max-age=300",
-        },
-    )
+        # SBT metadata always returns JSON
+        if template == "sbt_metadata" or format == "json":
+            from app.templates.sbt_metadata import render as render_sbt
+            if template == "sbt_metadata":
+                content = render_sbt(data, lens_result, report_hash, ts)
+            else:
+                import json as _json
+                content = _json.dumps({
+                    "entity_type": entity_type,
+                    "entity_id": entity_id,
+                    "report_data": data,
+                    "lens_result": lens_result,
+                    "report_hash": report_hash,
+                    "generated_at": ts,
+                }, default=str, indent=2)
+            return JSONResponse(
+                content=_json.loads(content) if isinstance(content, str) else content,
+                headers={"X-Report-Hash": report_hash},
+            )
+
+        html = render_fn(data, lens_result, report_hash, ts, format)
+        return HTMLResponse(
+            content=html,
+            headers={
+                "X-Report-Hash": report_hash,
+                "Cache-Control": "public, max-age=300",
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        import traceback
+        from starlette.responses import PlainTextResponse
+        return PlainTextResponse(
+            content=traceback.format_exc(),
+            status_code=500,
+            media_type="text/plain",
+        )
 
 
 @app.get("/api/reports/verify/{report_hash}")
