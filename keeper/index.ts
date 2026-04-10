@@ -407,7 +407,35 @@ async function main(): Promise<void> {
 
   const intervalMs = config.pollIntervalSeconds * 1000;
 
-  // Run first cycle immediately, then on schedule
+  // Guard against restart-triggered duplicate cycles.
+  // Query the on-chain stateRootTimestamp to see when the last full cycle completed.
+  // If less than pollIntervalSeconds has elapsed, sleep the remainder.
+  try {
+    const guardOracle = new ethers.Contract(
+      config.chains.base.oracleAddress,
+      ["function stateRootTimestamp() external view returns (uint48)"],
+      providerBase
+    );
+    const lastTs = Number(await guardOracle.stateRootTimestamp());
+    if (lastTs > 0) {
+      const now = Math.floor(Date.now() / 1000);
+      const elapsed = now - lastTs;
+      if (elapsed < config.pollIntervalSeconds) {
+        const waitSec = config.pollIntervalSeconds - elapsed;
+        logger.info("Recent cycle detected on-chain, deferring first run", {
+          lastStateRootAge: elapsed,
+          waitSeconds: waitSec,
+        });
+        await sleep(waitSec * 1000);
+      }
+    }
+  } catch (err) {
+    logger.warn("Startup guard check failed, proceeding immediately", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  // Run first cycle immediately (unless deferred above), then on schedule
   while (true) {
     try {
       await runCycle(config, walletBase, walletArb, providerBase, providerArb);
