@@ -2,3 +2,4 @@ attached_assets/replit_data_provenance.sql
 attached_assets/neon_data_provenance.sql
 attached_assets/*.sql
 __pycache__/
+node_modules/
