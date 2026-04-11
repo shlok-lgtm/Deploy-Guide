@@ -98,6 +98,54 @@ def compute_and_store_daily_rollup(target_date: date = None):
         )
         jsonld_requests = jsonld["c"] if jsonld else 0
 
+        # Report requests
+        report_row = fetch_one(
+            "SELECT COUNT(*) as c FROM api_request_log WHERE timestamp::date = %s "
+            "AND (endpoint LIKE '/api/reports/%%' OR endpoint LIKE '/api/paid/report/%%')", (d,)
+        )
+        report_requests = report_row["c"] if report_row else 0
+
+        # x402 payments
+        try:
+            x402_row = fetch_one(
+                "SELECT COUNT(*) as c, COALESCE(SUM(price_usd), 0) as rev FROM payment_log WHERE timestamp::date = %s", (d,)
+            )
+            x402_payments = x402_row["c"] if x402_row else 0
+            x402_revenue = float(x402_row["rev"]) if x402_row else 0.0
+        except Exception:
+            x402_payments = 0
+            x402_revenue = 0.0
+
+        # State attestations created
+        try:
+            sa_row = fetch_one(
+                "SELECT COUNT(*) as c FROM state_attestations WHERE cycle_timestamp::date = %s", (d,)
+            )
+            state_attestations = sa_row["c"] if sa_row else 0
+        except Exception:
+            state_attestations = 0
+
+        # Report attestations created
+        try:
+            ra_row = fetch_one(
+                "SELECT COUNT(*) as c FROM report_attestations WHERE generated_at::date = %s", (d,)
+            )
+            report_attestations = ra_row["c"] if ra_row else 0
+        except Exception:
+            report_attestations = 0
+
+        # Query language requests
+        query_row = fetch_one(
+            "SELECT COUNT(*) as c FROM api_request_log WHERE timestamp::date = %s AND endpoint = '/api/query'", (d,)
+        )
+        query_requests = query_row["c"] if query_row else 0
+
+        # CQI composition requests
+        cqi_row = fetch_one(
+            "SELECT COUNT(*) as c FROM api_request_log WHERE timestamp::date = %s AND endpoint LIKE '/api/compose/cqi%%'", (d,)
+        )
+        cqi_requests = cqi_row["c"] if cqi_row else 0
+
         # Upsert
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -106,8 +154,11 @@ def compute_and_store_daily_rollup(target_date: date = None):
                         (date, total_api_requests, external_api_requests, internal_api_requests,
                          unique_ips, unique_external_ips, unique_api_keys,
                          mcp_requests, mcp_tool_calls, avg_response_time_ms, error_count,
-                         top_endpoints, top_user_agents, jsonld_requests)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                         top_endpoints, top_user_agents, jsonld_requests,
+                         report_requests, x402_payments, x402_revenue_usd,
+                         state_attestations, report_attestations, query_requests, cqi_requests)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (date) DO UPDATE SET
                         total_api_requests = EXCLUDED.total_api_requests,
                         external_api_requests = EXCLUDED.external_api_requests,
@@ -121,11 +172,20 @@ def compute_and_store_daily_rollup(target_date: date = None):
                         error_count = EXCLUDED.error_count,
                         top_endpoints = EXCLUDED.top_endpoints,
                         top_user_agents = EXCLUDED.top_user_agents,
-                        jsonld_requests = EXCLUDED.jsonld_requests
+                        jsonld_requests = EXCLUDED.jsonld_requests,
+                        report_requests = EXCLUDED.report_requests,
+                        x402_payments = EXCLUDED.x402_payments,
+                        x402_revenue_usd = EXCLUDED.x402_revenue_usd,
+                        state_attestations = EXCLUDED.state_attestations,
+                        report_attestations = EXCLUDED.report_attestations,
+                        query_requests = EXCLUDED.query_requests,
+                        cqi_requests = EXCLUDED.cqi_requests
                 """, (d, total_requests, external_requests, internal_requests,
                       unique_ips, unique_external_ips, unique_api_keys,
                       mcp_requests, mcp_tool_calls, avg_response_time, error_count,
-                      top_endpoints, top_user_agents, jsonld_requests))
+                      top_endpoints, top_user_agents, jsonld_requests,
+                      report_requests, x402_payments, x402_revenue,
+                      state_attestations, report_attestations, query_requests, cqi_requests))
             conn.commit()
 
         logger.info(f"Daily rollup stored for {d}: {total_requests} total, {external_requests} external")

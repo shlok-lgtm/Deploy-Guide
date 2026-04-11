@@ -1426,11 +1426,15 @@ function SeedMetricsPanel() {
           {data && !data.error && (
             <>
               {/* Header cards */}
-              <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+              <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
                 {statCard("External Requests Today", data.realtime?.external_requests_today ?? 0, `${data.realtime?.requests_today ?? 0} total`)}
                 {statCard("Active API Keys (7d)", data.active_api_keys_7d ?? 0)}
                 {statCard("MCP Tool Calls (30d)", data.month_totals?.mcp_tool_calls ?? 0)}
                 {statCard("Channels Live", data.channels_live_count ?? 0, `of ${Object.keys(data.channels || {}).length}`)}
+                {statCard("Reports Generated", data.report_metrics?.total_reports ?? 0, `${data.report_metrics?.reports_today ?? 0} today`)}
+                {statCard("Compliance Reports", data.compliance_metrics?.total_compliance_reports ?? 0, `${data.compliance_metrics?.entities_with_all_3_lenses ?? 0} with all 3 lenses`)}
+                {statCard("x402 Revenue", `$${(data.x402_metrics?.revenue_30d_usd ?? 0).toFixed(2)}`, `${data.x402_metrics?.total_payments ?? 0} payments`)}
+                {statCard("Keeper Cycles (24h)", data.on_chain_metrics?.keeper_cycles_24h ?? 0)}
               </div>
 
               {/* 7-day trend */}
@@ -1554,6 +1558,136 @@ function SeedMetricsPanel() {
 
           {/* Keeper Publishes — expanded */}
           <KeeperMetricsSection keeperPublishes={data.keeper_publishes} />
+
+          {/* Report Activity */}
+          <Section title="REPORT ACTIVITY">
+            <div style={{ padding: "0 10px" }}>
+              {(data.report_metrics?.templates_used || []).length > 0 ? (
+                <>
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ fontFamily: T.mono, fontSize: 10, textTransform: "uppercase", letterSpacing: 1.5, color: T.inkLight, marginBottom: 6 }}>By Template</div>
+                    <table style={{ width: "100%", fontSize: 11, fontFamily: T.mono, borderCollapse: "collapse" }}>
+                      <thead>
+                        <tr style={{ borderBottom: `1px solid ${T.ruleMid}`, fontSize: 10, color: T.inkLight }}>
+                          <th style={{ textAlign: "left", padding: "4px 0" }}>Template</th>
+                          <th style={{ textAlign: "right" }}>Count</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {data.report_metrics.templates_used.map((t, i) => (
+                          <tr key={i} style={{ borderBottom: `1px solid ${T.ruleLight}` }}>
+                            <td style={{ padding: "3px 0" }}>{t.template}</td>
+                            <td style={{ textAlign: "right", fontWeight: 600 }}>{t.c}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  {(data.report_metrics?.lenses_used || []).length > 0 && (
+                    <div>
+                      <div style={{ fontFamily: T.mono, fontSize: 10, textTransform: "uppercase", letterSpacing: 1.5, color: T.inkLight, marginBottom: 6 }}>By Lens</div>
+                      {data.report_metrics.lenses_used.map((l, i) => (
+                        <div key={i} style={{ fontSize: 11, fontFamily: T.mono, padding: "3px 0", borderBottom: `1px solid ${T.ruleLight}` }}>
+                          <strong>{l.lens}</strong> — {l.c} reports
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div style={{ color: T.inkFaint, fontSize: 11 }}>No reports generated yet.</div>
+              )}
+            </div>
+          </Section>
+
+          {/* Compliance Lenses */}
+          <Section title="COMPLIANCE LENSES">
+            <div style={{ padding: "0 10px" }}>
+              <div style={{ fontFamily: T.mono, fontSize: 10, color: T.inkFaint, marginBottom: 10 }}>
+                Basel SCO60 determines 504x capital efficiency difference for bank counterparties.
+                MiCA Article 67 enforcement is live. GENIUS Act registration window open.
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginBottom: 12 }}>
+                {[
+                  { id: "SCO60", label: "Basel SCO60", desc: "Group 1 vs Group 2 classification" },
+                  { id: "MICA67", label: "MiCA Article 67", desc: "EMT/ART reserve requirements" },
+                  { id: "GENIUS", label: "GENIUS Act", desc: "Permitted payment stablecoin" },
+                ].map(lens => {
+                  const lensData = (data.compliance_metrics?.by_lens || []).find(l => l.lens === lens.id);
+                  const count = lensData?.total ?? 0;
+                  const entities = lensData?.unique_entities ?? 0;
+                  const lastGen = lensData?.last_generated;
+                  const ageHours = lastGen ? Math.round((Date.now() - new Date(lastGen).getTime()) / 3600000) : null;
+                  return (
+                    <div key={lens.id} style={{ padding: "10px 12px", border: `1px solid ${T.ruleMid}`, background: T.paperWarm }}>
+                      <div style={{ fontFamily: T.mono, fontSize: 11, fontWeight: 700, marginBottom: 2 }}>{lens.label}</div>
+                      <div style={{ fontFamily: T.mono, fontSize: 9, color: T.inkLight, marginBottom: 6 }}>{lens.desc}</div>
+                      <div style={{ fontFamily: T.mono, fontSize: 18, fontWeight: 700, color: T.ink }}>{count}</div>
+                      <div style={{ fontFamily: T.mono, fontSize: 10, color: T.inkFaint }}>
+                        {entities} entities · {ageHours != null ? `last: ${ageHours}h ago` : "none generated"}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{ fontFamily: T.mono, fontSize: 11, color: T.inkMid, padding: "6px 0", borderTop: `1px solid ${T.ruleLight}` }}>
+                Entities with all 3 lenses: <strong>{data.compliance_metrics?.entities_with_all_3_lenses ?? 0}</strong>
+              </div>
+              {(data.compliance_metrics?.total_compliance_reports ?? 0) === 0 && (
+                <div style={{ color: T.inkFaint, fontSize: 11, fontStyle: "italic", marginTop: 4 }}>
+                  3 lenses shipped (SCO60, MICA67, GENIUS). No compliance reports generated yet.
+                </div>
+              )}
+            </div>
+          </Section>
+
+          {/* x402 Payments */}
+          <Section title="x402 PAYMENTS">
+            <div style={{ padding: "0 10px" }}>
+              <div style={{ display: "flex", gap: 16, marginBottom: 8 }}>
+                <div>
+                  <Lbl>Total Payments</Lbl>
+                  <div style={{ fontFamily: T.mono, fontSize: 18, fontWeight: 700 }}>{data.x402_metrics?.total_payments ?? 0}</div>
+                </div>
+                <div>
+                  <Lbl>Revenue (30d)</Lbl>
+                  <div style={{ fontFamily: T.mono, fontSize: 18, fontWeight: 700, color: "#27ae60" }}>${(data.x402_metrics?.revenue_30d_usd ?? 0).toFixed(4)}</div>
+                </div>
+                <div>
+                  <Lbl>Unique Payers</Lbl>
+                  <div style={{ fontFamily: T.mono, fontSize: 18, fontWeight: 700 }}>{data.x402_metrics?.unique_payers ?? 0}</div>
+                </div>
+              </div>
+              {data.x402_metrics?.total_payments === 0 && (
+                <div style={{ color: T.inkFaint, fontSize: 11, fontStyle: "italic" }}>x402 endpoints live — no agent payments recorded yet.</div>
+              )}
+            </div>
+          </Section>
+
+          {/* Protocol Coverage */}
+          <Section title="PROTOCOL COVERAGE">
+            <div style={{ padding: "0 10px", display: "flex", gap: 24 }}>
+              <div>
+                <Lbl>SII Stablecoins</Lbl>
+                <div style={{ fontFamily: T.mono, fontSize: 22, fontWeight: 700 }}>{data.coverage?.sii_scored ?? 0}</div>
+              </div>
+              <div>
+                <Lbl>PSI Protocols</Lbl>
+                <div style={{ fontFamily: T.mono, fontSize: 22, fontWeight: 700 }}>{data.coverage?.psi_scored ?? 0}</div>
+              </div>
+              <div>
+                <Lbl>CDA Issuers</Lbl>
+                <div style={{ fontFamily: T.mono, fontSize: 22, fontWeight: 700 }}>{data.coverage?.cda_issuers ?? 0}</div>
+              </div>
+              <div>
+                <Lbl>State Domains</Lbl>
+                <div style={{ fontFamily: T.mono, fontSize: 22, fontWeight: 700 }}>{data.attestation_metrics?.domains_active ?? 0}</div>
+                <div style={{ fontFamily: T.mono, fontSize: 10, color: T.inkFaint }}>
+                  {data.attestation_metrics?.latest_state_root_age_hours != null ? `root: ${data.attestation_metrics.latest_state_root_age_hours}h ago` : ""}
+                </div>
+              </div>
+            </div>
+          </Section>
         </>
       )}
     </>

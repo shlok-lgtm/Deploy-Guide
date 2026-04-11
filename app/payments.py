@@ -213,8 +213,21 @@ def create_x402_middleware():
 paid_router = APIRouter(prefix="/api/paid", tags=["paid"])
 
 
+def _log_payment(request: Request, endpoint: str, price_usd: float = 0.001):
+    """Best-effort payment logging — never blocks response."""
+    try:
+        from app.database import execute
+        execute(
+            """INSERT INTO payment_log (endpoint, price_usd, protocol, ip_address)
+               VALUES (%s, %s, 'x402', %s)""",
+            (endpoint, price_usd, request.client.host if request.client else "unknown"),
+        )
+    except Exception:
+        pass
+
+
 @paid_router.get("/sii/rankings")
-async def paid_sii_rankings():
+async def paid_sii_rankings(request: Request):
     """Paid: All stablecoin SII scores."""
     from app.scoring import FORMULA_VERSION
     rows = fetch_all("""
@@ -242,6 +255,7 @@ async def paid_sii_rankings():
             },
             "computed_at": row["computed_at"].isoformat() if row.get("computed_at") else None,
         })
+    _log_payment(request, "/api/paid/sii/rankings", 0.005)
     return {
         "stablecoins": results,
         "count": len(results),
@@ -252,7 +266,7 @@ async def paid_sii_rankings():
 
 
 @paid_router.get("/sii/{coin}")
-async def paid_sii_detail(coin: str):
+async def paid_sii_detail(request: Request, coin: str):
     """Paid: Single stablecoin detail."""
     from app.scoring import SII_V1_WEIGHTS, FORMULA_VERSION
     row = fetch_one("""
@@ -270,6 +284,7 @@ async def paid_sii_detail(coin: str):
         WHERE stablecoin_id = %s AND collected_at > NOW() - INTERVAL '48 hours'
         ORDER BY component_id, collected_at DESC
     """, (coin,))
+    _log_payment(request, f"/api/paid/sii/{coin}", 0.001)
     return {
         "id": row["stablecoin_id"],
         "name": row["name"],
@@ -301,7 +316,7 @@ async def paid_sii_detail(coin: str):
 
 
 @paid_router.get("/psi/scores")
-async def paid_psi_all():
+async def paid_psi_all(request: Request):
     """Paid: All PSI scores."""
     rows = fetch_all("""
         SELECT DISTINCT ON (protocol_slug)
@@ -310,6 +325,7 @@ async def paid_psi_all():
         FROM psi_scores ORDER BY protocol_slug, computed_at DESC
     """)
     from app.index_definitions.psi_v01 import PSI_V01_DEFINITION
+    _log_payment(request, "/api/paid/psi/scores", 0.005)
     return {
         "protocols": [
             {
@@ -329,7 +345,7 @@ async def paid_psi_all():
 
 
 @paid_router.get("/psi/scores/{slug}")
-async def paid_psi_detail(slug: str):
+async def paid_psi_detail(request: Request, slug: str):
     """Paid: Single PSI detail."""
     row = fetch_one("""
         SELECT protocol_slug, protocol_name, overall_score, grade,
@@ -338,6 +354,7 @@ async def paid_psi_detail(slug: str):
     """, (slug,))
     if not row:
         raise HTTPException(status_code=404, detail=f"Protocol '{slug}' not found")
+    _log_payment(request, f"/api/paid/psi/scores/{slug}", 0.001)
     return {
         "protocol_slug": row["protocol_slug"],
         "protocol_name": row["protocol_name"],
@@ -352,18 +369,19 @@ async def paid_psi_detail(slug: str):
 
 
 @paid_router.get("/cqi")
-async def paid_cqi(asset: str = Query(...), protocol: str = Query(...)):
+async def paid_cqi(request: Request, asset: str = Query(...), protocol: str = Query(...)):
     """Paid: CQI score for an asset-in-protocol pair."""
     from app.composition import compute_cqi
     result = compute_cqi(asset, protocol)
     if "error" in result:
         raise HTTPException(status_code=404, detail=result["error"])
     result["tier"] = "paid"
+    _log_payment(request, "/api/paid/cqi", 0.001)
     return result
 
 
 @paid_router.get("/pulse/latest")
-async def paid_pulse():
+async def paid_pulse(request: Request):
     """Paid: Latest daily pulse."""
     row = fetch_one("SELECT * FROM daily_pulses ORDER BY pulse_date DESC LIMIT 1")
     if not row:
@@ -373,6 +391,7 @@ async def paid_pulse():
         summary = json.loads(summary)
     canonical = json.dumps(summary, sort_keys=True, separators=(",", ":"), default=str)
     content_hash = "0x" + hashlib.sha256(canonical.encode()).hexdigest()
+    _log_payment(request, "/api/paid/pulse/latest", 0.002)
     return {
         "pulse_date": row["pulse_date"].isoformat() if hasattr(row["pulse_date"], "isoformat") else str(row["pulse_date"]),
         "summary": summary,
@@ -382,7 +401,7 @@ async def paid_pulse():
 
 
 @paid_router.get("/discovery/latest")
-async def paid_discovery():
+async def paid_discovery(request: Request):
     """Paid: Latest cross-domain discovery signals."""
     rows = fetch_all("""
         SELECT id, signal_type, domain, title, description, entities,
@@ -392,11 +411,12 @@ async def paid_discovery():
         WHERE detected_at >= NOW() - INTERVAL '7 days'
         ORDER BY novelty_score DESC LIMIT 20
     """)
+    _log_payment(request, "/api/paid/discovery/latest", 0.005)
     return {"signals": rows, "count": len(rows), "tier": "paid"}
 
 
 @paid_router.get("/wallets/{address}/profile")
-async def paid_wallet_profile(address: str):
+async def paid_wallet_profile(request: Request, address: str):
     """Paid: Full wallet risk profile with behavioral signals."""
     from app.wallet_profile import generate_wallet_profile
     profile = generate_wallet_profile(address)
@@ -424,11 +444,13 @@ async def paid_wallet_profile(address: str):
         ],
     }
     profile["tier"] = "paid"
+    _log_payment(request, f"/api/paid/wallets/{address}/profile", 0.005)
     return profile
 
 
 @paid_router.get("/report/{entity_type}/{entity_id}")
 async def paid_report(
+    request: Request,
     entity_type: str,
     entity_id: str,
     template: str = "protocol_risk",
@@ -470,6 +492,7 @@ async def paid_report(
     )
 
     import json as _json
+    _log_payment(request, f"/api/paid/report/{entity_type}/{entity_id}", 0.01)
     return {
         "entity_type": entity_type,
         "entity_id": entity_id,

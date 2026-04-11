@@ -1972,14 +1972,89 @@ async def seed_metrics(request: Request):
                ORDER BY lookups DESC LIMIT 15"""
         ) or []
 
+        # Report metrics
+        try:
+            report_total = fetch_one("SELECT COUNT(*) as c FROM report_attestations")
+            reports_today = fetch_one("SELECT COUNT(*) as c FROM report_attestations WHERE generated_at > NOW() - INTERVAL '1 day'")
+            templates_used = fetch_all("SELECT template, COUNT(*) as c FROM report_attestations GROUP BY template ORDER BY c DESC") or []
+            lenses_used = fetch_all("SELECT lens, COUNT(*) as c FROM report_attestations WHERE lens IS NOT NULL AND lens != '' GROUP BY lens ORDER BY c DESC") or []
+        except Exception:
+            report_total = reports_today = None
+            templates_used = lenses_used = []
+
+        # x402 payment metrics
+        try:
+            x402_total = fetch_one("SELECT COUNT(*) as c, COALESCE(SUM(price_usd), 0) as rev FROM payment_log")
+            x402_30d = fetch_one("SELECT COUNT(*) as c, COALESCE(SUM(price_usd), 0) as rev FROM payment_log WHERE timestamp > NOW() - INTERVAL '30 days'")
+            x402_payers = fetch_one("SELECT COUNT(DISTINCT payer_address) as c FROM payment_log WHERE payer_address IS NOT NULL")
+        except Exception:
+            x402_total = x402_30d = x402_payers = None
+
+        # State attestation metrics
+        try:
+            sa_total = fetch_one("SELECT COUNT(*) as c FROM state_attestations")
+            sa_domains = fetch_one("SELECT COUNT(DISTINCT domain) as c FROM state_attestations")
+            latest_root = fetch_one("SELECT MAX(cycle_timestamp) as ts FROM state_attestations WHERE domain = 'state_root'")
+            latest_root_age = None
+            if latest_root and latest_root.get("ts"):
+                ts = latest_root["ts"]
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                latest_root_age = round((datetime.now(timezone.utc) - ts).total_seconds() / 3600, 1)
+        except Exception:
+            sa_total = sa_domains = None
+            latest_root_age = None
+
+        # On-chain / keeper metrics
+        try:
+            keeper_24h = fetch_one("SELECT COUNT(*) as c FROM ops.keeper_cycles WHERE started_at > NOW() - INTERVAL '1 day'")
+        except Exception:
+            keeper_24h = None
+
+        # Coverage counts
+        try:
+            sii_scored = fetch_one("SELECT COUNT(*) as c FROM stablecoins WHERE scoring_enabled = TRUE")
+            psi_scored = fetch_one("SELECT COUNT(DISTINCT protocol_slug) as c FROM psi_scores")
+            cda_issuers = fetch_one("SELECT COUNT(DISTINCT asset_symbol) as c FROM cda_vendor_extractions")
+        except Exception:
+            sii_scored = psi_scored = cda_issuers = None
+
+        # Compliance lens metrics
+        try:
+            compliance_by_lens = fetch_all(
+                """SELECT lens, COUNT(*) as total,
+                          COUNT(DISTINCT entity_id) as unique_entities,
+                          MAX(generated_at) as last_generated
+                   FROM report_attestations
+                   WHERE template = 'compliance' AND lens IS NOT NULL AND lens != ''
+                   GROUP BY lens ORDER BY total DESC"""
+            ) or []
+            compliance_total = fetch_one("SELECT COUNT(*) as c FROM report_attestations WHERE template = 'compliance'")
+            full_coverage = fetch_one(
+                """SELECT COUNT(*) as c FROM (
+                     SELECT entity_id FROM report_attestations
+                     WHERE template = 'compliance' AND lens IN ('SCO60', 'MICA67', 'GENIUS')
+                     GROUP BY entity_id
+                     HAVING COUNT(DISTINCT lens) = 3
+                   ) sub"""
+            )
+        except Exception:
+            compliance_by_lens = []
+            compliance_total = full_coverage = None
+
         # Channels live count
         channels_live = {
-            "api": True,
+            "api_free": True,
+            "api_paid_x402": True,
             "dashboard": True,
             "mcp_server": True,
             "oracle_base": bool(os.environ.get("BASE_ORACLE_ADDRESS")),
             "oracle_arbitrum": bool(os.environ.get("ARBITRUM_ORACLE_ADDRESS")),
+            "sbt_contract": bool(os.environ.get("BASE_SBT_ADDRESS")),
             "assessment_pages": True,
+            "report_templates": True,
+            "state_attestation": True,
+            "compliance_lenses": True,
             "tradingview": True,
             "snap": "audit_queue",
             "safe_guard": "built",
@@ -2007,6 +2082,36 @@ async def seed_metrics(request: Request):
             "top_entities": [dict(r) for r in top_entities],
             "channels": channels_live,
             "channels_live_count": sum(1 for v in channels_live.values() if v is True),
+            "report_metrics": {
+                "total_reports": report_total["c"] if report_total else 0,
+                "reports_today": reports_today["c"] if reports_today else 0,
+                "templates_used": [dict(r) for r in templates_used],
+                "lenses_used": [dict(r) for r in lenses_used],
+            },
+            "compliance_metrics": {
+                "total_compliance_reports": compliance_total["c"] if compliance_total else 0,
+                "by_lens": [dict(r) for r in compliance_by_lens],
+                "entities_with_all_3_lenses": full_coverage["c"] if full_coverage else 0,
+            },
+            "x402_metrics": {
+                "total_payments": x402_total["c"] if x402_total else 0,
+                "total_revenue_usd": float(x402_total["rev"]) if x402_total else 0,
+                "revenue_30d_usd": float(x402_30d["rev"]) if x402_30d else 0,
+                "unique_payers": x402_payers["c"] if x402_payers else 0,
+            },
+            "attestation_metrics": {
+                "total_state_attestations": sa_total["c"] if sa_total else 0,
+                "domains_active": sa_domains["c"] if sa_domains else 0,
+                "latest_state_root_age_hours": latest_root_age,
+            },
+            "on_chain_metrics": {
+                "keeper_cycles_24h": keeper_24h["c"] if keeper_24h else 0,
+            },
+            "coverage": {
+                "sii_scored": sii_scored["c"] if sii_scored else 0,
+                "psi_scored": psi_scored["c"] if psi_scored else 0,
+                "cda_issuers": cda_issuers["c"] if cda_issuers else 0,
+            },
         }
     except Exception as e:
         logger.error(f"Seed metrics computation failed: {e}")

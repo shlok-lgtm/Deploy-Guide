@@ -165,6 +165,39 @@ async def rate_limit_and_track(request: Request, call_next):
                 if len(parts) > 1 and parts[1]:
                     entity_type = "protocol"
                     entity_id = parts[1].split("/")[0].split("?")[0]
+    elif "/api/reports/" in path and "/verify/" not in path and "/templates" not in path and "/recent" not in path and "/lenses" not in path:
+        parts = path.split("/api/reports/")
+        if len(parts) > 1:
+            segments = parts[1].strip("/").split("/")
+            if len(segments) >= 2:
+                entity_type = segments[0]
+                entity_id = segments[1].split("?")[0]
+    elif "/api/paid/report/" in path:
+        parts = path.split("/api/paid/report/")
+        if len(parts) > 1:
+            segments = parts[1].strip("/").split("/")
+            if len(segments) >= 2:
+                entity_type = segments[0]
+                entity_id = segments[1].split("?")[0]
+    elif "/api/paid/sii/" in path:
+        entity_type = "stablecoin"
+        entity_id = path.split("/api/paid/sii/")[-1].split("/")[0].split("?")[0]
+    elif "/api/paid/psi/scores/" in path:
+        entity_type = "protocol"
+        entity_id = path.split("/api/paid/psi/scores/")[-1].split("/")[0].split("?")[0]
+    elif "/api/paid/wallets/" in path:
+        entity_type = "wallet"
+        entity_id = path.split("/api/paid/wallets/")[-1].split("/")[0].split("?")[0][:42]
+    elif path.startswith("/api/compose/cqi"):
+        entity_type = "composition"
+    elif path.startswith("/api/state-root"):
+        entity_type = "state_root"
+    elif path == "/api/query" or path.startswith("/api/query/"):
+        entity_type = "query"
+    elif path.startswith("/api/divergence"):
+        entity_type = "divergence"
+    elif path.startswith("/api/discovery"):
+        entity_type = "discovery"
     elif path.startswith("/mcp"):
         entity_type = "mcp"
 
