@@ -555,7 +555,7 @@ async def collect_treasury_events(
     own_client = client is None
 
     if own_client:
-        client = httpx.AsyncClient()
+        client = httpx.AsyncClient(timeout=30)
 
     try:
         for treasury in treasuries:

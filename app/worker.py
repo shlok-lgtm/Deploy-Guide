@@ -552,7 +552,7 @@ async def run_scoring_cycle():
     logger.info(f"Starting scoring cycle for {len(stablecoins)} stablecoins")
     
     results = []
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=30) as client:
         for sid in stablecoins:
             # For promoted coins (not in hardcoded registry), mark in_progress
             is_promoted = sid not in STABLECOIN_REGISTRY
@@ -561,7 +561,9 @@ async def run_scoring_cycle():
                 if cfg:
                     _mark_scoring_status(cfg["coingecko_id"], "in_progress")
             try:
-                result = await score_stablecoin(client, sid)
+                result = await asyncio.wait_for(
+                    score_stablecoin(client, sid), timeout=120
+                )
                 results.append(result)
                 # After success, mark scored for promoted coins
                 if is_promoted and "score" in result:
@@ -570,6 +572,9 @@ async def run_scoring_cycle():
                         _mark_scoring_status(cfg["coingecko_id"], "scored")
                 # Rate limit: pause between coins
                 await asyncio.sleep(2.0)
+            except asyncio.TimeoutError:
+                logger.warning(f"Timeout scoring {sid} (>120s) — skipping")
+                results.append({"stablecoin": sid, "error": "timeout_120s"})
             except Exception as e:
                 logger.error(f"Failed to score {sid}: {e}")
                 results.append({"stablecoin": sid, "error": str(e)})
@@ -650,13 +655,13 @@ async def run_scoring_cycle():
         if last_cda and last_cda.get("latest"):
             latest = last_cda["latest"]
             if latest.tzinfo is None:
-                latest = latest.replace(tzinfo=timezone)
-            cda_age_hours = (datetime.now(timezone) - latest).total_seconds() / 3600
+                latest = latest.replace(tzinfo=timezone.utc)
+            cda_age_hours = (datetime.now(timezone.utc) - latest).total_seconds() / 3600
 
         if cda_age_hours >= cda_interval_hours:
             logger.info("Running CDA collection pipeline...")
             from app.services.cda_collector import run_collection
-            asyncio.run(run_collection())
+            await run_collection()
             logger.info("CDA collection complete")
         else:
             logger.info(f"CDA collection skipped — last ran {cda_age_hours:.1f}h ago")
@@ -690,15 +695,15 @@ async def run_scoring_cycle():
         if last_expansion_row and last_expansion_row.get("latest"):
             latest = last_expansion_row["latest"]
             if latest.tzinfo is None:
-                latest = latest.replace(tzinfo=timezone)
-            wallet_expansion_age = (datetime.now(timezone) - latest).total_seconds() / 3600
+                latest = latest.replace(tzinfo=timezone.utc)
+            wallet_expansion_age = (datetime.now(timezone.utc) - latest).total_seconds() / 3600
 
         if wallet_expansion_age >= 24:
             # Wallet expansion — seed new addresses from under-covered stablecoins
             try:
                 from app.indexer.expander import run_wallet_expansion
                 logger.info("Running wallet expansion pipeline...")
-                expansion_result = asyncio.run(run_wallet_expansion(max_etherscan_calls=50))
+                expansion_result = await run_wallet_expansion(max_etherscan_calls=50)
                 logger.info(
                     f"Wallet expansion complete: {expansion_result.get('new_wallets_seeded', 0)} seeded, "
                     f"{expansion_result.get('etherscan_calls_used', 0)} Etherscan calls used"
@@ -739,7 +744,7 @@ async def run_scoring_cycle():
     try:
         from app.collectors.treasury_flows import collect_treasury_events
         logger.info("Running treasury flow detection...")
-        treasury_events = asyncio.run(collect_treasury_events())
+        treasury_events = await collect_treasury_events()
         logger.info(f"Treasury flow detection: {len(treasury_events)} events")
     except Exception as e:
         logger.warning(f"Treasury flow detection failed: {e}")
@@ -759,7 +764,7 @@ async def run_scoring_cycle():
                 try:
                     from app.indexer.edges import run_edge_builder
                     logger.info(f"Running edge builder for {edge_chain} (top 200 unbuilt wallets by value)...")
-                    edge_result = asyncio.run(run_edge_builder(max_wallets=200, priority="value", chain=edge_chain))
+                    edge_result = await run_edge_builder(max_wallets=200, priority="value", chain=edge_chain)
                     logger.info(
                         f"Edge builder ({edge_chain}) complete: {edge_result.get('wallets_processed', 0)} wallets, "
                         f"{edge_result.get('total_edges_created', 0)} edges"
@@ -966,16 +971,21 @@ async def main():
     except Exception as e:
         logger.warning(f"Worker startup alert failed: {e}")
 
+    CYCLE_TIMEOUT = 45 * 60  # 45 minutes max per scoring cycle
+
     try:
         if args.coin:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=30) as client:
                 result = await score_stablecoin(client, args.coin)
                 print(result)
         elif args.loop:
             logger.info(f"Starting worker loop (interval: {args.interval} min)")
             gov_cycle_counter = 0
             while True:
-                await run_scoring_cycle()
+                try:
+                    await asyncio.wait_for(run_scoring_cycle(), timeout=CYCLE_TIMEOUT)
+                except asyncio.TimeoutError:
+                    logger.error(f"Scoring cycle exceeded {CYCLE_TIMEOUT}s timeout — aborting cycle")
                 
                 # Run governance crawl every 6 SII cycles (~6 hours)
                 gov_cycle_counter += 1
