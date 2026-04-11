@@ -42,11 +42,15 @@ async function opsFetch(path, opts = {}) {
 // ─── Shared UI ───────────────────────────────────────────────────────
 
 const btn = (extra = {}) => ({
-  fontSize: 10, fontFamily: T.mono, padding: "3px 8px", border: `1px solid ${T.ruleMid}`,
-  background: T.paper, cursor: "pointer", whiteSpace: "nowrap", ...extra,
+  fontFamily: T.mono, fontSize: 10, padding: "4px 12px",
+  border: `1px solid ${T.ruleMid}`, borderRadius: 0,
+  background: T.paper, color: T.ink, cursor: "pointer", whiteSpace: "nowrap",
+  ...extra,
 });
 const btnActive = (extra = {}) => ({
-  ...btn(extra), background: T.ink, color: T.paper, border: `1px solid ${T.ink}`,
+  ...btn(extra),
+  background: T.ink, color: T.paper,
+  border: `1px solid ${T.ink}`,
 });
 
 function StatusDot({ status }) {
@@ -258,16 +262,22 @@ function ContentItem({ item, onDecide, onAnalyze, busy, defaultOpen }) {
 function AuthGate({ onAuth }) {
   const [key, setKey] = useState("");
   return (
-    <div style={{ padding: 40, textAlign: "center", fontFamily: T.sans }}>
-      <h2 style={{ fontFamily: T.mono, marginBottom: 16, fontWeight: 600, fontSize: 16 }}>Basis Operations Hub</h2>
-      <p style={{ color: T.inkLight, fontSize: 13, marginBottom: 16 }}>Enter admin key to access</p>
-      <input type="password" value={key} onChange={(e) => setKey(e.target.value)}
-        onKeyDown={(e) => e.key === "Enter" && onAuth(key)} placeholder="Admin key"
-        style={{ fontFamily: T.mono, fontSize: 13, padding: "8px 12px", border: `1px solid ${T.ruleMid}`, background: T.paper, width: 280, marginRight: 8 }} />
-      <button onClick={() => onAuth(key)}
-        style={{ fontFamily: T.mono, fontSize: 12, padding: "8px 16px", border: `2px solid ${T.ink}`, background: T.ink, color: T.paper, cursor: "pointer" }}>
-        Enter
-      </button>
+    <div style={{ minHeight: "100vh", background: T.paper, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ border: `3px solid ${T.ink}`, boxShadow: `6px 6px 0 0 ${T.ruleMid}`, padding: 40, background: T.paper, textAlign: "center" }}>
+        <h2 style={{ fontFamily: T.sans, fontWeight: 400, fontSize: 20, marginBottom: 8 }}>
+          <span style={{ fontWeight: 700 }}>Operations</span> Hub
+        </h2>
+        <div style={{ fontFamily: T.mono, fontSize: 10, color: T.inkFaint, textTransform: "uppercase", letterSpacing: 2, marginBottom: 24 }}>
+          FORM OPS-001 · BASIS PROTOCOL
+        </div>
+        <input type="password" value={key} onChange={(e) => setKey(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && onAuth(key)} placeholder="Admin key"
+          style={{ fontFamily: T.mono, fontSize: 13, padding: "8px 12px", border: `1px solid ${T.ruleMid}`, background: T.paper, width: 280, marginRight: 8 }} />
+        <button onClick={() => onAuth(key)}
+          style={{ fontFamily: T.mono, fontSize: 12, padding: "8px 16px", border: `2px solid ${T.ink}`, background: T.ink, color: T.paper, cursor: "pointer" }}>
+          Enter
+        </button>
+      </div>
     </div>
   );
 }
@@ -978,7 +988,7 @@ function InfraTab() {
   return (
     <>
       <Section title="KEEPER TRANSACTION HISTORY" actions={
-        <button onClick={load} disabled={loading} style={{ fontSize: 9, fontFamily: T.mono, padding: "2px 6px", border: `1px solid ${T.paper}44`, background: "transparent", color: T.paper, cursor: "pointer", opacity: loading ? 0.5 : 1 }}>
+        <button onClick={load} disabled={loading} style={{ fontSize: 9, fontFamily: T.mono, padding: "2px 6px", border: `1px solid ${T.ruleMid}`, background: T.paper, color: T.inkLight, cursor: "pointer", opacity: loading ? 0.5 : 1 }}>
           {loading ? "Loading..." : "Refresh"}
         </button>
       }>
@@ -1116,21 +1126,73 @@ function InfraTab() {
 
 // ─── Section wrapper ──────────────────────────────────────────────────
 
-function Section({ title, actions, children }) {
-  const [collapsed, setCollapsed] = useState(false);
+function Section({ title, actions, children, defaultOpen = true }) {
+  const [open, setOpen] = useState(defaultOpen);
   return (
-    <div style={{ marginBottom: 16 }}>
+    <div style={{ marginTop: 24, border: `1px solid ${T.ruleMid}` }}>
       <div style={{
+        padding: "10px 20px",
+        borderBottom: open ? `1px solid ${T.ruleLight}` : "none",
         display: "flex", justifyContent: "space-between", alignItems: "center",
-        padding: "6px 10px", background: T.ink, color: T.paper, cursor: "pointer",
-      }} onClick={() => setCollapsed(!collapsed)}>
-        <span style={{ fontFamily: T.mono, fontSize: 12, fontWeight: 600, letterSpacing: 1 }}>
-          {collapsed ? "\u25B6" : "\u25BC"} {title}
+        cursor: "pointer",
+      }} onClick={() => setOpen(!open)}>
+        <span style={{
+          fontFamily: T.mono, fontSize: 10, fontWeight: 600,
+          color: T.inkLight, textTransform: "uppercase", letterSpacing: 1.5,
+        }}>
+          {open ? "\u25BC" : "\u25B6"} {title}
         </span>
         <div style={{ display: "flex", gap: 4 }} onClick={(e) => e.stopPropagation()}>{actions}</div>
       </div>
-      {!collapsed && (
-        <div style={{ border: `1px solid ${T.ruleMid}`, borderTop: "none", padding: "8px 0" }}>{children}</div>
+      {open && (
+        <div style={{ padding: "12px 20px" }}>{children}</div>
+      )}
+    </div>
+  );
+}
+
+// ─── Tab Header (matches explorer) ──────────────────────────────────
+
+function OpsTabHeader({ title, formId, stats, formulaLine, versionLabel, accent }) {
+  return (
+    <div style={{ border: `1.5px solid ${T.ink}`, marginBottom: 0 }}>
+      <div style={{ padding: "18px 24px 0" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <h1 style={{ margin: 0, fontSize: 28, fontFamily: T.sans, color: T.ink, fontWeight: 400, letterSpacing: -0.3 }}>
+            {title}
+          </h1>
+          <span style={{ fontFamily: T.mono, fontSize: 10, color: T.inkFaint, textTransform: "uppercase", letterSpacing: 2 }}>
+            {formId}
+          </span>
+        </div>
+        {stats && stats.length > 0 && (
+          <>
+            <div style={{ height: 1, background: T.ruleMid, margin: "12px 0" }} />
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", paddingBottom: 14 }}>
+              {stats.map((s, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center" }}>
+                  <span style={{ fontFamily: T.mono, fontSize: 10, color: T.inkLight, textTransform: "uppercase", letterSpacing: 1.5, padding: "0 12px" }}>
+                    {s}
+                  </span>
+                  {i < stats.length - 1 && <div style={{ width: 1, height: 12, background: T.ruleMid }} />}
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+      {formulaLine && (
+        <div style={{ borderTop: `1px solid ${T.ruleMid}`, padding: "10px 24px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span style={{ fontFamily: T.mono, fontSize: 11, color: T.ink }}>{formulaLine}</span>
+          {versionLabel && (
+            <span style={{
+              fontFamily: T.mono, fontSize: 10, color: accent === "#e74c3c" ? "#e74c3c" : accent === "#f39c12" ? "#f39c12" : "#27ae60",
+              textTransform: "uppercase", letterSpacing: 1,
+            }}>
+              {versionLabel}
+            </span>
+          )}
+        </div>
       )}
     </div>
   );
@@ -1165,7 +1227,7 @@ function StateGrowthPanel() {
 
   return (
     <Section title="STATE GROWTH" actions={
-      <button onClick={load} disabled={loading} style={{ fontSize: 9, fontFamily: T.mono, padding: "2px 6px", border: `1px solid ${T.paper}44`, background: "transparent", color: T.paper, cursor: "pointer", opacity: loading ? 0.5 : 1 }}>
+      <button onClick={load} disabled={loading} style={{ fontSize: 9, fontFamily: T.mono, padding: "2px 6px", border: `1px solid ${T.ruleMid}`, background: T.paper, color: T.inkLight, cursor: "pointer", opacity: loading ? 0.5 : 1 }}>
         {loading ? "Loading..." : "Refresh"}
       </button>
     }>
@@ -1307,7 +1369,7 @@ function KeeperMetricsSection({ keeperPublishes }) {
 
   return (
     <Section title="ORACLE KEEPER (7d)" actions={
-      <button onClick={loadHistory} disabled={loadingHistory} style={{ fontSize: 9, fontFamily: T.mono, padding: "2px 6px", border: `1px solid ${T.paper}44`, background: "transparent", color: T.paper, cursor: "pointer", opacity: loadingHistory ? 0.5 : 1 }}>
+      <button onClick={loadHistory} disabled={loadingHistory} style={{ fontSize: 9, fontFamily: T.mono, padding: "2px 6px", border: `1px solid ${T.ruleMid}`, background: T.paper, color: T.inkLight, cursor: "pointer", opacity: loadingHistory ? 0.5 : 1 }}>
         {loadingHistory ? "Loading..." : "Refresh"}
       </button>
     }>
@@ -1415,7 +1477,7 @@ function SeedMetricsPanel() {
   return (
     <>
       <Section title="SEED METRICS" actions={
-        <button onClick={load} disabled={loading} style={{ fontSize: 9, fontFamily: T.mono, padding: "2px 6px", border: `1px solid ${T.paper}44`, background: "transparent", color: T.paper, cursor: "pointer", opacity: loading ? 0.5 : 1 }}>
+        <button onClick={load} disabled={loading} style={{ fontSize: 9, fontFamily: T.mono, padding: "2px 6px", border: `1px solid ${T.ruleMid}`, background: T.paper, color: T.inkLight, cursor: "pointer", opacity: loading ? 0.5 : 1 }}>
           {loading ? "Loading..." : "Refresh"}
         </button>
       }>
@@ -2702,7 +2764,7 @@ export default function OpsDashboard() {
   const [feed, setFeed] = useState([]);
   const [contentItems, setContentItems] = useState([]);
   const [keeperStatus, setKeeperStatus] = useState(null);
-  const [tab, setTab] = useState("dashboard");
+  const [tab, setTab] = useState("overview");
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(null); // tracks header button in-flight
@@ -2793,155 +2855,212 @@ export default function OpsDashboard() {
     : "no data";
   const warnings = health.filter((h) => h.status !== "healthy");
 
+  // Compute stats for TabHeader
+  const siiHealth = health.find((h) => h.system === "sii_freshness");
+  const psiHealth = health.find((h) => h.system === "psi_freshness");
+  const keeperHealth = health.find((h) => h.system === "keeper");
+  const siiAge = siiHealth?.details?.age_hours != null ? `${siiHealth.details.age_hours}h` : "?";
+  const psiAge = psiHealth?.details?.age_hours != null ? `${psiHealth.details.age_hours}h` : "?";
+  const keeperAge = keeperHealth?.details?.age_hours != null ? `${keeperHealth.details.age_hours}h` : "?";
+  const downCount = health.filter((h) => h.status === "down").length;
+  const degradedCount = health.filter((h) => h.status === "degraded").length;
+  const statusAccent = downCount > 0 ? "#e74c3c" : degradedCount > 0 ? "#f39c12" : "#27ae60";
+  const statusLabel = warnings.length > 0 ? `${warnings.length} warning(s)` : "All systems operational";
+
   return (
-    <div style={{ minHeight: "100vh", background: T.paper, fontFamily: T.sans }}>
+    <div style={{ minHeight: "100vh", background: T.paper, color: T.ink, fontFamily: T.sans }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
-        * { box-sizing: border-box; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body { background: ${T.paper}; }
+        ::-webkit-scrollbar { width: 5px; }
+        ::-webkit-scrollbar-track { background: ${T.paper}; }
+        ::-webkit-scrollbar-thumb { background: ${T.ruleMid}; border-radius: 3px; }
+        button { font-family: inherit; }
+        button:hover { opacity: 0.88; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
       `}</style>
 
-      <div style={{ maxWidth: 1000, margin: "0 auto", padding: "16px 20px" }}>
-        {/* Header */}
+      <div style={{ maxWidth: 1100, margin: "0 auto", padding: "32px 24px 0" }}>
         <div style={{
-          display: "flex", justifyContent: "space-between", alignItems: "center",
-          marginBottom: 16, borderBottom: `3px solid ${T.ink}`, paddingBottom: 8,
+          border: `3px solid ${T.ink}`,
+          boxShadow: `6px 6px 0 0 ${T.ruleMid}`,
+          background: T.paper,
         }}>
-          <div>
-            <h1 style={{ fontFamily: T.mono, fontSize: 16, fontWeight: 700, letterSpacing: 1 }}>BASIS OPERATIONS HUB</h1>
-            <div style={{ fontFamily: T.mono, fontSize: 10, color: T.inkFaint, marginTop: 2 }}>
+          {/* Tab nav */}
+          <div style={{ padding: "12px 24px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <nav style={{ display: "flex", gap: 16 }}>
+              {[
+                { id: "overview", label: "Overview" },
+                { id: "pipeline", label: "Pipeline" },
+                { id: "metrics", label: "Metrics" },
+                { id: "reports", label: "Reports" },
+                { id: "tools", label: "Tools" },
+              ].map((t) => (
+                <button key={t.id} onClick={() => setTab(t.id)} style={{
+                  padding: "4px 0", border: "none", cursor: "pointer",
+                  fontSize: 12, fontWeight: tab === t.id ? 600 : 400,
+                  fontFamily: T.sans, color: tab === t.id ? T.ink : T.inkLight,
+                  background: "transparent",
+                  borderBottom: tab === t.id ? `2px solid ${T.ink}` : "2px solid transparent",
+                }}>
+                  {t.label}
+                </button>
+              ))}
+            </nav>
+            <a href="/" style={{ fontFamily: T.mono, fontSize: 10, color: T.inkLight, textDecoration: "none" }}>
+              ← Explorer
+            </a>
+          </div>
+
+          <div style={{ borderTop: `1px solid ${T.ruleLight}` }} />
+
+          {error && (
+            <div style={{ padding: "8px 24px", background: "#e74c3c22", borderBottom: "1px solid #e74c3c44", fontSize: 12, color: T.accent }}>
+              {error}
+              <button onClick={() => setError(null)} style={{ marginLeft: 8, border: "none", background: "transparent", cursor: "pointer", fontSize: 14 }}>&times;</button>
+            </div>
+          )}
+          <Flash flash={flash} />
+
+          {/* Content */}
+          <div style={{ padding: "0 24px 24px" }}>
+            <main style={{ animation: "fadeIn 0.3s ease" }}>
+
+              {/* Overview tab (dashboard + infra) */}
+              {tab === "overview" && (
+                <>
+                  <OpsTabHeader
+                    title={<><span style={{ fontWeight: 700 }}>Operations</span> Hub</>}
+                    formId="FORM OPS-001 · BASIS PROTOCOL"
+                    stats={[healthSummary, `SII: ${siiAge}`, `PSI: ${psiAge}`, `KEEPER: ${keeperAge}`]}
+                    formulaLine={`Infrastructure: API + Worker + Keeper · ${health.length} checks`}
+                    versionLabel={statusLabel}
+                    accent={statusAccent}
+                  />
+
+                  <Section title="INFRASTRUCTURE">
+                    <InfraStatusPanel health={health} keeperStatus={keeperStatus} />
+                  </Section>
+
+                  <Section title="ON-CHAIN STATE">
+                    <OnChainStatusPanel keeperStatus={keeperStatus} />
+                  </Section>
+
+                  <Section title="HEALTH" actions={
+                    <button onClick={handleRunHealthCheck} disabled={busy === "health"} style={{ fontSize: 9, fontFamily: T.mono, padding: "2px 6px", border: `1px solid ${T.ruleMid}`, background: T.paper, color: T.inkLight, cursor: "pointer", opacity: busy === "health" ? 0.5 : 1 }}>
+                      {busy === "health" ? "Checking..." : "Run Check"}
+                    </button>
+                  }>
+                    <div style={{ fontSize: 11, fontFamily: T.mono, color: T.inkMid, marginBottom: 8 }}>
+                      {healthSummary}
+                      {warnings.length > 0 && <span style={{ color: "#f39c12" }}> · {warnings.length} warning(s): {warnings.map((w) => w.system).join(", ")}</span>}
+                    </div>
+                    <HealthPanel health={health} />
+                  </Section>
+
+                  <Section title={`ACTION QUEUE (${queue.length} items)`}>
+                    <ActionQueue queue={queue} onDecide={handleDecide} decidingId={decidingId} />
+                  </Section>
+
+                  <StateGrowthPanel />
+
+                  <InfraTab />
+                </>
+              )}
+
+              {/* Pipeline tab (targets + content) */}
+              {tab === "pipeline" && (
+                <>
+                  <OpsTabHeader
+                    title={<><span style={{ fontWeight: 700 }}>Pipeline</span> Tracker</>}
+                    formId="FORM OPS-002 · BASIS PROTOCOL"
+                    stats={[
+                      `T1: ${targets.filter((t) => t.tier === 1).length}`,
+                      `T2: ${targets.filter((t) => t.tier === 2).length}`,
+                      `T3: ${targets.filter((t) => t.tier === 3).length}`,
+                      `Queue: ${queue.length}`,
+                      `Content: ${contentItems.length}`,
+                    ]}
+                    formulaLine="Targets by tier · engagement tracking · content pipeline"
+                    versionLabel={`${targets.length} targets`}
+                    accent={T.ink}
+                  />
+
+                  <Section title="TIER 1 — ACTIVE PURSUIT">
+                    <TargetTracker targets={targets.filter((t) => t.tier === 1)} onUpdate={load} />
+                  </Section>
+                  <Section title="TIER 2 — MONITORING">
+                    <TargetTracker targets={targets.filter((t) => t.tier === 2)} onUpdate={load} />
+                  </Section>
+                  <Section title="TIER 3 — WATCH LIST">
+                    <TargetTracker targets={targets.filter((t) => t.tier === 3)} onUpdate={load} />
+                  </Section>
+
+                  <Section title="CONTENT ITEMS">
+                    {contentItems.length === 0 ? (
+                      <div style={{ color: T.inkFaint, fontSize: 12, lineHeight: 1.6 }}>
+                        No scheduled content items yet.
+                      </div>
+                    ) : (
+                      contentItems.map((item) => (
+                        <div key={item.id} style={{ fontSize: 11, padding: "4px 0", borderBottom: `1px solid ${T.ruleLight}`, display: "flex", gap: 8 }}>
+                          <span style={{ fontFamily: T.mono, fontSize: 10, color: T.inkLight, minWidth: 60 }}>{item.type}</span>
+                          <span style={{ flex: 1 }}>{item.title || "(untitled)"}</span>
+                          <StageBadge stage={item.status} />
+                          {item.scheduled_for && <span style={{ fontSize: 10, color: T.inkFaint }}>{new Date(item.scheduled_for).toLocaleDateString()}</span>}
+                        </div>
+                      ))
+                    )}
+                  </Section>
+                  <Section title="TARGET CONTENT FEED">
+                    <ContentFeed feed={feed} onDecide={handleDecide} onAnalyze={handleFeedAnalyze} busy={busy} />
+                  </Section>
+                </>
+              )}
+
+              {/* Metrics tab */}
+              {tab === "metrics" && <SeedMetricsPanel />}
+
+              {/* Reports tab (reports + matrix) */}
+              {tab === "reports" && (
+                <>
+                  <ReportsPanel />
+                  <CqiMatrixPanel />
+                </>
+              )}
+
+              {/* Tools tab (query + graph + backtest) */}
+              {tab === "tools" && (
+                <>
+                  <OpsTabHeader
+                    title={<><span style={{ fontWeight: 700 }}>Analysis</span> Tools</>}
+                    formId="FORM OPS-005 · BASIS PROTOCOL"
+                    stats={["Query Engine", "Graph Explorer", "Backtest"]}
+                    formulaLine="Query language · wallet graph visualization · historical backtesting"
+                    accent={T.ink}
+                  />
+                  <QueryPanel />
+                  <GraphPanel />
+                  <BacktestPanel />
+                </>
+              )}
+
+            </main>
+          </div>
+
+          {/* Footer */}
+          <div style={{ borderTop: `1px solid ${T.ruleLight}`, padding: "10px 24px", display: "flex", justifyContent: "space-between" }}>
+            <span style={{ fontFamily: T.mono, fontSize: 10, color: T.inkFaint }}>
+              Basis Protocol · Operations Hub
+            </span>
+            <span style={{ fontFamily: T.mono, fontSize: 10, color: T.inkFaint }}>
               {new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
               {loading && " · loading..."}
-            </div>
-          </div>
-          <div style={{ display: "flex", gap: 6 }}>
-            <a href="/" style={{ ...btn(), textDecoration: "none", color: T.ink, display: "flex", alignItems: "center" }}>SII Dashboard</a>
+            </span>
           </div>
         </div>
-
-        {error && (
-          <div style={{ padding: "8px 12px", background: "#e74c3c22", border: "1px solid #e74c3c44", fontSize: 12, marginBottom: 12, color: T.accent }}>
-            {error}
-            <button onClick={() => setError(null)} style={{ marginLeft: 8, border: "none", background: "transparent", cursor: "pointer", fontSize: 14 }}>&times;</button>
-          </div>
-        )}
-        <Flash flash={flash} />
-
-        {/* Tabs */}
-        <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
-          {["dashboard", "infra", "targets", "content", "metrics", "reports", "query", "graph", "backtest", "matrix"].map((tb) => (
-            <button key={tb} onClick={() => setTab(tb)} style={{
-              fontFamily: T.mono, fontSize: 11, padding: "4px 0", border: "none",
-              background: "transparent", cursor: "pointer", fontWeight: tab === tb ? 700 : 400,
-              color: tab === tb ? T.ink : T.inkLight,
-              borderBottom: tab === tb ? `2px solid ${T.ink}` : "2px solid transparent",
-            }}>
-              {tb.charAt(0).toUpperCase() + tb.slice(1)}
-            </button>
-          ))}
-        </div>
-
-        {/* Dashboard tab */}
-        {tab === "dashboard" && (
-          <>
-            <Section title="INFRASTRUCTURE">
-              <div style={{ padding: "0 10px" }}>
-                <InfraStatusPanel health={health} keeperStatus={keeperStatus} />
-              </div>
-            </Section>
-
-            <Section title="ON-CHAIN STATE">
-              <OnChainStatusPanel keeperStatus={keeperStatus} />
-            </Section>
-
-            <Section title="PIPELINE HEALTH" actions={
-              <button onClick={handleRunHealthCheck} disabled={busy === "health"} style={{ fontSize: 9, fontFamily: T.mono, padding: "2px 6px", border: `1px solid ${T.paper}44`, background: "transparent", color: T.paper, cursor: "pointer", opacity: busy === "health" ? 0.5 : 1 }}>
-                {busy === "health" ? "Checking..." : "Run Check"}
-              </button>
-            }>
-              <div style={{ padding: "0 10px" }}>
-                <div style={{ fontSize: 11, fontFamily: T.mono, color: T.inkMid, marginBottom: 8 }}>
-                  {healthSummary}
-                  {warnings.length > 0 && <span style={{ color: "#f39c12" }}> · {warnings.length} warning(s): {warnings.map((w) => w.system).join(", ")}</span>}
-                </div>
-                <HealthPanel health={health} />
-              </div>
-            </Section>
-
-            <Section title={`ACTION QUEUE (${queue.length} items)`}>
-              <ActionQueue queue={queue} onDecide={handleDecide} decidingId={decidingId} />
-            </Section>
-
-            <StateGrowthPanel />
-          </>
-        )}
-
-        {/* Infra tab */}
-        {tab === "infra" && <InfraTab />}
-
-        {/* Targets tab */}
-        {tab === "targets" && (
-          <>
-            <Section title="TIER 1 — ACTIVE PURSUIT">
-              <TargetTracker targets={targets.filter((t) => t.tier === 1)} onUpdate={load} />
-            </Section>
-            <Section title="TIER 2 — MONITORING">
-              <TargetTracker targets={targets.filter((t) => t.tier === 2)} onUpdate={load} />
-            </Section>
-            <Section title="TIER 3 — WATCH LIST">
-              <TargetTracker targets={targets.filter((t) => t.tier === 3)} onUpdate={load} />
-            </Section>
-          </>
-        )}
-
-
-
-        {/* Content tab */}
-        {tab === "content" && (
-          <>
-            <Section title="CONTENT ITEMS">
-              <div style={{ padding: "0 10px" }}>
-                {contentItems.length === 0 ? (
-                  <div style={{ color: T.inkFaint, fontSize: 12, lineHeight: 1.6 }}>
-                    No scheduled content items yet. Content items track planned posts —
-                    forum comments, tweets, governance posts. Use the Signals tab to draft content,
-                    or create items via the API (<code style={{ fontFamily: T.mono, fontSize: 10 }}>POST /api/ops/content/items</code>).
-                  </div>
-                ) : (
-                  contentItems.map((item) => (
-                    <div key={item.id} style={{ fontSize: 11, padding: "4px 0", borderBottom: `1px solid ${T.ruleLight}`, display: "flex", gap: 8 }}>
-                      <span style={{ fontFamily: T.mono, fontSize: 10, color: T.inkLight, minWidth: 60 }}>{item.type}</span>
-                      <span style={{ flex: 1 }}>{item.title || "(untitled)"}</span>
-                      <StageBadge stage={item.status} />
-                      {item.scheduled_for && <span style={{ fontSize: 10, color: T.inkFaint }}>{new Date(item.scheduled_for).toLocaleDateString()}</span>}
-                    </div>
-                  ))
-                )}
-              </div>
-            </Section>
-            <Section title="TARGET CONTENT FEED">
-              <div style={{ padding: "0 10px" }}><ContentFeed feed={feed} onDecide={handleDecide} onAnalyze={handleFeedAnalyze} busy={busy} /></div>
-            </Section>
-          </>
-        )}
-
-
-
-
-
-        {/* Metrics tab */}
-        {tab === "metrics" && <SeedMetricsPanel />}
-
-        {tab === "reports" && <ReportsPanel />}
-
-        {tab === "query" && <QueryPanel />}
-        {tab === "graph" && <GraphPanel />}
-        {tab === "backtest" && <BacktestPanel />}
-        {tab === "matrix" && <CqiMatrixPanel />}
-
-        <div style={{ fontFamily: T.mono, fontSize: 10, color: T.inkFaint, textAlign: "center", marginTop: 24, paddingBottom: 16 }}>
-          Basis Protocol · Operations Hub · Internal Use Only
-        </div>
+        <div style={{ height: 32 }} />
       </div>
     </div>
   );
