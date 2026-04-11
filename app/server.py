@@ -123,7 +123,14 @@ async def rate_limit_and_track(request: Request, call_next):
         if api_key_id:
             break
 
-    ip = request.client.host if request.client else "unknown"
+    # Resolve real client IP — prefer X-Forwarded-For over direct connection
+    # (GCP/Railway/Replit proxies set the direct connection to their own IPs like 35.191.*)
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    if forwarded_for:
+        # X-Forwarded-For: client, proxy1, proxy2 — first value is the real client
+        ip = forwarded_for.split(",")[0].strip()
+    else:
+        ip = request.client.host if request.client else "unknown"
     ua = request.headers.get("user-agent", "")[:500]
     accept_header = request.headers.get("accept", "")[:255]
     referer = request.headers.get("referer", "")[:500]
@@ -135,10 +142,14 @@ async def rate_limit_and_track(request: Request, call_next):
         "basis-worker",        # Background worker
         "uvicorn",             # Internal health checks
         "headlesschrome",      # Replit internal rendering
+        "claudebot",           # Anthropic web crawler
+        "python-requests",     # Internal Python HTTP calls
+        "replit",              # Replit internal traffic
     ]
     INTERNAL_IP_PREFIXES = [
         "35.191.",             # GCP load balancer (Replit proxy)
         "10.81.",              # Replit internal network
+        "10.",                 # Any private 10.x.x.x network
         "127.0.0.",            # Localhost
     ]
     is_internal = (

@@ -3068,6 +3068,11 @@ export default function OpsDashboard() {
         <div style={{ fontFamily: T.mono, fontSize: 10, color: T.inkFaint, textAlign: "center", marginTop: 24, paddingBottom: 16 }}>
           Basis Protocol · Operations Hub · Internal Use Only
         </div>
+        <div style={{ fontFamily: T.mono, fontSize: 9, color: T.inkFaint, textAlign: "center", paddingBottom: 16, lineHeight: 1.6 }}>
+          Plausible: To exclude your traffic, install the{" "}
+          <a href="https://plausible.io/docs/excluding" style={{ color: T.inkLight }} target="_blank" rel="noopener">Plausible exclusion extension</a>,
+          {" "}or run in console: <code style={{ fontSize: 8, background: T.paperWarm, padding: "1px 3px" }}>localStorage.setItem('plausible_ignore','true')</code>
+        </div>
       </div>
     </div>
   );

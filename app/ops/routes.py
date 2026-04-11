@@ -2514,6 +2514,48 @@ async def run_migration_049(request: Request):
         return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
+@router.post("/fix-internal-traffic")
+async def fix_internal_traffic(request: Request):
+    """One-time fix: reclassify historical internal traffic in api_request_log."""
+    _check_admin_key(request)
+    try:
+        from app.database import get_cursor
+        results = {}
+        with get_cursor() as cur:
+            cur.execute("UPDATE api_request_log SET is_internal = TRUE WHERE user_agent ILIKE '%ClaudeBot%' AND is_internal = FALSE")
+            results["claudebot"] = cur.rowcount
+            cur.execute("UPDATE api_request_log SET is_internal = TRUE WHERE user_agent ILIKE '%python-requests%' AND is_internal = FALSE")
+            results["python_requests"] = cur.rowcount
+            cur.execute("UPDATE api_request_log SET is_internal = TRUE WHERE user_agent ILIKE '%httpx%' AND is_internal = FALSE")
+            results["httpx"] = cur.rowcount
+            cur.execute("UPDATE api_request_log SET is_internal = TRUE WHERE ip_address LIKE '127.0.0.%%' AND is_internal = FALSE")
+            results["localhost"] = cur.rowcount
+
+        # Query current state
+        summary = fetch_all(
+            """SELECT is_internal, COUNT(*) as requests, COUNT(DISTINCT ip_address) as unique_ips
+               FROM api_request_log WHERE timestamp > NOW() - INTERVAL '24 hours'
+               GROUP BY is_internal"""
+        )
+        top_external = fetch_all(
+            """SELECT ip_address, LEFT(user_agent, 80) as ua, COUNT(*) as c
+               FROM api_request_log
+               WHERE timestamp > NOW() - INTERVAL '24 hours' AND is_internal = FALSE
+               GROUP BY ip_address, LEFT(user_agent, 80)
+               ORDER BY c DESC LIMIT 10"""
+        )
+        return {
+            "status": "ok",
+            "rows_reclassified": results,
+            "last_24h_summary": [dict(r) for r in summary],
+            "top_external_24h": [dict(r) for r in top_external],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
+
+
 def register_ops_routes(app):
     """Register the ops router with the main FastAPI app."""
     app.include_router(router)
