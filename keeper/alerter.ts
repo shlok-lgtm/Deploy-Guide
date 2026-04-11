@@ -1,16 +1,45 @@
 import { logger } from "./logger.js";
 
 export async function sendAlert(message: string, error?: unknown): Promise<void> {
-  const webhookUrl = process.env["SLACK_WEBHOOK_URL"] ?? process.env["DISCORD_WEBHOOK_URL"];
-
   const errorStr = error instanceof Error
     ? error.message
     : error != null
     ? String(error)
     : undefined;
 
+  const fullMessage = `${message}${errorStr ? `\n${errorStr}` : ""}`;
   logger.error("ALERT: " + message, errorStr ? { error: errorStr } : undefined);
 
+  // Email via Resend
+  const resendKey = process.env["RESEND_API_KEY"];
+  if (resendKey) {
+    const alertEmail = process.env["ALERT_EMAIL"] ?? "shlok@basisprotocol.xyz";
+    try {
+      const res = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${resendKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          from: "alerts@basisprotocol.xyz",
+          to: [alertEmail],
+          subject: "Basis Keeper Alert",
+          text: fullMessage,
+        }),
+      });
+      if (!res.ok) {
+        logger.warn("Resend email delivery failed", { status: res.status });
+      }
+    } catch (err) {
+      logger.warn("Failed to send Resend email alert", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  // Webhook (Slack/Discord)
+  const webhookUrl = process.env["SLACK_WEBHOOK_URL"] ?? process.env["DISCORD_WEBHOOK_URL"];
   if (!webhookUrl) return;
 
   try {

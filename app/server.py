@@ -495,6 +495,13 @@ async def startup():
     _register_spa_catch_all(app)
     logger.info("Basis Protocol API started")
 
+    # Startup notification — catches restart loops
+    try:
+        from app.ops.tools.alerter import send_alert
+        await send_alert("service_restart", "API server started.")
+    except Exception:
+        pass
+
 
 async def _run_mcp_session_manager(session_manager):
     """Keep the MCP session manager running via its public run() context manager."""

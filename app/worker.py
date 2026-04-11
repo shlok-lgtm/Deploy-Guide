@@ -25,7 +25,7 @@ import httpx
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.config import STABLECOIN_REGISTRY, COLLECTION_INTERVAL_MINUTES
-from app.database import init_pool, close_pool, get_cursor, fetch_one, fetch_all
+from app.database import init_pool, close_pool, get_cursor, fetch_one, fetch_all, execute
 from app.scoring import (
     calculate_sii, calculate_structural_composite, score_to_grade,
     aggregate_legacy_to_v1, FORMULA_VERSION, SII_V1_WEIGHTS,
@@ -796,9 +796,7 @@ async def run_scoring_cycle():
         if failures:
             try:
                 from app.ops.tools.alerter import check_and_alert_health
-                _aloop = asyncio.new_event_loop()
-                _aloop.run_until_complete(check_and_alert_health(health_results))
-                _aloop.close()
+                await check_and_alert_health(health_results)
                 logger.info(f"Health alerts dispatched for {len(failures)} failing system(s)")
             except Exception as alert_err:
                 logger.warning(f"Health alert dispatch failed: {alert_err}")
@@ -842,6 +840,85 @@ async def run_scoring_cycle():
     except Exception as e:
         logger.debug(f"Provenance attestation skipped: {e}")
 
+    # -------------------------------------------------------------------------
+    # Daily digest — send operational summary once per 24h
+    # -------------------------------------------------------------------------
+    try:
+        last_digest = fetch_one(
+            "SELECT MAX(sent_at) AS latest FROM ops_alert_log WHERE alert_type = 'daily_digest'"
+        )
+        digest_age_hours = 25  # default: run if no prior record
+        if last_digest and last_digest.get("latest"):
+            latest = last_digest["latest"]
+            if latest.tzinfo is None:
+                latest = latest.replace(tzinfo=timezone.utc)
+            digest_age_hours = (datetime.now(timezone.utc) - latest).total_seconds() / 3600
+
+        if digest_age_hours >= 24:
+            logger.info("Assembling daily digest...")
+            from app.ops.tools.health_checker import get_latest_health
+            health = get_latest_health()
+            healthy_cnt = sum(1 for r in health if r.get("status") == "healthy")
+            total_cnt = len(health)
+            failing = [r for r in health if r.get("status") in ("degraded", "down")]
+
+            # SII freshness
+            sii_row = fetch_one("SELECT COUNT(*) as cnt, MAX(calculated_at) as latest FROM scores")
+            sii_count = sii_row["cnt"] if sii_row else 0
+            sii_age = "?"
+            if sii_row and sii_row.get("latest"):
+                _sii_ts = sii_row["latest"]
+                if _sii_ts.tzinfo is None:
+                    _sii_ts = _sii_ts.replace(tzinfo=timezone.utc)
+                sii_age = f"{(datetime.now(timezone.utc) - _sii_ts).total_seconds() / 3600:.1f}"
+
+            # PSI freshness
+            psi_row = fetch_one("SELECT COUNT(*) as cnt, MAX(scored_at) as latest FROM psi_scores")
+            psi_count = psi_row["cnt"] if psi_row else 0
+            psi_age = "?"
+            if psi_row and psi_row.get("latest"):
+                _psi_ts = psi_row["latest"]
+                if _psi_ts.tzinfo is None:
+                    _psi_ts = _psi_ts.replace(tzinfo=timezone.utc)
+                psi_age = f"{(datetime.now(timezone.utc) - _psi_ts).total_seconds() / 3600:.1f}"
+
+            # DB connections
+            db_conns = fetch_one("SELECT count(*) as cnt FROM pg_stat_activity WHERE datname = current_database()")
+            conn_count = db_conns["cnt"] if db_conns else "?"
+
+            # Keeper cycles in last 24h (if table exists)
+            keeper_info = "N/A"
+            try:
+                kc = fetch_one("SELECT COUNT(*) as cnt FROM ops.keeper_cycles WHERE started_at > NOW() - INTERVAL '24 hours'")
+                if kc:
+                    keeper_info = f"{kc['cnt']} cycles in 24h"
+            except Exception:
+                pass
+
+            failures_summary = ""
+            if failing:
+                failures_summary = "\nFailing systems:\n" + "\n".join(
+                    f"  - {f['system']}: {f.get('status', '?')}" for f in failing
+                )
+
+            msg = (
+                f"Basis Daily Digest\n\n"
+                f"Systems: {healthy_cnt}/{total_cnt} healthy\n"
+                f"SII: {sii_count} coins scored, last: {sii_age}h ago\n"
+                f"PSI: {psi_count} protocols scored, last: {psi_age}h ago\n"
+                f"Keeper: {keeper_info}\n"
+                f"DB: {conn_count} active connections\n"
+                f"{failures_summary if failing else 'All systems operational.'}"
+            )
+
+            from app.ops.tools.alerter import send_alert as _send_digest
+            await _send_digest("daily_digest", msg)
+            logger.info("Daily digest sent")
+        else:
+            logger.debug(f"Daily digest skipped — last sent {digest_age_hours:.1f}h ago")
+    except Exception as e:
+        logger.warning(f"Daily digest failed: {e}")
+
     return {
         "results": results,
         "successes": successes,
@@ -863,7 +940,32 @@ async def main():
     args = parser.parse_args()
     
     init_pool()
-    
+
+    # Seed email alert channel if not configured
+    try:
+        existing = fetch_one("SELECT id FROM ops_alert_config WHERE channel = 'email'")
+        if not existing:
+            execute(
+                "INSERT INTO ops_alert_config (channel, config, alert_types, enabled) VALUES (%s, %s, %s, TRUE)",
+                ("email", "{}",
+                 ["health_failure", "engagement_response", "state_growth", "daily_digest", "service_restart"]),
+            )
+            logger.info("Email alert channel seeded in ops_alert_config")
+        else:
+            execute(
+                "UPDATE ops_alert_config SET alert_types = %s, enabled = TRUE WHERE channel = 'email'",
+                (["health_failure", "engagement_response", "state_growth", "daily_digest", "service_restart"],),
+            )
+    except Exception as e:
+        logger.warning(f"Alert config seed skipped: {e}")
+
+    # Startup notification — catches restart loops
+    try:
+        from app.ops.tools.alerter import send_alert
+        await send_alert("service_restart", "Worker started. Beginning first cycle.")
+    except Exception as e:
+        logger.warning(f"Worker startup alert failed: {e}")
+
     try:
         if args.coin:
             async with httpx.AsyncClient() as client:

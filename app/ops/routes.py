@@ -2013,6 +2013,72 @@ async def seed_metrics(request: Request):
         return {"error": str(e)}
 
 
+# =============================================================================
+# Keeper cycle logging — internal endpoints (no auth, called by keeper service)
+# =============================================================================
+
+@router.post("/keeper-cycle/start")
+async def keeper_cycle_start(request: Request):
+    """Record the start of a keeper cycle. Returns the cycle ID."""
+    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    trigger = body.get("trigger_reason", "scheduled")
+    try:
+        row = fetch_one(
+            "INSERT INTO ops.keeper_cycles (trigger_reason) VALUES (%s) RETURNING id, started_at",
+            (trigger,),
+        )
+        return {"id": row["id"], "started_at": row["started_at"].isoformat()}
+    except Exception as e:
+        logger.warning(f"keeper_cycle_start failed: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.post("/keeper-cycle/{cycle_id}/complete")
+async def keeper_cycle_complete(cycle_id: int, request: Request):
+    """Record the completion of a keeper cycle with results."""
+    body = await request.json()
+    try:
+        execute(
+            """UPDATE ops.keeper_cycles SET
+                completed_at = NOW(),
+                duration_ms = %s,
+                sii_updates_base = %s,
+                sii_updates_arb = %s,
+                psi_updates = %s,
+                report_hashes_published = %s,
+                state_root_published = %s,
+                errors = %s
+            WHERE id = %s""",
+            (
+                body.get("duration_ms"),
+                body.get("sii_updates_base", 0),
+                body.get("sii_updates_arb", 0),
+                body.get("psi_updates", 0),
+                body.get("report_hashes_published", 0),
+                body.get("state_root_published", False),
+                body.get("errors"),
+                cycle_id,
+            ),
+        )
+        return {"ok": True}
+    except Exception as e:
+        logger.warning(f"keeper_cycle_complete failed: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.get("/keeper-cycles")
+async def keeper_cycles_list():
+    """Return last 24h of keeper cycles (for daily digest)."""
+    try:
+        rows = fetch_all(
+            "SELECT * FROM ops.keeper_cycles WHERE started_at > NOW() - INTERVAL '24 hours' ORDER BY started_at DESC"
+        )
+        return {"cycles": [dict(r) for r in (rows or [])]}
+    except Exception as e:
+        logger.warning(f"keeper_cycles_list failed: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 def register_ops_routes(app):
     """Register the ops router with the main FastAPI app."""
     app.include_router(router)

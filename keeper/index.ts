@@ -405,6 +405,11 @@ async function main(): Promise<void> {
 
   logger.info("Keeper wallet address", { address: walletBase.address });
 
+  // Startup notification — catches restart loops
+  await sendAlert(
+    `Keeper started. Interval: ${config.pollIntervalSeconds}s. Wallet: ${walletBase.address}`
+  );
+
   const intervalMs = config.pollIntervalSeconds * 1000;
 
   // Guard against restart-triggered duplicate cycles.
@@ -435,15 +440,86 @@ async function main(): Promise<void> {
     });
   }
 
+  // Check wallet balance and alert if low
+  async function checkWalletBalance(): Promise<void> {
+    try {
+      const [balBase, balArb] = await Promise.all([
+        providerBase.getBalance(walletBase.address),
+        providerArb.getBalance(walletArb.address),
+      ]);
+      const ethBase = Number(ethers.formatEther(balBase));
+      const ethArb = Number(ethers.formatEther(balArb));
+      logger.info("Wallet balances", { base: ethBase.toFixed(6), arbitrum: ethArb.toFixed(6) });
+      if (ethBase < 0.005) {
+        await sendAlert(`Keeper wallet balance LOW: ${ethBase.toFixed(6)} ETH on Base`);
+      }
+      if (ethArb < 0.005) {
+        await sendAlert(`Keeper wallet balance LOW: ${ethArb.toFixed(6)} ETH on Arbitrum`);
+      }
+    } catch (err) {
+      logger.warn("Wallet balance check failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  // Check balance at startup
+  await checkWalletBalance();
+
+  // Log keeper cycle to the hub API for observability
+  async function logCycleStart(trigger: string): Promise<number | null> {
+    try {
+      const res = await fetch(`${config.apiUrl}/api/ops/keeper-cycle/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ trigger_reason: trigger }),
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (res.ok) {
+        const data = await res.json() as { id: number };
+        return data.id;
+      }
+    } catch {
+      // Non-blocking — cycle logging is best-effort
+    }
+    return null;
+  }
+
+  async function logCycleComplete(cycleId: number, durationMs: number, errors: string[]): Promise<void> {
+    try {
+      await fetch(`${config.apiUrl}/api/ops/keeper-cycle/${cycleId}/complete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ duration_ms: durationMs, errors: errors.length > 0 ? errors : null }),
+        signal: AbortSignal.timeout(5_000),
+      });
+    } catch {
+      // Non-blocking
+    }
+  }
+
   // Run first cycle immediately (unless deferred above), then on schedule
   while (true) {
+    const cycleStartMs = Date.now();
+    const cycleId = await logCycleStart("scheduled");
+    const cycleErrors: string[] = [];
+
     try {
       await runCycle(config, walletBase, walletArb, providerBase, providerArb);
     } catch (err) {
       const msg = `Unhandled error in keeper cycle`;
-      logger.error(msg, { error: err instanceof Error ? err.message : String(err) });
+      const errStr = err instanceof Error ? err.message : String(err);
+      logger.error(msg, { error: errStr });
+      cycleErrors.push(errStr);
       await sendAlert(msg, err);
     }
+
+    if (cycleId != null) {
+      await logCycleComplete(cycleId, Date.now() - cycleStartMs, cycleErrors);
+    }
+
+    // Check balance after each cycle
+    await checkWalletBalance();
 
     logger.info(`Sleeping ${config.pollIntervalSeconds}s until next cycle`);
     await sleep(intervalMs);

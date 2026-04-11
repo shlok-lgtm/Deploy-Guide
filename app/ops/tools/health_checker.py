@@ -187,12 +187,11 @@ def check_graph_freshness():
 
 
 def check_api_health():
-    """Check API responsiveness via localhost (avoids proxy round-trip)."""
-    _port = os.environ.get("PORT", os.environ.get("API_PORT", "5000"))
-    _local_url = f"http://127.0.0.1:{_port}/api/health"
+    """Check API responsiveness via public URL."""
+    url = f"{_PUBLIC_BASE}/api/health"
     start = time.time()
     try:
-        resp = httpx.get(_local_url, timeout=10)
+        resp = httpx.get(url, timeout=10)
         latency_ms = round((time.time() - start) * 1000)
         status = "healthy" if resp.status_code == 200 and latency_ms < 2000 else "degraded"
         return {
@@ -348,6 +347,78 @@ def check_treasury_freshness():
     }
 
 
+def check_keeper_freshness():
+    """Check if keeper is publishing on-chain by querying ops.keeper_cycles."""
+    row = _safe_fetch_one(
+        "SELECT MAX(completed_at) as latest FROM ops.keeper_cycles WHERE completed_at IS NOT NULL"
+    )
+    if row is None:
+        # Table doesn't exist yet — not a failure
+        return {"system": "keeper", "status": "healthy", "details": {"note": "keeper_cycles table not yet created"}}
+
+    latest = row.get("latest")
+    if not latest:
+        return {"system": "keeper", "status": "healthy", "details": {"note": "no completed cycles recorded"}}
+
+    age = _age_hours(latest)
+    status = "healthy" if age < 2 else ("degraded" if age < 4 else "down")
+    return {
+        "system": "keeper",
+        "status": status,
+        "details": {"last_completed": latest.isoformat(), "age_hours": round(age, 1)},
+    }
+
+
+def check_report_endpoints():
+    """Smoke test report endpoints return 200."""
+    url = f"{_PUBLIC_BASE}/api/reports/stablecoin/usdc?template=sbt_metadata"
+    try:
+        resp = httpx.get(url, timeout=10)
+        status = "healthy" if resp.status_code == 200 else "down"
+        return {
+            "system": "report_endpoints",
+            "status": status,
+            "details": {"status_code": resp.status_code, "url": url},
+        }
+    except Exception as e:
+        return {"system": "report_endpoints", "status": "down", "details": {"error": str(e)}}
+
+
+def check_stablecoin_coverage():
+    """Verify scored stablecoins match expected count."""
+    EXPECTED_COUNT = 36
+    row = _safe_fetch_one(
+        "SELECT COUNT(*) as cnt FROM stablecoins WHERE scoring_enabled = TRUE"
+    )
+    if row is None:
+        return {"system": "stablecoin_coverage", "status": "down", "details": {"error": "query_failed"}}
+
+    actual = row.get("cnt", 0)
+    status = "healthy" if actual == EXPECTED_COUNT else "degraded"
+    return {
+        "system": "stablecoin_coverage",
+        "status": status,
+        "details": {"expected": EXPECTED_COUNT, "actual": actual},
+    }
+
+
+def check_db_connections():
+    """Check database connection pool utilization."""
+    row = _safe_fetch_one(
+        "SELECT count(*) as cnt FROM pg_stat_activity WHERE datname = current_database()"
+    )
+    if row is None:
+        return {"system": "db_connections", "status": "down", "details": {"error": "query_failed"}}
+
+    count = row.get("cnt", 0)
+    status = "healthy" if count < 20 else ("degraded" if count < 40 else "down")
+    return {
+        "system": "db_connections",
+        "status": status,
+        "details": {"active_connections": count},
+    }
+
+
 ALL_CHECKS = [
     check_sii_freshness,
     check_psi_freshness,
@@ -360,6 +431,10 @@ ALL_CHECKS = [
     check_coingecko_usage,
     check_integrity,
     check_treasury_freshness,
+    check_keeper_freshness,
+    check_report_endpoints,
+    check_stablecoin_coverage,
+    check_db_connections,
 ]
 
 
