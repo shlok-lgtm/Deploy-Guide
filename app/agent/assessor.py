@@ -27,13 +27,12 @@ def _keccak256_hex(data: bytes) -> str:
 def _get_sii_scores() -> dict:
     """Fetch current SII scores for all stablecoins, keyed by symbol."""
     rows = fetch_all(
-        "SELECT stablecoin_id, overall_score, grade FROM scores"
+        "SELECT stablecoin_id, overall_score FROM scores"
     )
     result = {}
     for r in rows:
         result[r["stablecoin_id"]] = {
             "score": r["overall_score"],
-            "grade": r["grade"],
         }
     return result
 
@@ -54,7 +53,7 @@ def _get_sii_7d_deltas() -> dict:
 def _get_wallet_holdings(wallet_address: str) -> list[dict]:
     """Fetch current holdings for a wallet from wallet_graph."""
     rows = fetch_all("""
-        SELECT symbol, value_usd, is_scored, sii_score, sii_grade, pct_of_wallet
+        SELECT symbol, value_usd, is_scored, sii_score, pct_of_wallet
         FROM wallet_graph.wallet_holdings
         WHERE wallet_address = %s
         AND indexed_at = (
@@ -68,7 +67,7 @@ def _get_wallet_holdings(wallet_address: str) -> list[dict]:
 def _get_previous_assessment(wallet_address: str) -> dict | None:
     """Get the most recent assessment for a wallet."""
     row = fetch_one("""
-        SELECT wallet_risk_score, wallet_risk_grade, concentration_hhi,
+        SELECT wallet_risk_score, concentration_hhi,
                coverage_ratio, total_stablecoin_value, holdings_snapshot
         FROM assessment_events
         WHERE wallet_address = %s
@@ -123,7 +122,6 @@ def generate_assessment(
             "value_usd": float(round(h.get("value_usd", 0) or 0, 2)),
             "pct_of_wallet": float(h.get("pct_of_wallet", 0) or 0),
             "sii_score": float(raw_score) if raw_score is not None else None,
-            "sii_grade": sii.get("grade"),
             "sii_7d_delta": float(deltas.get(symbol, 0)),
         })
 
@@ -150,7 +148,6 @@ def generate_assessment(
         "trigger_type": trigger_type,
         "trigger_detail": trigger_detail,
         "wallet_risk_score": current_risk.get("risk_score"),
-        "wallet_risk_grade": current_risk.get("risk_grade"),
         "wallet_risk_score_prev": prev_score,
         "concentration_hhi": current_risk.get("concentration_hhi"),
         "concentration_hhi_prev": prev_hhi,

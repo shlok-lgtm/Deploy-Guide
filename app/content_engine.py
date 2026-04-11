@@ -365,8 +365,7 @@ async def generate_draft(opportunity: ContentOpportunity) -> str:
     sii_context = ""
     for coin, data in opportunity.sii_data.items():
         score = data.get("sii_score", data.get("score", "?"))
-        grade = data.get("grade", "?")
-        sii_context += f"\n- {coin.upper()}: SII {score} (Grade {grade})"
+        sii_context += f"\n- {coin.upper()}: SII {score}"
         cats = data.get("categories", data.get("category_scores", {}))
         if cats:
             for cat_name, cat_val in cats.items():
@@ -451,8 +450,7 @@ def _generate_draft_template(opp: ContentOpportunity) -> str:
     tweet_num = 2
     for coin, data in opp.sii_data.items():
         score = data.get("sii_score", data.get("score", "?"))
-        grade = data.get("grade", "?")
-        lines.append(f"{tweet_num}/ {coin.upper()}: SII Score {score} (Grade {grade})")
+        lines.append(f"{tweet_num}/ {coin.upper()}: SII Score {score}")
         tweet_num += 1
 
     if len(opp.sii_data) >= 2:
@@ -535,8 +533,7 @@ async def generate_digest(days: int = 7, top_n: int = 3) -> str:
             lines.append("**SII Data:**")
             for coin, data in opp.sii_data.items():
                 score = data.get("sii_score", data.get("score", "?"))
-                grade = data.get("grade", "?")
-                lines.append(f"- {coin.upper()}: {score} ({grade})")
+                lines.append(f"- {coin.upper()}: {score}")
             lines.append("")
 
         # Arc match
@@ -675,7 +672,7 @@ def register_content_routes(app):
             "detected_metrics": detected_metrics,
             "arc_match": arc_match["title"] if arc_match else None,
             "draft": draft,
-            "sii_data": {k: {"score": v.get("sii_score", v.get("score")), "grade": v.get("grade")} for k, v in sii_data.items()},
+            "sii_data": {k: {"score": v.get("sii_score", v.get("score"))} for k, v in sii_data.items()},
         }
 
     @app.get("/api/content/arc/{day}")

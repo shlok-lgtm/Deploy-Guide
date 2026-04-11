@@ -17,7 +17,6 @@ def render(report_data: dict, lens_result: dict = None,
     entity_id = d.get("entity_id", "")
     name = d.get("name") or d.get("symbol") or entity_id
     score = d.get("score")
-    grade = d.get("grade", "—")
 
     # Build proof URL
     if entity_type == "stablecoin":
@@ -36,16 +35,15 @@ def render(report_data: dict, lens_result: dict = None,
         confidence = d["coverage_quality"]
 
     metadata = {
-        "name": f"Basis {surface} Rating — {name}",
-        "description": f"Attested {surface} risk rating for {name}. "
-                       f"Score: {score:.1f}/100 ({grade}). "
+        "name": f"Basis {surface} Score — {name}",
+        "description": f"Attested {surface} risk score for {name}. "
+                       f"Score: {score:.1f}/100. "
                        f"Methodology: {d.get('formula_version', '')}. "
                        f"Independently verifiable via report hash.",
         "image": f"{CANONICAL_BASE_URL}/api/reports/badge/{entity_type}/{entity_id}",
         "external_url": proof_url,
         "attributes": [
             {"trait_type": "Score", "value": round(float(score), 1) if score is not None else 0},
-            {"trait_type": "Grade", "value": grade},
             {"trait_type": "Surface", "value": surface},
             {"trait_type": "Confidence", "value": confidence},
             {"trait_type": "Methodology Version", "value": d.get("formula_version", "")},

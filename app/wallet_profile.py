@@ -11,7 +11,6 @@ import math
 from datetime import datetime, timezone
 
 from app.database import fetch_all, fetch_one
-from app.scoring import score_to_grade
 
 GRADE_ORDER = {
     "A+": 11, "A": 10, "A-": 9,
@@ -97,14 +96,10 @@ def generate_wallet_profile(address):
         elif diff > 200:
             div_trend = "deteriorating"  # HHI increasing = more concentrated
 
-    # Quality history
+    # Score consistency history
     pct_a = None
-    pct_b = None
-    worst_grade = None
     if grades:
         pct_a = round(sum(1 for g in grades if GRADE_ORDER.get(g, 0) >= GRADE_ORDER["A-"]) / len(grades) * 100, 1)
-        pct_b = round(sum(1 for g in grades if GRADE_ORDER.get(g, 0) >= GRADE_ORDER["B-"]) / len(grades) * 100, 1)
-        worst_grade = min(grades, key=lambda g: GRADE_ORDER.get(g, 0))
 
     # Data maturity — signals are meaningless without enough history
     data_maturity = "mature" if days_tracked >= 90 else ("developing" if days_tracked >= 30 else "early")
@@ -120,7 +115,6 @@ def generate_wallet_profile(address):
         "computed_at": datetime.now(timezone.utc).isoformat(),
         "current_state": {
             "risk_score": float(current["risk_score"]) if current.get("risk_score") is not None else None,
-            "risk_grade": current.get("risk_grade"),
             "concentration_hhi": float(current["concentration_hhi"]) if current.get("concentration_hhi") is not None else None,
             "total_value_usd": actual_total if actual_total > 0 else (float(current["total_stablecoin_value"]) if current.get("total_stablecoin_value") is not None else None),
             "holdings_count": current.get("num_total_holdings"),
@@ -135,10 +129,8 @@ def generate_wallet_profile(address):
             "diversification_trend": div_trend if days_tracked >= 14 else "insufficient_data",
             "data_maturity": data_maturity,
         },
-        "quality_history": {
-            "pct_days_a_grade": pct_a if days_tracked >= 30 else None,
-            "pct_days_b_grade": pct_b if days_tracked >= 30 else None,
-            "worst_grade_ever": worst_grade,
+        "score_consistency": {
+            "pct_days_high_score": pct_a if days_tracked >= 30 else None,
             "best_score_ever": round(max(scores), 2) if scores else None,
             "worst_score_ever": round(min(scores), 2) if scores else None,
         },
@@ -148,7 +140,6 @@ def generate_wallet_profile(address):
                 "value_usd": float(h["value_usd"]) if h.get("value_usd") is not None else None,
                 "pct_of_wallet": float(h["pct_of_wallet"]) if h.get("pct_of_wallet") is not None else None,
                 "sii_score": float(h["sii_score"]) if h.get("sii_score") is not None else None,
-                "sii_grade": h.get("sii_grade"),
             }
             for h in holdings
             if float(h.get("value_usd") or 0) >= 0.01

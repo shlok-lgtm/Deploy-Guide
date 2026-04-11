@@ -212,7 +212,6 @@ def reconstruct_psi_score(slug: str, target_date: date) -> dict:
         "protocol_slug": slug,
         "target_date": target_date.isoformat(),
         "score": result["overall_score"],
-        "grade": result["grade"],
         "confidence": confidence,
         "components_scored": scored,
         "components_total": total,
@@ -233,8 +232,7 @@ def reconstruct_psi_range(slug: str, from_date: date, to_date: date) -> list[dic
             results.append({
                 "date": current.isoformat(),
                 "score": result["score"],
-                "grade": result["grade"],
-                "confidence": result["confidence"],
+                        "confidence": result["confidence"],
                 "components_scored": result["components_scored"],
                 "category_scores": result.get("category_scores", {}),
             })

@@ -29,7 +29,7 @@ from app.database import (
 )
 from app.scoring import (
     SII_V1_WEIGHTS, STRUCTURAL_SUBWEIGHTS, FORMULA_VERSION,
-    score_to_grade, COMPONENT_NORMALIZATIONS,
+    COMPONENT_NORMALIZATIONS,
 )
 from app.specs.methodology_versions import METHODOLOGY_VERSIONS, WALLET_METHODOLOGY_VERSIONS, PSI_METHODOLOGY_VERSIONS
 
@@ -123,7 +123,14 @@ async def rate_limit_and_track(request: Request, call_next):
         if api_key_id:
             break
 
-    ip = request.client.host if request.client else "unknown"
+    # Resolve real client IP — prefer X-Forwarded-For over direct connection
+    # (GCP/Railway/Replit proxies set the direct connection to their own IPs like 35.191.*)
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    if forwarded_for:
+        # X-Forwarded-For: client, proxy1, proxy2 — first value is the real client
+        ip = forwarded_for.split(",")[0].strip()
+    else:
+        ip = request.client.host if request.client else "unknown"
     ua = request.headers.get("user-agent", "")[:500]
     accept_header = request.headers.get("accept", "")[:255]
     referer = request.headers.get("referer", "")[:500]
@@ -135,10 +142,14 @@ async def rate_limit_and_track(request: Request, call_next):
         "basis-worker",        # Background worker
         "uvicorn",             # Internal health checks
         "headlesschrome",      # Replit internal rendering
+        "claudebot",           # Anthropic web crawler
+        "python-requests",     # Internal Python HTTP calls
+        "replit",              # Replit internal traffic
     ]
     INTERNAL_IP_PREFIXES = [
         "35.191.",             # GCP load balancer (Replit proxy)
         "10.81.",              # Replit internal network
+        "10.",                 # Any private 10.x.x.x network
         "127.0.0.",            # Localhost
     ]
     is_internal = (
@@ -686,7 +697,6 @@ async def get_scores(response: Response, methodology_version: Optional[str] = Qu
             "issuer": row["issuer"],
             "token_contract": row.get("token_contract"),
             "score": float(row["overall_score"]),
-            "grade": row["grade"],
             "confidence": conf["confidence"],
             "confidence_tag": conf["tag"],
             "missing_categories": conf["missing_categories"],
@@ -790,7 +800,6 @@ async def get_score_detail(coin: str, methodology_version: Optional[str] = Query
         "issuer": row["issuer"],
         "token_contract": row.get("token_contract"),
         "score": float(row["overall_score"]),
-        "grade": row["grade"],
         "confidence": detail_conf["confidence"],
         "confidence_tag": detail_conf["tag"],
         "missing_categories": detail_conf["missing_categories"],
@@ -869,7 +878,6 @@ async def get_score_history(
             {
                 "date": str(row["score_date"]),
                 "score": float(row["overall_score"]),
-                "grade": row["grade"],
                 "categories": {
                     "peg": float(row["peg_score"]) if row.get("peg_score") else None,
                     "liquidity": float(row["liquidity_score"]) if row.get("liquidity_score") else None,
@@ -917,7 +925,6 @@ async def get_recent_scores(
             {
                 "date": str(row["score_date"]),
                 "score": round(float(row["overall_score"]), 2),
-                "grade": row["grade"],
             }
             for row in rows
         ],
@@ -1100,7 +1107,6 @@ async def compare_scores(
                 "symbol": row["symbol"],
                 "token_contract": row.get("token_contract"),
                 "score": float(row["overall_score"]),
-                "grade": row["grade"],
                 "categories": {
                     "peg": float(row["peg_score"]) if row.get("peg_score") else None,
                     "liquidity": float(row["liquidity_score"]) if row.get("liquidity_score") else None,
@@ -1132,12 +1138,7 @@ async def get_methodology(methodology_version: Optional[str] = Query(default=Non
             "top_level": SII_V1_WEIGHTS,
             "structural": STRUCTURAL_SUBWEIGHTS,
         },
-        "grade_scale": {
-            "A+": "90-100", "A": "85-90", "A-": "80-85",
-            "B+": "75-80", "B": "70-75", "B-": "65-70",
-            "C+": "60-65", "C": "55-60", "C-": "50-55",
-            "D": "45-50", "F": "0-45",
-        },
+        "scoring_range": "Numerical 0\u2013100. No letter grade mapping.",
         "components": {
             comp_id: {
                 "category": spec["category"],
@@ -1230,12 +1231,7 @@ async def get_all_indices():
     return {
         "indices": result,
         "count": len(result),
-        "grade_scale": {
-            "A+": "90\u2013100", "A": "85\u201390", "A-": "80\u201385",
-            "B+": "75\u201380", "B": "70\u201375", "B-": "65\u201370",
-            "C+": "60\u201365", "C": "55\u201360", "C-": "50\u201355",
-            "D": "45\u201350", "F": "<45",
-        },
+        "scoring_range": "Numerical 0\u2013100. No letter grade mapping.",
         "principles": [
             {"title": "Neutral", "desc": "No customer can pay to influence scores, weights, thresholds, or methodology timing."},
             {"title": "Deterministic", "desc": "Same inputs always produce the same outputs. No discretionary adjustments."},
@@ -2393,11 +2389,10 @@ async function loadPSI() {
     let h = '<h3>PSI Scoring</h3>';
     h += '<div class="stats-row"><div><div class="stat">'+protos.length+'</div><div class="stat-label">Protocols Scored</div></div></div>';
     if (protos.length) {
-      h += '<table><tr><th>Protocol</th><th>Score</th><th>Grade</th></tr>';
+      h += '<table><tr><th>Protocol</th><th>Score</th></tr>';
       protos.sort((a,b)=>(b.overall_score||0)-(a.overall_score||0)).forEach(p => {
         h += '<tr><td>'+(p.protocol_name||p.protocol_slug)+'</td>';
-        h += '<td>'+(p.overall_score!=null?p.overall_score.toFixed(1):'—')+'</td>';
-        h += '<td>'+(p.grade||'—')+'</td></tr>';
+        h += '<td>'+(p.overall_score!=null?p.overall_score.toFixed(1):'—')+'</td></tr>';
       });
       h += '</table>';
     }
@@ -3391,7 +3386,6 @@ async def get_assessment_inputs(assessment_id: str):
 async def verify_assessment(assessment_id: str):
     """Full computation attestation: verify an assessment by re-deriving the score from stored inputs."""
     from app.computation_attestation import compute_inputs_hash
-    from app.scoring import score_to_grade
 
     # 1. Fetch assessment event
     ae = fetch_one("""
@@ -3564,7 +3558,6 @@ async def admin_create_assessment_event(request: Request):
             "trigger_type": body.get("event_type", "manual_incident"),
             "trigger_detail": trigger_detail,
             "wallet_risk_score": None,
-            "wallet_risk_grade": None,
             "wallet_risk_score_prev": None,
             "concentration_hhi": None,
             "concentration_hhi_prev": None,
@@ -3634,7 +3627,6 @@ async def psi_scores():
             "protocol_slug": slug,
             "protocol_name": row["protocol_name"],
             "score": float(row["overall_score"]) if row.get("overall_score") else None,
-            "grade": row["grade"],
             "confidence": psi_conf["confidence"],
             "confidence_tag": psi_conf["tag"],
             "missing_categories": psi_conf["missing_categories"],
@@ -3871,7 +3863,6 @@ async def psi_score_detail(slug: str):
         "protocol_slug": row["protocol_slug"],
         "protocol_name": row["protocol_name"],
         "score": float(row["overall_score"]) if row.get("overall_score") else None,
-        "grade": row["grade"],
         "confidence": psi_det_conf["confidence"],
         "confidence_tag": psi_det_conf["tag"],
         "missing_categories": psi_det_conf["missing_categories"],
@@ -3950,7 +3941,6 @@ def _build_protocol_treasury(rows_by_slug):
                 v["pct_of_treasury"] = round((v["usd_value"] / treasury_total) * 100, 2) if treasury_total else 0
                 if v["sii_score"] is not None:
                     v["sii_score"] = round(float(v["sii_score"]), 1)
-                    v["sii_grade"] = score_to_grade(v["sii_score"])
             return sorted(by_sym.values(), key=lambda x: x["usd_value"], reverse=True)
 
         scored_agg = _agg(scored)
@@ -4235,8 +4225,6 @@ def _build_collateral_protocol(rows):
             "is_sii_scored": r["is_sii_scored"],
             "pct_of_total": round(tvl / total_stable_usd * 100, 2) if total_stable_usd else 0,
         }
-        if sii is not None:
-            entry["sii_grade"] = score_to_grade(sii)
         exposure_list.append(entry)
         if not r["is_sii_scored"]:
             unscored_usd += tvl
@@ -4992,7 +4980,6 @@ def _render_rankings_html() -> str:
         name = row.get("name") or row.get("issuer") or symbol
         issuer = row.get("issuer") or ""
         score = row.get("overall_score", 0)
-        grade = row.get("grade", "—")
         price = row.get("current_price")
         price_str = f"${float(price):.4f}" if price else "—"
         peg = row.get("peg_score") or "—"
@@ -5005,7 +4992,6 @@ def _render_rankings_html() -> str:
         <tr>
             <td><strong>{symbol}</strong><br><span class="sub">{issuer}</span></td>
             <td class="num">{float(score):.1f}</td>
-            <td class="grade">{grade}</td>
             <td class="num">{price_str}</td>
             <td class="num">{peg}</td>
             <td class="num">{liq}</td>
@@ -5019,7 +5005,6 @@ def _render_rankings_html() -> str:
             "name": f"{symbol} Stablecoin Integrity Index",
             "additionalProperty": [
                 {"@type": "PropertyValue", "name": "sii_score", "value": float(score)},
-                {"@type": "PropertyValue", "name": "grade", "value": grade},
             ]
         })
 
@@ -5049,7 +5034,6 @@ def _render_rankings_html() -> str:
         th {{ text-align: left; padding: 8px; border-bottom: 2px solid #0B090A; font-family: monospace; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1px; color: #6a6a6a; }}
         td {{ padding: 8px; border-bottom: 1px dotted #ccc; }}
         .num {{ font-family: monospace; text-align: right; }}
-        .grade {{ font-weight: 700; font-size: 1rem; }}
         .sub {{ font-size: 0.75rem; color: #6a6a6a; }}
         nav {{ margin-bottom: 24px; font-family: monospace; font-size: 0.8rem; }}
         nav a {{ color: #0B090A; margin-right: 16px; text-decoration: none; }}
@@ -5071,7 +5055,6 @@ def _render_rankings_html() -> str:
             <tr>
                 <th>Stablecoin</th>
                 <th class="num">SII</th>
-                <th>Grade</th>
                 <th class="num">Price</th>
                 <th class="num">Peg</th>
                 <th class="num">Liq</th>
@@ -5211,7 +5194,6 @@ def _render_proof_html(identifier: str, surface: str) -> str:
         name = row.get("name") or symbol
         issuer = row.get("issuer") or ""
         score = float(row.get("overall_score", 0))
-        grade = row.get("grade", "—")
         computed = row["computed_at"].strftime("%Y-%m-%d %H:%M UTC") if row.get("computed_at") else "—"
         formula_version = row.get("formula_version") or FORMULA_VERSION
         comp_count = row.get("component_count") or 0
@@ -5233,7 +5215,7 @@ def _render_proof_html(identifier: str, surface: str) -> str:
         """, (identifier,))
 
         title = f"{symbol} — Score Proof"
-        desc = f"Full score derivation for {symbol}. SII {score:.1f} ({grade}). {comp_count} components."
+        desc = f"Full score derivation for {symbol}. SII {score:.1f}. {comp_count} components."
         canon = f"{CANONICAL_BASE_URL}/proof/sii/{identifier}"
         json_api = f"/api/scores/{identifier}"
         history_api = f"/api/scores/{identifier}/history"
@@ -5252,7 +5234,6 @@ def _render_proof_html(identifier: str, surface: str) -> str:
         name = row.get("protocol_name") or identifier
         issuer = ""
         score = float(row.get("overall_score", 0))
-        grade = row.get("grade", "—")
         computed = row["computed_at"].strftime("%Y-%m-%d %H:%M UTC") if row.get("computed_at") else "—"
         formula_version = row.get("formula_version") or "psi-v0.2.0"
         cat_scores = row.get("category_scores") or {}
@@ -5280,7 +5261,7 @@ def _render_proof_html(identifier: str, surface: str) -> str:
             })
 
         title = f"{name} — Score Proof"
-        desc = f"Full score derivation for {name}. PSI {score:.1f} ({grade}). {comp_count} components."
+        desc = f"Full score derivation for {name}. PSI {score:.1f}. {comp_count} components."
         canon = f"{CANONICAL_BASE_URL}/proof/psi/{identifier}"
         json_api = f"/api/psi/scores/{identifier}"
         history_api = None
@@ -5419,7 +5400,6 @@ def _render_proof_html(identifier: str, surface: str) -> str:
         .src-cda {{ color: #6b5b2d; }}
         .src-static {{ color: #9a9a9a; }}
         .bar {{ height: 4px; background: #0B090A; border-radius: 1px; }}
-        .grade {{ font-size: 1.4rem; font-weight: 700; }}
         .score {{ font-family: monospace; font-size: 1.8rem; font-weight: 700; }}
         code {{ font-family: monospace; font-size: 0.8rem; background: #e8e6e0; padding: 1px 4px; border-radius: 2px; }}
         footer {{ margin-top: 32px; font-family: monospace; font-size: 0.75rem; color: #6a6a6a; border-top: 1px solid #ccc; padding-top: 12px; }}
@@ -5444,7 +5424,6 @@ def _render_proof_html(identifier: str, surface: str) -> str:
         </div>
         <div style="text-align:right">
             <span class="score">{score:.1f}</span>
-            <span class="grade" style="margin-left:8px">{grade}</span>
         </div>
     </div>
     <p class="meta">Methodology {formula_version} · Computed {computed} · {comp_count} components</p>
@@ -5644,7 +5623,6 @@ async def drift_exploit_analysis():
 
         result["drift_psi"] = {
             "current_score": float(psi_row["overall_score"]) if psi_row.get("overall_score") else None,
-            "grade": psi_row.get("grade"),
             "category_breakdown": psi_row.get("category_scores"),
             "components_missing": missing,
             "rank_among_protocols": rank,
@@ -5680,7 +5658,6 @@ async def drift_exploit_analysis():
             if "error" not in cqi:
                 result["cqi_pairs"][f"{symbol}_x_drift"] = {
                     "cqi": cqi.get("cqi_score"),
-                    "cqi_grade": cqi.get("cqi_grade"),
                     "sii": cqi.get("inputs", {}).get("sii", {}).get("score"),
                     "psi": cqi.get("inputs", {}).get("psi", {}).get("score"),
                 }
@@ -5704,7 +5681,6 @@ async def drift_exploit_analysis():
 
     # 6. Narrative
     psi_score = result["drift_psi"]["current_score"] if result["drift_psi"] else "N/A"
-    psi_grade = result["drift_psi"]["grade"] if result["drift_psi"] else "N/A"
     n_components = 24 - len(result["drift_psi"]["components_missing"]) if result["drift_psi"] else "N/A"
     usdc_cqi = result["cqi_pairs"].get("usdc_x_drift", {}).get("cqi", "N/A")
     usdc_sii = result["cqi_pairs"].get("usdc_x_drift", {}).get("sii", "N/A")
@@ -5715,7 +5691,7 @@ async def drift_exploit_analysis():
     exposure_usdc_m = round(exposure_usdc / 1e6, 1) if exposure_usdc else 0
 
     result["narrative"] = {
-        "headline": f"Drift Protocol exploit: ~$270M drained. PSI score: {psi_score} ({psi_grade}). USDC×Drift CQI: {usdc_cqi}.",
+        "headline": f"Drift Protocol exploit: ~$270M drained. PSI score: {psi_score}. USDC×Drift CQI: {usdc_cqi}.",
         "key_finding": f"Drift held ${exposure_usdc_m}M in USDC across its vaults. USDC's SII remained stable at {usdc_sii}, but the protocol-level failure demonstrates why CQI — the composition of stablecoin quality and protocol solvency — is the relevant risk surface.",
         "basis_insight": "A high SII score for USDC did not protect depositors because protocol-level risk was the failure mode. This is exactly what CQI measures.",
         "methodology_note": f"Drift is Basis's first Solana protocol. Governance components are not yet scored (Solana uses Realms, not Snapshot). The PSI score reflects {n_components}/24 available components.",
@@ -5879,10 +5855,9 @@ async def sbt_metadata(token_id: int):
         import json as _json
         return JSONResponse({
             "name": f"Basis Rating — {row['entity_id']}",
-            "description": f"Score: {row['score']} ({row['grade']})",
+            "description": f"Score: {row['score']}",
             "attributes": [
                 {"trait_type": "Score", "value": float(row["score"]) if row.get("score") else 0},
-                {"trait_type": "Grade", "value": row.get("grade", "—")},
             ],
             "report_hash": row.get("report_hash"),
         })

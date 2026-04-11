@@ -61,11 +61,10 @@ def check_scores():
             continue
 
         overall = float(s.get("overall_score", 0))
-        grade = s.get("grade", "?")
 
         if overall < ALERT_THRESHOLD:
             send_alert(
-                f"SII ALERT: {coin_id} dropped to {overall} ({grade}). "
+                f"SII ALERT: {coin_id} dropped to {overall}. "
                 f"Threshold: {ALERT_THRESHOLD}. "
                 f"Peg: {s.get('peg_score')}, Liquidity: {s.get('liquidity_score')}"
             )
@@ -176,7 +175,7 @@ def map_sii_to_aave_params(coin_id: str) -> dict:
         ),
         "needs_review": dist < 50,
         "basis_score": data["score"],
-        "basis_grade": data["grade"],
+        "basis_score": data["score"],
         "computed_at": data["computed_at"],
     }
 ```
@@ -269,11 +268,11 @@ vendor reports / committee judgment]. This creates:
 
 Current SII scores for [Protocol] collateral stablecoins:
 
-| Asset | SII Score | Grade | Peg | Liquidity | Structural |
-|-------|-----------|-------|-----|-----------|------------|
-| USDC  | [score]   | [grade] | [peg] | [liq] | [struct] |
-| USDT  | [score]   | [grade] | [peg] | [liq] | [struct] |
-| DAI   | [score]   | [grade] | [peg] | [liq] | [struct] |
+| Asset | SII Score | Peg | Liquidity | Structural |
+|-------|-----------|-----|-----------|------------|
+| USDC  | [score]   | [peg] | [liq] | [struct] |
+| USDT  | [score]   | [peg] | [liq] | [struct] |
+| DAI   | [score]   | [peg] | [liq] | [struct] |
 
 Report attestation hash: `[hash]`
 Verification: `GET /api/reports/verify/[hash]`
@@ -308,7 +307,7 @@ Arbitrum: 0x1651d7b2e238a952167e51a1263ffe607584db83
 // SII score for a stablecoin token
 function getScore(address token) external view returns (
     uint16 score,      // 0-10000 (divide by 100 for 0-100 scale)
-    bytes2 grade,      // e.g., 0x4132 = "A2"
+    bytes2 grade,      // reserved (unused — no letter grades)
     uint48 timestamp,  // when score was computed
     uint16 version     // methodology version
 );
@@ -594,8 +593,8 @@ GET  /api/treasury/events                     Treasury flow events
 ```
 Oracle: 0x1651d7b2e238a952167e51a1263ffe607584db83
 
-getScore(address token) → (uint16 score, bytes2 grade, uint48 timestamp, uint16 version)
-getPsiScore(string slug) → (uint16 score, bytes2 grade, uint48 timestamp, uint16 version)
+getScore(address token) → (uint16 score, bytes2 _reserved, uint48 timestamp, uint16 version)
+getPsiScore(string slug) → (uint16 score, bytes2 _reserved, uint48 timestamp, uint16 version)
 getCqi(address token, string slug) → uint16
 isStale(address token, uint256 maxAge) → bool
 getReportHash(bytes32 entityId) → (bytes32 hash, bytes4 lensId, uint48 timestamp)

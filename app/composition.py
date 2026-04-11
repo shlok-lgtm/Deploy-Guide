@@ -8,7 +8,6 @@ All scores computed on-demand — no storage.
 import math
 
 from app.database import fetch_all, fetch_one
-from app.scoring import score_to_grade
 
 
 def compose_geometric_mean(scores):
@@ -104,12 +103,11 @@ def compute_cqi(asset_symbol, protocol_slug):
         "protocol": psi_row.get("protocol_name", protocol_slug),
         "protocol_slug": protocol_slug,
         "cqi_score": cqi_score,
-        "cqi_grade": score_to_grade(cqi_score) if cqi_score else None,
         "confidence": cqi_conf["confidence"],
         "confidence_tag": cqi_conf["tag"],
         "inputs": {
-            "sii": {"score": sii_score, "grade": sii_row.get("grade"), "confidence": sii_conf["confidence"]},
-            "psi": {"score": psi_score, "grade": psi_row.get("grade"), "confidence": psi_conf["confidence"]},
+            "sii": {"score": sii_score, "confidence": sii_conf["confidence"]},
+            "psi": {"score": psi_score, "confidence": psi_conf["confidence"]},
         },
         "method": "geometric_mean",
         "formula_version": "composition-v1.0.0",
@@ -151,7 +149,6 @@ def compute_cqi_matrix():
                     "protocol": proto.get("protocol_name", proto["protocol_slug"]),
                     "protocol_slug": proto["protocol_slug"],
                     "cqi_score": cqi,
-                    "cqi_grade": score_to_grade(cqi) if cqi else None,
                     "confidence": cqi_conf["confidence"],
                     "sii_score": sii,
                     "psi_score": psi,

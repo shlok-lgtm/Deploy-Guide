@@ -47,12 +47,11 @@ logger = logging.getLogger(__name__)
 def _get_current_sii_scores() -> dict:
     """Load current SII scores and prices from the scores table."""
     rows = fetch_all(
-        "SELECT stablecoin_id, overall_score, grade, current_price FROM scores"
+        "SELECT stablecoin_id, overall_score, current_price FROM scores"
     )
     return {
         row["stablecoin_id"]: {
             "overall_score": float(row["overall_score"]) if row["overall_score"] else None,
-            "grade": row["grade"],
             "current_price": float(row["current_price"]) if row.get("current_price") else None,
         }
         for row in rows
@@ -108,7 +107,7 @@ def _store_holdings(wallet_address: str, holdings: list[dict]) -> None:
                 h["value_usd"],
                 h["is_scored"],
                 h.get("sii_score"),
-                h.get("sii_grade"),
+                None,
                 h.get("pct_of_wallet"),
             ),
         )
@@ -140,9 +139,9 @@ def _store_risk_score(wallet_address: str, risk: dict) -> None:
         (
             wallet_address,
             risk.get("risk_score"),
-            risk.get("risk_grade"),
+            None,
             risk.get("concentration_hhi"),
-            risk.get("concentration_grade"),
+            None,
             risk.get("unscored_pct"),
             risk.get("coverage_quality"),
             risk.get("num_scored_holdings"),
@@ -565,7 +564,6 @@ async def index_wallet(
         "holdings": len(holdings),
         "scored": True,
         "risk_score": risk.get("risk_score"),
-        "risk_grade": risk.get("risk_grade"),
         "total_value": risk.get("total_stablecoin_value"),
         "size_tier": risk.get("size_tier"),
     }
@@ -1017,7 +1015,6 @@ async def run_pipeline(holders_per_coin: int = None, force_reseed: bool = False)
                     "holdings": len(holdings),
                     "scored": True,
                     "risk_score": risk.get("risk_score"),
-                    "risk_grade": risk.get("risk_grade"),
                     "total_value": risk.get("total_stablecoin_value"),
                     "size_tier": risk.get("size_tier"),
                 })

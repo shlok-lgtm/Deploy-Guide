@@ -13,7 +13,6 @@ import logging
 from datetime import datetime, timezone
 
 from app.database import fetch_all, fetch_one, execute
-from app.scoring import score_to_grade
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +108,6 @@ def build_unified_profile(address: str) -> dict | None:
             weight_sum += value
 
     aggregate_score = weighted_score / weight_sum if weight_sum > 0 else None
-    aggregate_grade = score_to_grade(aggregate_score) if aggregate_score is not None else None
 
     # Upsert into wallet_profiles
     execute(
@@ -134,7 +132,7 @@ def build_unified_profile(address: str) -> dict | None:
             total_value,
             json.dumps(holdings_by_chain),
             edge_count,
-            aggregate_grade,
+            None,
         ),
     )
 
@@ -145,7 +143,6 @@ def build_unified_profile(address: str) -> dict | None:
         "total_value_all_chains": round(total_value, 2),
         "holdings_by_chain": holdings_by_chain,
         "edge_count_all_chains": edge_count,
-        "risk_grade_aggregate": aggregate_grade,
     }
 
 

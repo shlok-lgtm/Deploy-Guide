@@ -14,37 +14,27 @@ logger = logging.getLogger(__name__)
 
 MAX_RESULTS = 200
 
-# Grade ordering for comparison (higher index = worse grade)
-GRADE_ORDER = {"A+": 0, "A": 1, "A-": 2, "B+": 3, "B": 4, "B-": 5,
-               "C+": 6, "C": 7, "C-": 8, "D": 9, "F": 10}
-
 TEMPLATES = {
     "high_risk_whales": {
-        "description": "Wallets with high value AND poor risk grades",
+        "description": "Wallets with high value AND low risk scores",
         "params": {
             "min_value": {"type": "number", "default": 1_000_000, "description": "Minimum stablecoin value (USD)"},
-            "max_grade": {"type": "string", "default": "C", "description": "Worst acceptable grade (e.g. C = show C, D, F)"},
+            "max_score": {"type": "number", "default": 60, "description": "Maximum risk score threshold (wallets scoring at or below this are included)"},
             "limit": {"type": "integer", "default": 50, "description": "Max results"},
         },
         "sql": """
             SELECT DISTINCT ON (w.address)
                 w.address, w.chain, w.total_stablecoin_value, w.size_tier,
-                rs.risk_score, rs.risk_grade, rs.concentration_hhi,
+                rs.risk_score, rs.concentration_hhi,
                 rs.dominant_asset, rs.dominant_asset_pct
             FROM wallet_graph.wallets w
             JOIN wallet_graph.wallet_risk_scores rs ON w.address = rs.wallet_address
             WHERE w.total_stablecoin_value >= %(min_value)s
-              AND rs.risk_grade IN (
-                  SELECT unnest(ARRAY['C+','C','C-','D','F'])
-                  WHERE %(max_grade)s >= 'C'
-                  UNION ALL
-                  SELECT unnest(ARRAY['D','F'])
-                  WHERE %(max_grade)s >= 'D'
-              )
+              AND rs.risk_score IS NOT NULL
+              AND rs.risk_score <= %(max_score)s
             ORDER BY w.address, rs.computed_at DESC
+            LIMIT %(limit)s
         """,
-        # Override: use Python-side grade filtering for accuracy
-        "_grade_filter": True,
     },
 
     "contagion_hotspots": {
@@ -97,13 +87,13 @@ TEMPLATES = {
         },
         "sql": """
             WITH latest AS (
-                SELECT stablecoin, overall_score, grade, score_date
+                SELECT stablecoin, overall_score, score_date
                 FROM score_history
                 WHERE score_date = (SELECT MAX(score_date) FROM score_history)
             ),
             previous AS (
                 SELECT DISTINCT ON (stablecoin)
-                    stablecoin, overall_score, grade, score_date
+                    stablecoin, overall_score, score_date
                 FROM score_history
                 WHERE score_date <= (SELECT MAX(score_date) FROM score_history) - %(days)s
                 ORDER BY stablecoin, score_date DESC
@@ -111,9 +101,7 @@ TEMPLATES = {
             SELECT
                 l.stablecoin,
                 l.overall_score AS current_score,
-                l.grade AS current_grade,
                 p.overall_score AS previous_score,
-                p.grade AS previous_grade,
                 ROUND((l.overall_score - p.overall_score)::numeric, 2) AS score_change,
                 l.score_date AS as_of
             FROM latest l
@@ -161,8 +149,7 @@ TEMPLATES = {
                 chains_active,
                 total_value_all_chains,
                 holdings_by_chain,
-                edge_count_all_chains,
-                risk_grade_aggregate
+                edge_count_all_chains
             FROM wallet_graph.wallet_profiles
             WHERE jsonb_array_length(chains_active) >= %(min_chains)s
             ORDER BY total_value_all_chains DESC
@@ -224,10 +211,6 @@ def execute_template(template_name: str, params: dict[str, Any] = None) -> dict:
     if "limit" in merged:
         merged["limit"] = min(int(merged["limit"]), MAX_RESULTS)
 
-    # Special handling for grade-filter templates
-    if tmpl.get("_grade_filter"):
-        return _execute_grade_filtered(template_name, tmpl, merged)
-
     try:
         rows = fetch_all(tmpl["sql"], merged)
         # Cap results
@@ -257,46 +240,3 @@ def execute_template(template_name: str, params: dict[str, Any] = None) -> dict:
         return {"error": f"Query execution failed: {str(e)}"}
 
 
-def _execute_grade_filtered(template_name: str, tmpl: dict, merged: dict) -> dict:
-    """Execute with Python-side grade filtering for accurate comparison."""
-    max_grade = merged.get("max_grade", "C")
-    max_order = GRADE_ORDER.get(max_grade, 6)
-
-    # Run query without grade filter
-    base_sql = """
-        SELECT DISTINCT ON (w.address)
-            w.address, w.chain, w.total_stablecoin_value, w.size_tier,
-            rs.risk_score, rs.risk_grade, rs.concentration_hhi,
-            rs.dominant_asset, rs.dominant_asset_pct
-        FROM wallet_graph.wallets w
-        JOIN wallet_graph.wallet_risk_scores rs ON w.address = rs.wallet_address
-        WHERE w.total_stablecoin_value >= %(min_value)s
-        ORDER BY w.address, rs.computed_at DESC
-    """
-    try:
-        rows = fetch_all(base_sql, {"min_value": merged["min_value"]})
-    except Exception as e:
-        return {"error": f"Query execution failed: {str(e)}"}
-
-    # Filter by grade in Python
-    results = []
-    for row in rows:
-        grade = row.get("risk_grade", "")
-        grade_order = GRADE_ORDER.get(grade, -1)
-        if grade_order >= max_order:
-            entry = {}
-            for k, v in dict(row).items():
-                entry[k] = v.isoformat() if hasattr(v, "isoformat") else v
-            results.append(entry)
-
-    # Sort by value desc, cap
-    results.sort(key=lambda x: x.get("total_stablecoin_value") or 0, reverse=True)
-    limit = min(int(merged.get("limit", 50)), MAX_RESULTS)
-    results = results[:limit]
-
-    return {
-        "template": template_name,
-        "params_used": merged,
-        "results": results,
-        "count": len(results),
-    }

@@ -6,7 +6,7 @@ Holdings breakdown, per-position SII, concentration, unscored exposure.
 
 from app.templates._html import (
     page, section, score_header, attestation_footer,
-    table, proof_link, grade_color, fmt_usd, CANONICAL_BASE_URL,
+    table, proof_link, fmt_usd, CANONICAL_BASE_URL,
 )
 
 
@@ -15,12 +15,11 @@ def render(report_data: dict, lens_result: dict = None,
     d = report_data
     addr = d.get("address", d.get("entity_id", "?"))
     score = d.get("score")
-    grade = d.get("grade", "—")
     short_addr = f"{addr[:8]}...{addr[-6:]}" if len(addr) > 16 else addr
 
     body = f'<p class="meta">Wallet Risk Report · {short_addr} · {timestamp}</p>'
-    body += score_header(short_addr, score, grade,
-                         f"Value: {fmt_usd(d.get('holdings_value'))} · {d.get('size_tier', '').upper()}")
+    body += score_header(short_addr, score,
+                         subtitle=f"Value: {fmt_usd(d.get('holdings_value'))} · {d.get('size_tier', '').upper()}")
 
     # Concentration metrics
     hhi = d.get("concentration_hhi")
@@ -41,7 +40,6 @@ def render(report_data: dict, lens_result: dict = None,
         rows = []
         for h in holdings:
             s = f"{h['sii_score']:.1f}" if h.get("sii_score") is not None else "—"
-            g = h.get("sii_grade") or "—"
             scored_label = '<span class="src-live">Yes</span>' if h.get("is_scored") else '<span class="src-static">No</span>'
             link = proof_link(h.get("proof_url", ""))
             rows.append([
@@ -49,12 +47,11 @@ def render(report_data: dict, lens_result: dict = None,
                 fmt_usd(h.get("value_usd")),
                 f"{h.get('pct_of_wallet', 0):.1f}%",
                 s,
-                f'<span style="color:{grade_color(g)}">{g}</span>',
                 scored_label,
                 link,
             ])
         body += section("Holdings Breakdown",
-                        table(["Symbol", "Value", "% Wallet", "SII", "Grade", "Scored", "Proof"],
+                        table(["Symbol", "Value", "% Wallet", "SII", "Scored", "Proof"],
                               rows, [1, 2, 3]))
 
     # Unscored exposure warning
@@ -68,5 +65,5 @@ def render(report_data: dict, lens_result: dict = None,
     body += attestation_footer(report_hash, d.get("formula_version", ""), timestamp)
 
     return page(f"Wallet {short_addr} — Risk Report", body,
-                f"Wallet risk report for {short_addr}. Score {score:.1f} ({grade})." if score else "",
+                f"Wallet risk report for {short_addr}. Score {score:.1f}/100." if score else "",
                 f"{CANONICAL_BASE_URL}/report/wallet/{addr}")

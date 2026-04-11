@@ -89,7 +89,6 @@ def run_daily_pulse():
         scores_list.append({
             "symbol": symbol,
             "score": score,
-            "grade": coin.get("grade"),
             "delta_24h": delta,
         })
 
@@ -174,7 +173,6 @@ def run_daily_pulse():
             {
                 "protocol": r.get("protocol_name", r["protocol_slug"]),
                 "score": float(r["overall_score"]) if r.get("overall_score") is not None else None,
-                "grade": r.get("grade"),
             }
             for r in psi_rows
         ]

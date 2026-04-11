@@ -86,7 +86,7 @@ def store_assessment(assessment: dict) -> str | None:
         assessment["trigger_type"],
         trigger_json,
         assessment.get("wallet_risk_score"),
-        assessment.get("wallet_risk_grade"),
+        None,
         assessment.get("wallet_risk_score_prev"),
         assessment.get("concentration_hhi"),
         assessment.get("concentration_hhi_prev"),
@@ -123,7 +123,6 @@ def store_assessment(assessment: dict) -> str | None:
                     if score_row:
                         stablecoin_scores[symbol] = {
                             "score": float(score_row["overall_score"]) if score_row.get("overall_score") else None,
-                            "grade": score_row.get("grade")
                         }
 
             execute("""

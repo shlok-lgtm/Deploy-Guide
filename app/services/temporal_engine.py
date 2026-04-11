@@ -402,7 +402,6 @@ def reconstruct_score_sync(
         "stablecoin_id": stablecoin_id,
         "target_date": target_date.isoformat(),
         "overall_score": score_result["overall_score"],
-        "grade": score_result["grade"],
         "category_scores": {
             "peg_stability": score_result["peg_score"],
             "liquidity_depth": score_result["liquidity_score"],
@@ -451,7 +450,6 @@ def reconstruct_range_sync(
         results.append({
             "target_date": result["target_date"],
             "overall_score": result["overall_score"],
-            "grade": result["grade"],
             "category_scores": result["category_scores"],
             "coverage": result["coverage"],
         })
@@ -474,7 +472,6 @@ def _format_cached(row) -> dict:
         "stablecoin_id": row["stablecoin_id"],
         "target_date": row["target_date"].isoformat() if hasattr(row["target_date"], "isoformat") else str(row["target_date"]),
         "overall_score": float(row["overall_score"]) if row["overall_score"] else None,
-        "grade": row["grade"],
         "category_scores": {
             "peg_stability": float(row["peg_score"]) if row["peg_score"] else 0,
             "liquidity_depth": float(row["liquidity_score"]) if row["liquidity_score"] else 0,

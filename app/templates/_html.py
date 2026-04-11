@@ -21,7 +21,6 @@ th { text-align: left; padding: 6px 8px; border-bottom: 2px solid #0B090A; font-
 td { padding: 6px 8px; border-bottom: 1px dotted #ccc; }
 .num { font-family: 'IBM Plex Mono', monospace; text-align: right; }
 .score { font-family: 'IBM Plex Mono', monospace; font-size: 1.8rem; font-weight: 700; }
-.grade { font-size: 1.4rem; font-weight: 700; }
 code { font-family: 'IBM Plex Mono', monospace; font-size: 0.8rem; background: #e8e6e0; padding: 1px 4px; border-radius: 2px; }
 footer { margin-top: 32px; font-family: 'IBM Plex Mono', monospace; font-size: 0.75rem; color: #6a6a6a; border-top: 1px solid #ccc; padding-top: 12px; }
 .pass { color: #2d6b45; } .fail { color: #c0392b; }
@@ -64,12 +63,13 @@ def section(title: str, content: str) -> str:
     return f'<div class="section"><h3>{title}</h3>{content}</div>'
 
 
-def score_header(name: str, score, grade: str, subtitle: str = "") -> str:
+def score_header(name: str, score, grade: str = "", subtitle: str = "") -> str:
+    """Render score header. Grade parameter kept for backward compatibility but no longer displayed."""
     s = f"{float(score):.1f}" if score is not None else "—"
     return f"""<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
 <div><span style="font-size:1.4rem;font-weight:600">{name}</span>
 {f'<br><span class="meta">{subtitle}</span>' if subtitle else ''}</div>
-<div><span class="score">{s}</span> <span class="grade" style="margin-left:8px">{grade or "—"}</span></div>
+<div><span class="score">{s}</span></div>
 </div>"""
 
 
@@ -111,6 +111,7 @@ def proof_link(url: str, label: str = "Proof") -> str:
 
 
 def grade_color(grade: str) -> str:
+    """Deprecated: grade display has been removed for legal reasons. Kept for backward compatibility."""
     if not grade:
         return "#6a6a6a"
     g = grade[0]

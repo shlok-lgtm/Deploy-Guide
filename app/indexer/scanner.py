@@ -456,7 +456,6 @@ async def _scan_via_blockscout(
                 score_data = sii_scores.get(sid)
                 if score_data:
                     sii_score = score_data.get("overall_score")
-                    sii_grade = score_data.get("grade")
                     if score_data.get("current_price") is not None:
                         price = score_data["current_price"]
 
@@ -470,7 +469,7 @@ async def _scan_via_blockscout(
                 "value_usd": value_usd,
                 "is_scored": is_scored,
                 "sii_score": sii_score,
-                "sii_grade": sii_grade,
+                "sii_grade": None,
             }
             if addr_lower not in holdings_by_wallet:
                 holdings_by_wallet[addr_lower] = []
@@ -535,7 +534,6 @@ async def _scan_via_etherscan(
                 score_data = sii_scores.get(sid)
                 if score_data:
                     sii_score = score_data.get("overall_score")
-                    sii_grade = score_data.get("grade")
                     if score_data.get("current_price") is not None:
                         price = score_data["current_price"]
 
@@ -549,7 +547,7 @@ async def _scan_via_etherscan(
                 "value_usd": value_usd,
                 "is_scored": is_scored,
                 "sii_score": sii_score,
-                "sii_grade": sii_grade,
+                "sii_grade": None,
             }
             if addr_lower not in holdings_by_wallet:
                 holdings_by_wallet[addr_lower] = []
@@ -679,7 +677,6 @@ async def scan_wallet_holdings(
             score_data = sii_scores.get(sid)
             if score_data:
                 sii_score = score_data.get("overall_score")
-                sii_grade = score_data.get("grade")
                 if score_data.get("current_price") is not None:
                     price = score_data["current_price"]
 
@@ -694,7 +691,7 @@ async def scan_wallet_holdings(
             "value_usd": value_usd,
             "is_scored": is_scored,
             "sii_score": sii_score,
-            "sii_grade": sii_grade,
+            "sii_grade": None,
         })
 
     return holdings

@@ -14,7 +14,6 @@ import logging
 from datetime import datetime, timezone
 
 from app.database import fetch_all, fetch_one
-from app.scoring import score_to_grade
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +72,6 @@ def detect_asset_divergence():
             "symbol": symbol,
             "current_score": score_entry.get("score"),
             "score_delta": delta,
-            "grade": score_entry.get("grade"),
             "wallets_holding": wallet_count,
             "total_held_usd": total_held,
             "signal": f"{symbol} score declined {abs(delta):.1f} pts while held by {wallet_count} wallets (${total_held / 1e6:.1f}M)",
@@ -217,7 +215,6 @@ def detect_quality_flow_divergence():
             "symbol": symbol,
             "current_score": sc.get("score"),
             "score_delta": sc["delta_24h"],
-            "grade": sc.get("grade"),
             "current_holdings_usd": cur_total,
             "previous_holdings_usd": prev_total,
             "flow_change_pct": round(flow_change_pct, 1),

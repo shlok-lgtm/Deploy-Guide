@@ -160,6 +160,8 @@ const subScoreColor = (s) => {
 };
 
 const gradeColor = (g) => {
+  // DEPRECATED: grade display removed. Kept for backward compatibility.
+  // Now used as scoreColor fallback in some places.
   if (!g) return T.inkFaint;
   if (g.startsWith("A")) return T.ink;
   if (g === "B+" || g === "B") return T.inkMid;
@@ -735,11 +737,8 @@ function PsiDetailPanel({ protocol, mobile }) {
           {protocol.protocol_name || protocol.protocol_slug}
         </span>
         <ChainBadge chain={protocol.chain} />
-        <span style={{ fontFamily: T.mono, fontSize: 13, fontWeight: 600, color: T.inkMid, marginLeft: "auto" }}>
-          PSI {fmt(score, 1)}
-        </span>
-        <span style={{ fontFamily: T.sans, fontSize: 20, fontWeight: 700, color: gradeColor(protocol.grade) }}>
-          {protocol.grade || "—"}
+        <span style={{ fontFamily: T.mono, fontSize: 20, fontWeight: 700, color: scoreColor(score), marginLeft: "auto" }}>
+          {fmt(score, 1)}
         </span>
       </div>
 
@@ -912,8 +911,8 @@ function RankingsView({ scores, loading, onSelect, ts, mobile, meta }) {
 
   const sorted = [...scores].sort((a, b) => (b.score || 0) - (a.score || 0));
 
-  const aTier = sorted.filter((c) => c.grade && c.grade.startsWith("A"));
-  const rest = sorted.filter((c) => !c.grade || !c.grade.startsWith("A"));
+  const aTier = sorted.filter((c) => (c.score || 0) >= 80);
+  const rest = sorted.filter((c) => (c.score || 0) < 80);
 
   const cols = "40px 1fr 80px 72px 56px 56px 56px 56px 56px";
 
@@ -942,9 +941,8 @@ function RankingsView({ scores, loading, onSelect, ts, mobile, meta }) {
               <span style={{ fontFamily: T.mono, fontSize: 7, letterSpacing: 0.8, color: T.inkMid, border: `1px solid ${T.ruleMid}`, padding: "1px 3px", textTransform: "uppercase" }}>New</span>
             )}
             <div style={{ width: 1, height: 12, background: T.ruleMid }} />
-            <span style={{ fontFamily: T.mono, fontSize: 12, fontWeight: 500, color: T.inkLight }}>{fmt(coin.score, 1)}</span>
-            <span style={{ fontFamily: T.sans, fontSize: 28, fontWeight: 700, color: gradeColor(coin.grade), marginLeft: "auto", lineHeight: 1 }}>
-              {coin.grade || "—"}
+            <span style={{ fontFamily: T.mono, fontSize: 28, fontWeight: 700, color: scoreColor(coin.score), marginLeft: "auto", lineHeight: 1 }}>
+              {fmt(coin.score, 1)}
             </span>
             {confidenceBadge(coin.confidence, coin.confidence_tag, coin.components_populated, coin.components_total, coin.missing_categories)}
           </div>
@@ -1045,15 +1043,10 @@ function RankingsView({ scores, loading, onSelect, ts, mobile, meta }) {
             <div style={{ fontFamily: T.sans, fontSize: 11, color: T.inkFaint, marginTop: 1 }}>{coin.issuer}</div>
           </div>
 
-          <div style={{ paddingLeft: 8 }}>
-            <span style={{ fontFamily: T.sans, fontSize: 38, fontWeight: 700, color: gradeColor(coin.grade), lineHeight: 1 }}>
-              {coin.grade ? coin.grade.replace(/[+-]/, "") : "—"}
+          <div style={{ paddingLeft: 8, display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontFamily: T.mono, fontSize: 38, fontWeight: 700, color: scoreColor(coin.score), lineHeight: 1 }}>
+              {fmt(coin.score, 1)}
             </span>
-            {coin.grade && (coin.grade.includes("+") || coin.grade.includes("-")) && (
-              <span style={{ fontFamily: T.sans, fontSize: 18, fontWeight: 700, color: gradeColor(coin.grade), verticalAlign: "super" }}>
-                {coin.grade.slice(-1)}
-              </span>
-            )}
             {confidenceBadge(coin.confidence, coin.confidence_tag, coin.components_populated, coin.components_total, coin.missing_categories)}
           </div>
 
@@ -1151,7 +1144,7 @@ function RankingsView({ scores, loading, onSelect, ts, mobile, meta }) {
           }}>
             <span>#</span>
             <span>Stablecoin</span>
-            <span>SII Grade</span>
+            <span>SII Score</span>
             <span style={{ textAlign: "center" }}>Trend</span>
             <span>Peg</span>
             <span>Liq</span>
@@ -1204,16 +1197,16 @@ function Footnotes({ mobile }) {
 
       <div>
         <div style={{ fontFamily: T.mono, fontSize: 9, textTransform: "uppercase", letterSpacing: 1.5, color: T.inkLight, marginBottom: 8 }}>
-          Grade Scale
+          Score Scale
         </div>
         {[
-          ["A+ / A / A−", "90–100 / 85–90 / 80–85"],
-          ["B+ / B / B−", "75–80 / 70–75 / 65–70"],
-          ["C+ / C / C−", "60–65 / 55–60 / 50–55"],
-          ["D / F", "45–50 / <45"],
-        ].map(([grades, ranges]) => (
-          <div key={grades} style={{ display: "flex", justifyContent: "space-between", fontFamily: T.mono, fontSize: 10, color: T.inkMid, padding: "2px 0" }}>
-            <span>{grades}</span><span style={{ color: T.inkFaint }}>{ranges}</span>
+          ["90–100", "Excellent"],
+          ["70–89", "Good"],
+          ["50–69", "Fair"],
+          ["<50", "Weak"],
+        ].map(([range, label]) => (
+          <div key={range} style={{ display: "flex", justifyContent: "space-between", fontFamily: T.mono, fontSize: 10, color: T.inkMid, padding: "2px 0" }}>
+            <span>{range}</span><span style={{ color: T.inkFaint }}>{label}</span>
           </div>
         ))}
       </div>
@@ -1285,9 +1278,6 @@ function DetailView({ coinId, onBack, mobile }) {
               {coin.name}
             </h1>
             <span style={{ fontSize: mobile ? 12 : 14, color: T.inkFaint, fontFamily: T.mono }}>{coin.symbol}</span>
-            <span style={{ fontFamily: T.sans, fontSize: mobile ? 16 : 20, fontWeight: 700, color: gradeColor(coin.grade) }}>
-              {coin.grade}
-            </span>
             {confidenceBadge(coin.confidence, coin.confidence_tag, coin.components_populated, coin.components_total, coin.missing_categories)}
           </div>
           <div style={{ fontSize: mobile ? 10 : 12, color: T.inkLight, marginTop: 6, fontFamily: T.sans, lineHeight: 1.5 }}>
@@ -1450,7 +1440,7 @@ function MethodologyView({ mobile }) {
   }
 
   const indices = indicesData?.indices || [];
-  const gradeScale = indicesData?.grade_scale || {};
+  // grade_scale removed — scores are numerical 0-100 only
   const principles = indicesData?.principles || [];
   const dataSources = indicesData?.data_sources || [];
 
@@ -1544,17 +1534,25 @@ function MethodologyView({ mobile }) {
         </section>
       ))}
 
-      {/* Grade Scale */}
+      {/* Score Scale */}
       <section style={{ marginBottom: 28 }}>
         <div style={{ border: `1px solid ${T.ruleMid}`, padding: "20px 24px" }}>
           <div style={{ fontSize: 10, fontWeight: 600, color: T.inkLight, textTransform: "uppercase", letterSpacing: 1.5, marginBottom: 14, fontFamily: T.mono }}>
-            Grade Scale
+            Score Scale
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: mobile ? "repeat(3, 1fr)" : "repeat(6, 1fr)", gap: 6 }}>
-            {Object.entries(gradeScale).map(([grade, range]) => (
-              <div key={grade} style={{ padding: "8px 6px", textAlign: "center", border: `1px solid ${T.ruleLight}` }}>
-                <div style={{ fontWeight: 700, fontSize: 14, color: gradeColor(grade), fontFamily: T.mono }}>{grade}</div>
-                <div style={{ fontSize: 9, color: T.inkFaint, marginTop: 2, fontFamily: T.mono }}>{range}</div>
+          <p style={{ margin: "0 0 14px", fontSize: 13, color: T.inkMid, fontFamily: T.sans, lineHeight: 1.7 }}>
+            All scores are numerical 0-100. Higher is better. Scores are deterministic and version-controlled.
+          </p>
+          <div style={{ display: "grid", gridTemplateColumns: mobile ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: 6 }}>
+            {[
+              { range: "90–100", label: "Excellent", color: T.ink },
+              { range: "70–89", label: "Good", color: T.inkMid },
+              { range: "50–69", label: "Fair", color: T.inkLight },
+              { range: "<50", label: "Weak", color: T.accent },
+            ].map((t) => (
+              <div key={t.range} style={{ padding: "8px 6px", textAlign: "center", border: `1px solid ${T.ruleLight}` }}>
+                <div style={{ fontWeight: 700, fontSize: 14, color: t.color, fontFamily: T.mono }}>{t.range}</div>
+                <div style={{ fontSize: 9, color: T.inkFaint, marginTop: 2, fontFamily: T.mono }}>{t.label}</div>
               </div>
             ))}
           </div>
@@ -1611,8 +1609,8 @@ function MethodologyView({ mobile }) {
   );
 }
 
-const WALLET_COL_DESKTOP = "32px 170px 90px 60px 52px 140px 80px";
-const WALLET_COL_MOBILE = "170px 80px 52px 48px";
+const WALLET_COL_DESKTOP = "32px 170px 90px 72px 140px 80px";
+const WALLET_COL_MOBILE = "170px 80px 72px";
 
 function WalletTableHeader({ mobile }) {
   return (
@@ -1629,16 +1627,14 @@ function WalletTableHeader({ mobile }) {
         <>
           <span>Address</span>
           <span>Value</span>
-          <span>Risk</span>
-          <span>Grade</span>
+          <span>Risk Score</span>
         </>
       ) : (
         <>
           <span>#</span>
           <span>Address</span>
           <span>Value</span>
-          <span>Risk</span>
-          <span>Grade</span>
+          <span>Risk Score</span>
           <span>Concentration</span>
           <span>Coverage</span>
         </>
@@ -1675,11 +1671,8 @@ function WalletRow({ wallet, rank, mobile, lowScoreHighlight }) {
         {truncAddr(wallet.address)}
       </a>
       <span style={{ fontFamily: T.mono, fontSize: 11, color: T.ink }}>{fmtB(wallet.total_stablecoin_value)}</span>
-      <span style={{ fontFamily: T.mono, fontSize: 12, fontWeight: 600, color: scoreColor }}>
+      <span style={{ fontFamily: T.mono, fontSize: mobile ? 16 : 18, fontWeight: 700, color: scoreColor }}>
         {wallet.risk_score != null ? fmt(wallet.risk_score, 1) : "—"}
-      </span>
-      <span style={{ fontFamily: T.sans, fontSize: mobile ? 16 : 20, fontWeight: 700, color: gradeColor(wallet.risk_grade) }}>
-        {wallet.risk_grade || "—"}
       </span>
       {!mobile && (
         <>
@@ -1797,8 +1790,7 @@ function WalletSearchPanel({ mobile }) {
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               {[
-                { label: "Risk Score", value: fmt(r.risk_score, 1), valueStyle: { color: subScoreColor(r.risk_score), fontWeight: 600 } },
-                { label: "Grade", value: r.risk_grade || "—", valueStyle: { color: gradeColor(r.risk_grade), fontWeight: 700, fontSize: 14 } },
+                { label: "Risk Score", value: fmt(r.risk_score, 1), valueStyle: { color: subScoreColor(r.risk_score), fontWeight: 700, fontSize: 14 } },
                 { label: "HHI", value: `${fmtHHI(r.concentration_hhi)} · ${r.concentration_hhi != null && r.concentration_hhi >= 5000 ? "Concentrated" : r.concentration_hhi != null && r.concentration_hhi >= 1500 ? "Mixed" : r.concentration_hhi != null ? "Diversified" : "—"}` },
                 { label: "Coverage", value: r.coverage_quality || "—", valueStyle: { color: coverageColor(r.coverage_quality), textTransform: "uppercase" } },
                 { label: "Dominant Asset", value: `${r.dominant_asset || "—"} (${r.dominant_asset_pct != null ? fmt(r.dominant_asset_pct, 1) + "%" : "—"})` },
@@ -1831,12 +1823,12 @@ function WalletSearchPanel({ mobile }) {
                   <span>Value</span>
                   <span>% Wallet</span>
                   <span>SII</span>
-                  {!mobile && <><span>Grade</span><span>Scored</span></>}
+                  {!mobile && <><span>Scored</span></>}
                 </div>
                 {holdings.map((h, i) => (
                   <div key={i} style={{
                     display: "grid",
-                    gridTemplateColumns: mobile ? "60px 1fr 80px 68px" : "60px 1fr 100px 80px 72px 52px",
+                    gridTemplateColumns: mobile ? "60px 1fr 80px 68px" : "60px 1fr 100px 80px 52px",
                     padding: "7px 0",
                     borderBottom: `1px dotted ${T.ruleLight}`,
                     alignItems: "center",
@@ -1851,9 +1843,6 @@ function WalletSearchPanel({ mobile }) {
                     </span>
                     {!mobile && (
                       <>
-                        <span style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 700, color: gradeColor(h.sii_grade) }}>
-                          {h.sii_grade || "—"}
-                        </span>
                         <span style={{ fontFamily: T.mono, fontSize: 9, color: h.is_scored ? "#2d6b45" : T.inkFaint, textTransform: "uppercase" }}>
                           {h.is_scored ? "Yes" : "No"}
                         </span>
@@ -2070,7 +2059,7 @@ function DriftExploitBanner() {
   if (dismissed || !driftData) return null;
 
   const score = driftData.score != null ? driftData.score.toFixed(1) : "—";
-  const grade = driftData.grade || "—";
+  // grade removed — numerical scores only
 
   return (
     <div style={{
@@ -2094,7 +2083,7 @@ function DriftExploitBanner() {
         LIVE: Drift Protocol Exploit — ~$270M Drained
       </div>
       <div style={{ color: "#555", lineHeight: 1.5 }}>
-        Basis is scoring Drift in real-time. PSI Score: <strong>{score} ({grade})</strong>.
+        Basis is scoring Drift in real-time. PSI Score: <strong>{score}</strong>.
         {" "}First Solana protocol in the index.
       </div>
     </div>
@@ -2169,7 +2158,7 @@ function ProtocolsView({ mobile }) {
             {/* Header */}
             <div style={{
               display: "grid",
-              gridTemplateColumns: mobile ? "16px 32px 1fr 60px 40px" : "16px 32px 1fr 80px 80px 80px 80px 60px 40px",
+              gridTemplateColumns: mobile ? "16px 32px 1fr 60px" : "16px 32px 1fr 80px 80px 80px 80px 72px",
               padding: "8px 16px",
               background: T.paper,
               borderBottom: `3px solid ${T.ink}`,
@@ -2184,7 +2173,6 @@ function ProtocolsView({ mobile }) {
               {!mobile && <span>Security</span>}
               {!mobile && <span>Gov</span>}
               <span>Score</span>
-              <span>Grade</span>
             </div>
             {/* Rows */}
             {sorted.map((p, i) => {
@@ -2196,7 +2184,7 @@ function ProtocolsView({ mobile }) {
                     onClick={() => setExpandedSlug(isExpanded ? null : p.protocol_slug)}
                     style={{
                       display: "grid",
-                      gridTemplateColumns: mobile ? "16px 32px 1fr 60px 40px" : "16px 32px 1fr 80px 80px 80px 80px 60px 40px",
+                      gridTemplateColumns: mobile ? "16px 32px 1fr 60px" : "16px 32px 1fr 80px 80px 80px 80px 72px",
                       padding: "11px 16px",
                       borderBottom: isExpanded ? "none" : `1px dotted ${T.ruleMid}`,
                       alignItems: "center",
@@ -2215,8 +2203,7 @@ function ProtocolsView({ mobile }) {
                     {!mobile && <span style={{ fontFamily: T.mono, fontSize: 11, color: subScoreColor(cats.revenue) }}>{fmt(cats.revenue, 0)}</span>}
                     {!mobile && <span style={{ fontFamily: T.mono, fontSize: 11, color: subScoreColor(cats.security) }}>{fmt(cats.security, 0)}</span>}
                     {!mobile && <span style={{ fontFamily: T.mono, fontSize: 11, color: subScoreColor(cats.governance) }}>{fmt(cats.governance, 0)}</span>}
-                    <span style={{ fontFamily: T.mono, fontSize: 13, fontWeight: 600, color: T.ink }}>{fmt(p.score || p.overall_score, 1)}</span>
-                    <span style={{ fontFamily: T.sans, fontSize: 18, fontWeight: 700, color: gradeColor(p.grade) }}>{p.grade || "—"}</span>
+                    <span style={{ fontFamily: T.mono, fontSize: 16, fontWeight: 700, color: scoreColor(p.score || p.overall_score) }}>{fmt(p.score || p.overall_score, 1)}</span>
                     {confidenceBadge(p.confidence, p.confidence_tag, p.components_populated, p.components_total, p.missing_categories)}
                   </div>
                   {isExpanded && <PsiDetailPanel protocol={p} mobile={mobile} />}
@@ -2277,15 +2264,15 @@ function ProtocolsView({ mobile }) {
             return (
               <div style={{ border: `1px solid ${T.ruleMid}` }}>
                 <div style={{
-                  display: "grid", gridTemplateColumns: "32px 1fr 60px 40px",
+                  display: "grid", gridTemplateColumns: "32px 1fr 72px",
                   padding: "8px 12px", borderBottom: `3px solid ${T.ink}`,
                   fontFamily: T.mono, fontSize: 9, textTransform: "uppercase", letterSpacing: 1, color: T.inkLight,
                 }}>
-                  <span>#</span><span>Pair</span><span>CQI</span><span>Grade</span>
+                  <span>#</span><span>Pair</span><span>CQI</span>
                 </div>
                 {sorted.map((r, i) => (
                   <div key={i} style={{
-                    display: "grid", gridTemplateColumns: "32px 1fr 60px 40px",
+                    display: "grid", gridTemplateColumns: "32px 1fr 72px",
                     padding: "10px 12px", borderBottom: `1px dotted ${T.ruleMid}`, alignItems: "center",
                   }}>
                     <span style={{ fontFamily: T.mono, fontSize: 11, color: T.inkFaint }}>{i + 1}</span>
@@ -2294,8 +2281,7 @@ function ProtocolsView({ mobile }) {
                       <span style={{ fontFamily: T.mono, fontSize: 10, color: T.inkFaint }}> in </span>
                       <span style={{ fontFamily: T.mono, fontSize: 11, color: T.inkMid }}>{r.protocol}</span>
                     </div>
-                    <span style={{ fontFamily: T.mono, fontSize: 12, fontWeight: 600, color: T.ink }}>{fmt(r.cqi_score, 1)}</span>
-                    <span style={{ fontFamily: T.sans, fontSize: 16, fontWeight: 700, color: gradeColor(r.cqi_grade) }}>{r.cqi_grade || "—"}</span>
+                    <span style={{ fontFamily: T.mono, fontSize: 14, fontWeight: 700, color: scoreColor(r.cqi_score) }}>{fmt(r.cqi_score, 1)}</span>
                     {r.confidence && r.confidence !== "high" && confidenceBadge(r.confidence, null, null, null, null)}
                   </div>
                 ))}
@@ -2346,7 +2332,6 @@ function ProtocolsView({ mobile }) {
                         const slug = protoSlugMap[proto];
                         const entry = lookup[`${asset}-${slug}`];
                         const score = entry ? entry.cqi_score : null;
-                        const grade = entry ? entry.cqi_grade : null;
                         return (
                           <td key={proto} style={{
                             padding: "6px 6px", textAlign: "center",
@@ -2354,7 +2339,6 @@ function ProtocolsView({ mobile }) {
                             borderLeft: `1px solid ${T.ruleLight}`,
                           }}>
                             <div style={{ fontWeight: 600, color: T.ink }}>{score ? fmt(score, 0) : "—"}</div>
-                            <div style={{ fontSize: 9, color: gradeColor(grade) }}>{grade || ""}</div>
                           </td>
                         );
                       })}
@@ -2409,8 +2393,8 @@ function PulseView({ mobile, integrity }) {
   const psiScores = s.psi_scores || [];
   const notables = s.notable_events || [];
 
-  const aTier = scores.filter(c => c.grade && c.grade.startsWith("A"));
-  const atRisk = scores.filter(c => c.grade && !c.grade.startsWith("A") && !c.grade.startsWith("B"));
+  const aTier = scores.filter(c => (c.score || 0) >= 80);
+  const atRisk = scores.filter(c => (c.score || 0) < 70);
   const movers = scores.filter(c => c.delta_24h != null && Math.abs(c.delta_24h) >= 0.5)
     .sort((a, b) => Math.abs(b.delta_24h) - Math.abs(a.delta_24h));
 
@@ -2507,31 +2491,30 @@ function PulseView({ mobile, integrity }) {
         <div style={{ border: `1px solid ${T.ruleMid}` }}>
           <div style={{
             display: "grid",
-            gridTemplateColumns: mobile ? "32px 1fr 56px 56px 44px" : "32px 1fr 72px 72px 56px",
+            gridTemplateColumns: mobile ? "32px 1fr 56px 56px" : "32px 1fr 72px 72px",
             padding: "8px 16px",
             borderBottom: `3px solid ${T.ink}`,
             fontFamily: T.mono, fontSize: 9, textTransform: "uppercase", letterSpacing: 1.5, color: T.inkLight,
           }}>
-            <span>#</span><span>Asset</span><span>Score</span><span>Δ 24h</span><span>Grade</span>
+            <span>#</span><span>Asset</span><span>Score</span><span>Δ 24h</span>
           </div>
           {[...scores].sort((a, b) => (b.score || 0) - (a.score || 0)).map((coin, i) => (
             <div key={coin.symbol} style={{
               display: "grid",
-              gridTemplateColumns: mobile ? "32px 1fr 56px 56px 44px" : "32px 1fr 72px 72px 56px",
+              gridTemplateColumns: mobile ? "32px 1fr 56px 56px" : "32px 1fr 72px 72px",
               padding: "9px 16px",
               borderBottom: `1px dotted ${T.ruleMid}`,
               alignItems: "center",
             }}>
               <span style={{ fontFamily: T.mono, fontSize: 11, color: T.inkFaint }}>{i + 1}</span>
               <span style={{ fontFamily: T.mono, fontSize: 12, fontWeight: 700, color: T.ink }}>{coin.symbol}</span>
-              <span style={{ fontFamily: T.mono, fontSize: 12, fontWeight: 500, color: T.ink }}>{fmt(coin.score, 1)}</span>
+              <span style={{ fontFamily: T.mono, fontSize: 14, fontWeight: 700, color: scoreColor(coin.score) }}>{fmt(coin.score, 1)}</span>
               <span style={{
                 fontFamily: T.mono, fontSize: 11,
                 color: coin.delta_24h > 0 ? "#2d6b45" : coin.delta_24h < 0 ? T.accent : T.inkFaint,
               }}>
                 {coin.delta_24h != null ? (coin.delta_24h > 0 ? "+" : "") + fmt(coin.delta_24h, 2) : "—"}
               </span>
-              <span style={{ fontFamily: T.sans, fontSize: 16, fontWeight: 700, color: gradeColor(coin.grade) }}>{coin.grade || "—"}</span>
             </div>
           ))}
         </div>
@@ -2546,25 +2529,24 @@ function PulseView({ mobile, integrity }) {
           <div style={{ border: `1px solid ${T.ruleMid}` }}>
             <div style={{
               display: "grid",
-              gridTemplateColumns: "32px 1fr 72px 56px",
+              gridTemplateColumns: "32px 1fr 72px",
               padding: "8px 16px",
               borderBottom: `3px solid ${T.ink}`,
               fontFamily: T.mono, fontSize: 9, textTransform: "uppercase", letterSpacing: 1.5, color: T.inkLight,
             }}>
-              <span>#</span><span>Protocol</span><span>Score</span><span>Grade</span>
+              <span>#</span><span>Protocol</span><span>Score</span>
             </div>
             {[...psiScores].sort((a, b) => (b.score || 0) - (a.score || 0)).map((p, i) => (
               <div key={p.protocol_slug} style={{
                 display: "grid",
-                gridTemplateColumns: "32px 1fr 72px 56px",
+                gridTemplateColumns: "32px 1fr 72px",
                 padding: "9px 16px",
                 borderBottom: `1px dotted ${T.ruleMid}`,
                 alignItems: "center",
               }}>
                 <span style={{ fontFamily: T.mono, fontSize: 11, color: T.inkFaint }}>{i + 1}</span>
                 <span style={{ fontFamily: T.mono, fontSize: 12, fontWeight: 700, color: T.ink }}>{p.protocol_name || p.protocol_slug}</span>
-                <span style={{ fontFamily: T.mono, fontSize: 12, fontWeight: 500, color: T.ink }}>{fmt(p.score, 1)}</span>
-                <span style={{ fontFamily: T.sans, fontSize: 16, fontWeight: 700, color: gradeColor(p.grade) }}>{p.grade || "—"}</span>
+                <span style={{ fontFamily: T.mono, fontSize: 14, fontWeight: 700, color: scoreColor(p.score) }}>{fmt(p.score, 1)}</span>
               </div>
             ))}
           </div>

@@ -391,7 +391,6 @@ def register_page_routes(app: FastAPI) -> None:
 def _wallet_json_ld(address: str, risk: dict, holdings: list, profile: dict = None) -> str:
     props = [
         {"@type": "PropertyValue", "name": "risk_score", "value": risk.get("risk_score")},
-        {"@type": "PropertyValue", "name": "risk_grade", "value": risk.get("risk_grade")},
         {"@type": "PropertyValue", "name": "concentration_hhi", "value": risk.get("concentration_hhi")},
         {"@type": "PropertyValue", "name": "total_value", "value": risk.get("total_stablecoin_value")},
         {"@type": "PropertyValue", "name": "holdings_count", "value": len(holdings)},
@@ -403,8 +402,6 @@ def _wallet_json_ld(address: str, risk: dict, holdings: list, profile: dict = No
             props.append({"@type": "PropertyValue", "name": "days_tracked", "value": bs["days_tracked"]})
         if bs.get("score_stability_30d") is not None:
             props.append({"@type": "PropertyValue", "name": "score_stability_30d", "value": bs["score_stability_30d"]})
-        if qh.get("pct_days_a_grade") is not None:
-            props.append({"@type": "PropertyValue", "name": "pct_days_a_grade", "value": qh["pct_days_a_grade"]})
         if profile.get("profile_hash"):
             props.append({"@type": "PropertyValue", "name": "profile_hash", "value": profile["profile_hash"]})
     ld = {
@@ -424,7 +421,6 @@ def _asset_json_ld(symbol: str, score: dict) -> str:
         "name": f"Stablecoin Integrity Index: {symbol.upper()}",
         "additionalProperty": [
             {"@type": "PropertyValue", "name": "sii_score", "value": score.get("overall_score")},
-            {"@type": "PropertyValue", "name": "grade", "value": score.get("grade")},
             {"@type": "PropertyValue", "name": "formula_version", "value": score.get("formula_version")},
         ],
     }
@@ -489,7 +485,7 @@ def _fallback_wallet_html(ctx: dict) -> str:
 </head><body style="{_FALLBACK_STYLE}">
 <p style="{_FALLBACK_LABEL}">Wallet Risk Profile</p>
 <p style="{_FALLBACK_MONO};word-break:break-all">{addr}</p>
-<p style="{_FALLBACK_MONO}">Risk Score: {risk.get('risk_score', 'N/A')} ({risk.get('risk_grade', 'N/A')})</p>
+<p style="{_FALLBACK_MONO}">Risk Score: {risk.get('risk_score', 'N/A')}</p>
 <p style="{_FALLBACK_MONO}">Concentration HHI: {risk.get('concentration_hhi', 'N/A')}</p>
 <p style="{_FALLBACK_MONO}">Total Value: ${risk.get('total_stablecoin_value', 0):,.2f}</p>""",
     ]
@@ -501,8 +497,7 @@ def _fallback_wallet_html(ctx: dict) -> str:
                      f"Score Stability (30d): {bs.get('score_stability_30d', '—')} · "
                      f"Avg Score (30d): {bs.get('avg_score_30d', '—')}</p>")
         parts.append(f'<p style="{_FALLBACK_LABEL};margin-top:16px">Quality History</p>')
-        parts.append(f"<p style=\"{_FALLBACK_MONO}\">A Grade: {qh.get('pct_days_a_grade', '—')}% · "
-                     f"Best: {qh.get('best_score_ever', '—')} · "
+        parts.append(f"<p style=\"{_FALLBACK_MONO}\">Best: {qh.get('best_score_ever', '—')} · "
                      f"Worst: {qh.get('worst_score_ever', '—')}</p>")
         if profile.get("profile_hash"):
             parts.append(f"<p style='{_FALLBACK_MONO};font-size:10px;color:#9a9a9a'>Hash: {profile['profile_hash']}</p>")
@@ -521,7 +516,7 @@ def _fallback_asset_html(ctx: dict) -> str:
 </head><body style="{_FALLBACK_STYLE}">
 <p style="{_FALLBACK_LABEL}">Stablecoin Integrity Index</p>
 <p style="font-family:'IBM Plex Mono',monospace;font-size:18px;font-weight:700">{ctx['symbol']}</p>
-<p style="{_FALLBACK_MONO}">Score: {score.get('overall_score', 'N/A')} ({score.get('grade', 'N/A')})</p>
+<p style="{_FALLBACK_MONO}">Score: {score.get('overall_score', 'N/A')}</p>
 </body></html>"""
 
 

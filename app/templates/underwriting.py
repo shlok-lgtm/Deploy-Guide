@@ -7,7 +7,7 @@ CQI composition risk analysis.
 
 from app.templates._html import (
     page, section, score_header, attestation_footer,
-    table, grade_color, fmt_usd, CANONICAL_BASE_URL,
+    table, fmt_usd, CANONICAL_BASE_URL,
 )
 
 
@@ -16,10 +16,9 @@ def render(report_data: dict, lens_result: dict = None,
     d = report_data
     name = d.get("name", d.get("entity_id", "?"))
     score = d.get("score")
-    grade = d.get("grade", "—")
 
     body = f'<p class="meta">Underwriting Report · {name} · {timestamp}</p>'
-    body += score_header(name, score, grade, d.get("formula_version", ""))
+    body += score_header(name, score, subtitle=d.get("formula_version", ""))
 
     # PSI category analysis
     cat_scores = d.get("category_scores") or {}
@@ -53,13 +52,12 @@ def render(report_data: dict, lens_result: dict = None,
                 p.get("asset", "?"),
                 f"{sii:.1f}",
                 f"{cqi:.1f}",
-                f'<span style="color:{grade_color(p.get("cqi_grade", ""))}">{p.get("cqi_grade", "—")}</span>',
                 risk,
             ])
         body += section("Collateral Quality Risk",
                         '<p class="meta">CQI combines asset quality (SII) with protocol risk (PSI). '
                         'Low CQI on any collateral pair is a concentration risk.</p>' +
-                        table(["Collateral", "SII", "CQI", "Grade", "Risk"], rows, [1, 2]))
+                        table(["Collateral", "SII", "CQI", "Risk"], rows, [1, 2]))
 
     # Coverage recommendations
     exposure = d.get("exposure") or []

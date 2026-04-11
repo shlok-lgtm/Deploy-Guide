@@ -9,7 +9,7 @@ import logging
 from datetime import datetime, timezone
 
 from app.database import fetch_one, fetch_all
-from app.scoring import score_to_grade, FORMULA_VERSION, SII_V1_WEIGHTS, STRUCTURAL_SUBWEIGHTS
+from app.scoring import FORMULA_VERSION, SII_V1_WEIGHTS, STRUCTURAL_SUBWEIGHTS
 from app.composition import compute_cqi, compose_geometric_mean
 
 logger = logging.getLogger(__name__)
@@ -50,7 +50,6 @@ def _assemble_stablecoin(symbol: str) -> dict | None:
 
     sid = row["stablecoin_id"]
     score = float(row.get("overall_score") or 0)
-    grade = row.get("grade", "—")
 
     categories = {
         "peg": {"score": _f(row.get("peg_score")), "weight": SII_V1_WEIGHTS["peg_stability"]},
@@ -100,7 +99,6 @@ def _assemble_stablecoin(symbol: str) -> dict | None:
         "issuer": row.get("issuer"),
         "token_contract": row.get("token_contract"),
         "score": score,
-        "grade": grade,
         "categories": categories,
         "structural_breakdown": structural_breakdown,
         "components": [_fmt_component(c) for c in components],
@@ -108,7 +106,7 @@ def _assemble_stablecoin(symbol: str) -> dict | None:
         "protocols_holding": protocols_holding,
         "score_hashes": score_hashes,
         "state_hashes": state_hashes,
-        "history": [{"score": float(h["overall_score"]), "grade": h["grade"],
+        "history": [{"score": float(h["overall_score"]),
                       "date": h["computed_at"].isoformat()} for h in history] if history else [],
         "formula_version": row.get("formula_version") or FORMULA_VERSION,
         "computed_at": row["computed_at"].isoformat() if row.get("computed_at") else None,
@@ -147,11 +145,8 @@ def _assemble_protocol(slug: str) -> dict | None:
                 "asset": coin["symbol"],
                 "protocol": row.get("protocol_name", slug),
                 "sii_score": cqi["inputs"]["sii"]["score"],
-                "sii_grade": cqi["inputs"]["sii"]["grade"],
                 "psi_score": cqi["inputs"]["psi"]["score"],
-                "psi_grade": cqi["inputs"]["psi"]["grade"],
                 "cqi_score": cqi["cqi_score"],
-                "cqi_grade": cqi["cqi_grade"],
                 "confidence": cqi["confidence"],
                 "proof_url": f"/proof/sii/{coin['stablecoin_id']}",
             })
@@ -165,7 +160,6 @@ def _assemble_protocol(slug: str) -> dict | None:
         "name": row.get("protocol_name", slug),
         "protocol_slug": slug,
         "score": score,
-        "grade": row.get("grade", "—"),
         "category_scores": cat_scores,
         "component_scores": comp_scores,
         "raw_values": row.get("raw_values") or {},
@@ -232,7 +226,6 @@ def _assemble_wallet(address: str) -> dict | None:
         "entity_id": addr,
         "address": addr,
         "score": float(risk["risk_score"]) if risk and risk.get("risk_score") is not None else None,
-        "grade": risk.get("risk_grade") if risk else None,
         "concentration_hhi": float(risk["concentration_hhi"]) if risk and risk.get("concentration_hhi") else None,
         "unscored_pct": float(risk["unscored_pct"]) if risk and risk.get("unscored_pct") else None,
         "coverage_quality": risk.get("coverage_quality") if risk else None,
@@ -247,7 +240,6 @@ def _assemble_wallet(address: str) -> dict | None:
             "pct_of_wallet": h.get("pct_of_wallet"),
             "is_scored": h.get("is_scored"),
             "sii_score": float(h["sii_score"]) if h.get("sii_score") is not None else None,
-            "sii_grade": h.get("sii_grade"),
             "proof_url": h.get("proof_url"),
         } for h in holdings],
         "num_scored": risk.get("num_scored_holdings") if risk else sum(1 for h in holdings if h.get("is_scored")),
@@ -316,8 +308,7 @@ def _get_protocols_for_stablecoin(symbol: str) -> list[dict]:
             ORDER BY ps.protocol_slug, ps.computed_at DESC
         """, (symbol,))
         return [{"slug": r["protocol_slug"], "name": r["protocol_name"],
-                 "psi_score": float(r["overall_score"]) if r.get("overall_score") else None,
-                 "grade": r.get("grade")} for r in rows]
+                 "psi_score": float(r["overall_score"]) if r.get("overall_score") else None} for r in rows]
     except Exception:
         return []
 
@@ -341,7 +332,6 @@ def _get_stablecoin_exposure(protocol_slug: str) -> list[dict]:
             "name": r.get("name"),
             "exposure_usd": float(r["exposure_usd"]) if r.get("exposure_usd") else None,
             "sii_score": float(r["overall_score"]) if r.get("overall_score") else None,
-            "grade": r.get("grade"),
         } for r in rows]
     except Exception:
         return []

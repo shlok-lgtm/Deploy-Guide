@@ -6,7 +6,7 @@ PSI score + stablecoin exposure + CQI composition.
 
 from app.templates._html import (
     page, section, score_header, attestation_footer,
-    table, proof_link, grade_color, fmt_usd, CANONICAL_BASE_URL,
+    table, proof_link, fmt_usd, CANONICAL_BASE_URL,
 )
 
 
@@ -16,10 +16,9 @@ def render(report_data: dict, lens_result: dict = None,
     d = report_data
     name = d.get("name", d.get("entity_id", "Unknown"))
     score = d.get("score")
-    grade = d.get("grade", "—")
 
     body = f'<p class="meta">Protocol Risk Report · {name} · {timestamp}</p>'
-    body += score_header(name, score, grade, f"PSI {d.get('formula_version', '')}")
+    body += score_header(name, score, subtitle=f"PSI {d.get('formula_version', '')}")
 
     # Lens classification (if provided)
     if lens_result:
@@ -42,13 +41,11 @@ def render(report_data: dict, lens_result: dict = None,
         rows = []
         for e in exposure:
             s = f"{float(e['sii_score']):.1f}" if e.get("sii_score") else "—"
-            g = e.get("grade") or "—"
             link = proof_link(f"/proof/sii/{e.get('stablecoin_id', '')}")
             amt = fmt_usd(e.get("exposure_usd"))
-            rows.append([e.get("symbol", "?"), e.get("name", ""), amt, s,
-                         f'<span style="color:{grade_color(g)}">{g}</span>', link])
+            rows.append([e.get("symbol", "?"), e.get("name", ""), amt, s, link])
         body += section("Stablecoin Exposure",
-                        table(["Symbol", "Name", "Exposure", "SII", "Grade", "Proof"],
+                        table(["Symbol", "Name", "Exposure", "SII", "Proof"],
                               rows, [2, 3]))
 
     # CQI composition
@@ -60,11 +57,10 @@ def render(report_data: dict, lens_result: dict = None,
             sii_s = f"{float(p['sii_score']):.1f}" if p.get("sii_score") else "—"
             psi_s = f"{float(p['psi_score']):.1f}" if p.get("psi_score") else "—"
             link = proof_link(p.get("proof_url", ""))
-            rows.append([p.get("asset", "?"), sii_s, psi_s, cqi_s,
-                         p.get("cqi_grade", "—"), link])
+            rows.append([p.get("asset", "?"), sii_s, psi_s, cqi_s, link])
         body += section("Collateral Quality Index (CQI)",
                         '<p class="meta">Geometric mean of SII and PSI scores per stablecoin held.</p>' +
-                        table(["Asset", "SII", "PSI", "CQI", "Grade", "Proof"], rows, [1, 2, 3]))
+                        table(["Asset", "SII", "PSI", "CQI", "Proof"], rows, [1, 2, 3]))
 
     # Evidence links
     evidence = f'<a href="{d.get("proof_url", "#")}" style="color:#0B090A">PSI Proof page</a><br>'
@@ -76,7 +72,7 @@ def render(report_data: dict, lens_result: dict = None,
                                lens_result.get("lens_version") if lens_result else None)
 
     return page(f"{name} — Protocol Risk Report", body,
-                f"Protocol risk report for {name}. PSI {score:.1f} ({grade}).",
+                f"Protocol risk report for {name}. PSI {score:.1f}/100." if score else f"Protocol risk report for {name}.",
                 f"{CANONICAL_BASE_URL}/report/protocol/{d.get('entity_id', '')}")
 
 

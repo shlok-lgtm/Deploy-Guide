@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.config import STABLECOIN_REGISTRY, COLLECTION_INTERVAL_MINUTES
 from app.database import init_pool, close_pool, get_cursor, fetch_one, fetch_all
 from app.scoring import (
-    calculate_sii, calculate_structural_composite, score_to_grade,
+    calculate_sii, calculate_structural_composite,
     aggregate_legacy_to_v1, FORMULA_VERSION, SII_V1_WEIGHTS,
 )
 from app.collectors.coingecko import (
@@ -208,7 +208,7 @@ async def collect_all_components(
 def compute_sii_from_components(components: list[dict]) -> dict:
     """
     Given a flat list of component readings, compute the SII score.
-    Returns dict with overall score, grade, category scores, structural breakdown.
+    Returns dict with overall score, category scores, structural breakdown.
     """
     # Group by category → average normalized scores
     category_scores: dict[str, list[float]] = {}
@@ -241,7 +241,6 @@ def compute_sii_from_components(components: list[dict]) -> dict:
     
     return {
         "overall_score": round(overall, 2),
-        "grade": score_to_grade(overall),
         "peg_score": round(v1_scores.get("peg_stability") or 0, 2),
         "liquidity_score": round(v1_scores.get("liquidity_depth") or 0, 2),
         "mint_burn_score": round(v1_scores.get("mint_burn_dynamics") or 0, 2),
@@ -353,7 +352,7 @@ def store_score(stablecoin_id: str, score_data: dict, price_ctx: dict):
                 updated_at = NOW()
         """, (
             stablecoin_id,
-            score_data["overall_score"], score_data["grade"],
+            score_data["overall_score"], None,
             score_data["peg_score"], score_data["liquidity_score"],
             score_data["mint_burn_score"], score_data["distribution_score"],
             score_data["structural_score"],
@@ -399,7 +398,7 @@ def store_history_snapshot(stablecoin_id: str, score_data: dict):
                 component_count = EXCLUDED.component_count
         """, (
             stablecoin_id,
-            score_data["overall_score"], score_data["grade"],
+            score_data["overall_score"], None,
             score_data["peg_score"], score_data["liquidity_score"],
             score_data["mint_burn_score"], score_data["distribution_score"],
             score_data["structural_score"],
@@ -527,14 +526,13 @@ async def score_stablecoin(client: httpx.AsyncClient, stablecoin_id: str) -> dic
 
     elapsed = time.time() - start
     logger.info(
-        f"{stablecoin_id}: {score_data['overall_score']} ({score_data['grade']}) "
+        f"{stablecoin_id}: {score_data['overall_score']} "
         f"- {score_data['component_count']} components in {elapsed:.1f}s"
     )
 
     return {
         "stablecoin": stablecoin_id,
         "score": score_data["overall_score"],
-        "grade": score_data["grade"],
         "components": score_data["component_count"],
         "elapsed": round(elapsed, 1),
     }

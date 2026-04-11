@@ -231,7 +231,6 @@ async def paid_sii_rankings():
             "symbol": row["symbol"],
             "issuer": row["issuer"],
             "score": float(row["overall_score"]),
-            "grade": row["grade"],
             "price": float(row["current_price"]) if row.get("current_price") else None,
             "categories": {
                 "peg": float(row["peg_score"]) if row.get("peg_score") else None,
@@ -275,7 +274,6 @@ async def paid_sii_detail(coin: str):
         "name": row["name"],
         "symbol": row["symbol"],
         "score": float(row["overall_score"]),
-        "grade": row["grade"],
         "price": float(row["current_price"]) if row.get("current_price") else None,
         "categories": {
             "peg": {"score": float(row["peg_score"]) if row.get("peg_score") else None, "weight": SII_V1_WEIGHTS["peg_stability"]},
@@ -316,7 +314,6 @@ async def paid_psi_all():
                 "protocol_slug": r["protocol_slug"],
                 "protocol_name": r["protocol_name"],
                 "score": float(r["overall_score"]) if r.get("overall_score") else None,
-                "grade": r["grade"],
                 "category_scores": r.get("category_scores"),
                 "computed_at": r["computed_at"].isoformat() if r.get("computed_at") else None,
             }
@@ -342,7 +339,6 @@ async def paid_psi_detail(slug: str):
         "protocol_slug": row["protocol_slug"],
         "protocol_name": row["protocol_name"],
         "score": float(row["overall_score"]) if row.get("overall_score") else None,
-        "grade": row["grade"],
         "category_scores": row.get("category_scores"),
         "component_scores": row.get("component_scores"),
         "raw_values": row.get("raw_values"),

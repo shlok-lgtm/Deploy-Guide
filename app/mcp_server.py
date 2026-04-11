@@ -78,7 +78,7 @@ async def _api_get(path: str) -> dict:
 
 
 @mcp.tool()
-async def get_stablecoin_scores(min_grade: str = None, sort_by: str = "score_desc") -> str:
+async def get_stablecoin_scores(sort_by: str = "score_desc") -> str:
     """Get current SII scores for all scored stablecoins. Use before any decision involving stablecoins."""
     _start = time.time()
     _success = True
@@ -89,7 +89,7 @@ async def get_stablecoin_scores(min_grade: str = None, sort_by: str = "score_des
         _success = False
         raise
     finally:
-        _log_mcp_tool_call("get_stablecoin_scores", {"min_grade": min_grade, "sort_by": sort_by}, int((time.time() - _start) * 1000), _success)
+        _log_mcp_tool_call("get_stablecoin_scores", {"sort_by": sort_by}, int((time.time() - _start) * 1000), _success)
 
 
 @mcp.tool()
@@ -193,7 +193,7 @@ async def check_transaction_risk(from_address: str, to_address: str, asset_symbo
 
 @mcp.tool()
 async def get_methodology() -> str:
-    """Returns the current SII formula, category weights, grade scale, and version information."""
+    """Returns the current SII formula, category weights, score scale, and version information."""
     _start = time.time()
     _success = True
     try:
@@ -235,7 +235,7 @@ async def query_template(template_name: str, params: dict = None) -> str:
     """Run a pre-built query template against the Basis risk database.
 
     Available templates:
-    - high_risk_whales: Wallets with high value AND poor risk grades
+    - high_risk_whales: Wallets with high value AND poor risk scores
     - contagion_hotspots: Wallets with the most counterparty connections
     - stablecoin_concentration: Per-stablecoin holder concentration
     - score_movers: Assets whose SII score changed most over N days

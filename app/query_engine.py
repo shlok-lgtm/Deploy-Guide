@@ -142,7 +142,6 @@ def execute_query(query: dict) -> dict:
         results.append({
             "address": r["wallet_address"],
             "risk_score": float(r["risk_score"]) if r.get("risk_score") is not None else None,
-            "risk_grade": r.get("risk_grade"),
             "concentration_hhi": float(r["concentration_hhi"]) if r.get("concentration_hhi") is not None else None,
             "total_value_usd": float(r["total_stablecoin_value"]) if r.get("total_stablecoin_value") is not None else None,
             "size_tier": r.get("size_tier"),
@@ -156,7 +155,7 @@ def execute_query(query: dict) -> dict:
     if include_holdings and results:
         for entry in results[:20]:
             holdings = fetch_all("""
-                SELECT symbol, value_usd, pct_of_wallet, sii_score, sii_grade
+                SELECT symbol, value_usd, pct_of_wallet, sii_score
                 FROM wallet_graph.wallet_holdings
                 WHERE wallet_address = %s
                   AND indexed_at = (
@@ -237,11 +236,6 @@ QUERY_SCHEMA = {
                 "coverage_quality": {
                     "type": "exact",
                     "values": ["full", "high", "partial", "low"],
-                },
-                "risk_grade": {
-                    "type": "exact_or_list",
-                    "values": ["A+", "A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D", "F"],
-                    "example": ["B+", "B", "B-"],
                 },
             },
             "sort_fields": ALLOWED_SORT_FIELDS,

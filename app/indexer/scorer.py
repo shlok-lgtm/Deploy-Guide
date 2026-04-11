@@ -10,7 +10,6 @@ Formula version: wallet-v1.0.0
 import logging
 from typing import Optional
 
-from app.scoring import score_to_grade
 from app.indexer.config import (
     classify_size_tier,
     classify_coverage,
@@ -45,7 +44,6 @@ def compute_wallet_risk(holdings: list[dict]) -> Optional[dict]:
     unscored = [h for h in holdings if not h.get("is_scored") or h.get("sii_score") is None]
 
     risk_score = None
-    risk_grade = None
     if scored:
         total_scored_value = sum(h["value_usd"] for h in scored)
         if total_scored_value > 0:
@@ -53,7 +51,6 @@ def compute_wallet_risk(holdings: list[dict]) -> Optional[dict]:
                 h["value_usd"] * h["sii_score"] for h in scored
             ) / total_scored_value
             risk_score = round(risk_score, 2)
-            risk_grade = score_to_grade(risk_score)
 
     # -- Concentration HHI --
     shares = [(h["value_usd"] / total_value) * 100 for h in holdings]
@@ -61,7 +58,6 @@ def compute_wallet_risk(holdings: list[dict]) -> Optional[dict]:
     # Normalize: higher = more diversified
     hhi_normalized = 100 - ((hhi / 10000) * 100)
     hhi_normalized = round(max(0, min(100, hhi_normalized)), 2)
-    concentration_grade = score_to_grade(hhi_normalized)
 
     # -- Unscored exposure --
     unscored_value = sum(h["value_usd"] for h in unscored)
@@ -81,9 +77,7 @@ def compute_wallet_risk(holdings: list[dict]) -> Optional[dict]:
 
     return {
         "risk_score": risk_score,
-        "risk_grade": risk_grade,
         "concentration_hhi": round(hhi, 2),
-        "concentration_grade": concentration_grade,
         "unscored_pct": unscored_pct,
         "coverage_quality": coverage_quality,
         "num_scored_holdings": len(scored),

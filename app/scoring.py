@@ -95,6 +95,7 @@ def normalize_direct(value: float) -> float:
 # Grade Mapping (exact copy from original)
 # =============================================================================
 
+# DEPRECATED: retained for backward compatibility. Grade output removed from all surfaces.
 def score_to_grade(score: float) -> str:
     """Convert numeric score to letter grade."""
     if score >= 90:

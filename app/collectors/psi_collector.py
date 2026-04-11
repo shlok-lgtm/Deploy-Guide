@@ -1428,7 +1428,7 @@ def run_psi_scoring():
                 result["protocol_slug"],
                 result["protocol_name"],
                 result["overall_score"],
-                result["grade"],
+                None,
                 json.dumps(result["category_scores"]),
                 json.dumps(result["component_scores"]),
                 json.dumps(raw_for_storage, default=str),
@@ -1443,7 +1443,7 @@ def run_psi_scoring():
 
             results.append(result)
             logger.info(
-                f"  {result['protocol_name']}: {result['overall_score']} ({result['grade']}) "
+                f"  {result['protocol_name']}: {result['overall_score']} "
                 f"- {result['components_available']}/{result['components_total']} components"
             )
 
@@ -1478,14 +1478,13 @@ def run_psi_scoring():
                                 "entity_type": "protocol",
                                 "entity_id": slug,
                                 "title": f"{result['protocol_name']} PSI {direction} {abs(delta):.1f} pts",
-                                "description": f"PSI score moved from {prev_score:.1f} to {current_score:.1f} ({delta:+.1f}). Grade: {result['grade']}.",
+                                "description": f"PSI score moved from {prev_score:.1f} to {current_score:.1f} ({delta:+.1f}).",
                                 "previous_score": prev_score,
                                 "current_score": current_score,
                                 "delta": round(delta, 2),
-                                "grade": result["grade"],
                             },
                             "wallet_risk_score": current_score,
-                            "wallet_risk_grade": result["grade"],
+                            "wallet_risk_grade": None,
                             "wallet_risk_score_prev": prev_score,
                             "concentration_hhi": None,
                             "concentration_hhi_prev": None,

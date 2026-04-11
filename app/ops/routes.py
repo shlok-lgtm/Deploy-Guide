@@ -1852,11 +1852,9 @@ async def protocol_deep_dive(slug: str, request: Request):
                     cqi_row.append({
                         "asset": coin["symbol"],
                         "sii_score": sii,
-                        "sii_grade": coin["grade"],
                         "sii_confidence": sii_c["confidence"],
                         "psi_score": psi_score_val,
                         "cqi_score": cqi,
-                        "cqi_grade": score_to_grade(cqi) if cqi else None,
                         "cqi_confidence": cqi_c["confidence"],
                     })
             cqi_row.sort(key=lambda x: x.get("cqi_score", 0), reverse=True)
@@ -1875,13 +1873,12 @@ async def protocol_deep_dive(slug: str, request: Request):
         except Exception:
             pass
 
-        from app.scoring import score_to_grade
+        # score_to_grade removed — numerical scores only
 
         return {
             "protocol_slug": slug,
             "protocol_name": psi_row["protocol_name"],
             "score": float(psi_row["overall_score"]) if psi_row.get("overall_score") else None,
-            "grade": psi_row["grade"],
             "confidence": psi_conf["confidence"],
             "confidence_tag": psi_conf["tag"],
             "missing_categories": psi_conf["missing_categories"],
@@ -1894,7 +1891,6 @@ async def protocol_deep_dive(slug: str, request: Request):
             "score_history": [
                 {
                     "score": float(h["overall_score"]) if h.get("overall_score") else None,
-                    "grade": h["grade"],
                     "category_scores": h.get("category_scores"),
                     "date": str(h["scored_date"]) if h.get("scored_date") else (h["computed_at"].isoformat() if h.get("computed_at") else None),
                 }
@@ -2332,7 +2328,7 @@ async def abm_generate_guide(campaign_id: int, request: Request):
         if coins:
             placeholders = ", ".join(["%s"] * len(coins))
             score_rows = fetch_all(
-                f"""SELECT stablecoin_id, overall_score, grade,
+                f"""SELECT stablecoin_id, overall_score,
                        peg_score, liquidity_score, mint_burn_score,
                        distribution_score, structural_score
                 FROM scores WHERE stablecoin_id IN ({placeholders})""",
@@ -2344,7 +2340,6 @@ async def abm_generate_guide(campaign_id: int, request: Request):
             scores_table.append({
                 "coin": s["stablecoin_id"],
                 "score": float(s["overall_score"]) if s.get("overall_score") else None,
-                "grade": s.get("grade"),
                 "peg": float(s["peg_score"]) if s.get("peg_score") else None,
                 "liquidity": float(s["liquidity_score"]) if s.get("liquidity_score") else None,
                 "structural": float(s["structural_score"]) if s.get("structural_score") else None,
@@ -2388,11 +2383,11 @@ async def abm_generate_guide(campaign_id: int, request: Request):
         if scores_table:
             lines.append(f"## Current SII Scores")
             lines.append(f"")
-            lines.append(f"| Asset | SII Score | Grade | Peg | Liquidity | Structural |")
-            lines.append(f"|-------|-----------|-------|-----|-----------|------------|")
+            lines.append(f"| Asset | SII Score | Peg | Liquidity | Structural |")
+            lines.append(f"|-------|-----------|-----|-----------|------------|")
             for s in scores_table:
                 lines.append(
-                    f"| {s['coin']} | {s['score'] or '—'} | {s['grade'] or '—'} "
+                    f"| {s['coin']} | {s['score'] or '—'} "
                     f"| {s['peg'] or '—'} | {s['liquidity'] or '—'} | {s['structural'] or '—'} |"
                 )
             lines.append(f"")
@@ -2439,7 +2434,7 @@ async def abm_generate_guide(campaign_id: int, request: Request):
                 "### Enforcement — On-Chain Score Checks\n\n"
                 "Read from the Basis Oracle before accepting collateral or executing transactions:\n\n"
                 "```solidity\n"
-                "(uint16 score, bytes2 grade, uint48 ts, ) = oracle.getScore(tokenAddress);\n"
+                "(uint16 score, , uint48 ts, ) = oracle.getScore(tokenAddress);\n"
                 "require(score >= 7500, \"Basis: below threshold\"); // 75.0\n"
                 "require(!oracle.isStale(tokenAddress, 7200), \"Basis: stale\"); // 2h\n"
                 "```\n\n"
@@ -2522,6 +2517,48 @@ async def run_migration_049(request: Request):
         )
         run_migration(migration_path)
         return {"status": "ok", "migration": "049_abm_campaigns"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
+
+
+@router.post("/fix-internal-traffic")
+async def fix_internal_traffic(request: Request):
+    """One-time fix: reclassify historical internal traffic in api_request_log."""
+    _check_admin_key(request)
+    try:
+        from app.database import get_cursor
+        results = {}
+        with get_cursor() as cur:
+            cur.execute("UPDATE api_request_log SET is_internal = TRUE WHERE user_agent ILIKE '%ClaudeBot%' AND is_internal = FALSE")
+            results["claudebot"] = cur.rowcount
+            cur.execute("UPDATE api_request_log SET is_internal = TRUE WHERE user_agent ILIKE '%python-requests%' AND is_internal = FALSE")
+            results["python_requests"] = cur.rowcount
+            cur.execute("UPDATE api_request_log SET is_internal = TRUE WHERE user_agent ILIKE '%httpx%' AND is_internal = FALSE")
+            results["httpx"] = cur.rowcount
+            cur.execute("UPDATE api_request_log SET is_internal = TRUE WHERE ip_address LIKE '127.0.0.%%' AND is_internal = FALSE")
+            results["localhost"] = cur.rowcount
+
+        # Query current state
+        summary = fetch_all(
+            """SELECT is_internal, COUNT(*) as requests, COUNT(DISTINCT ip_address) as unique_ips
+               FROM api_request_log WHERE timestamp > NOW() - INTERVAL '24 hours'
+               GROUP BY is_internal"""
+        )
+        top_external = fetch_all(
+            """SELECT ip_address, LEFT(user_agent, 80) as ua, COUNT(*) as c
+               FROM api_request_log
+               WHERE timestamp > NOW() - INTERVAL '24 hours' AND is_internal = FALSE
+               GROUP BY ip_address, LEFT(user_agent, 80)
+               ORDER BY c DESC LIMIT 10"""
+        )
+        return {
+            "status": "ok",
+            "rows_reclassified": results,
+            "last_24h_summary": [dict(r) for r in summary],
+            "top_external_24h": [dict(r) for r in top_external],
+        }
     except HTTPException:
         raise
     except Exception as e:

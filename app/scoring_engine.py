@@ -10,7 +10,6 @@ Pattern: raw values -> normalize per component -> aggregate by category -> weigh
 from app.scoring import (
     normalize_inverse_linear, normalize_linear, normalize_log,
     normalize_centered, normalize_exponential_penalty, normalize_direct,
-    score_to_grade,
 )
 
 NORMALIZATION_FUNCTIONS = {
@@ -31,7 +30,7 @@ def score_entity(definition, raw_values):
         definition: An index definition dict (see app/index_definitions/schema.py)
         raw_values: Dict of component_id -> raw numeric value
 
-    Returns dict with: index_id, version, overall_score, grade,
+    Returns dict with: index_id, version, overall_score,
         category_scores, component_scores, components_available,
         components_total, coverage
     """
@@ -95,7 +94,6 @@ def score_entity(definition, raw_values):
         "index_id": definition["index_id"],
         "version": definition["version"],
         "overall_score": overall,
-        "grade": score_to_grade(overall),
         "category_scores": category_scores,
         "component_scores": component_scores,
         "components_available": components_available,

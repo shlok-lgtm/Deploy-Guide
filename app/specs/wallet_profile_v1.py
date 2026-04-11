@@ -15,7 +15,6 @@ WALLET_PROFILE_SCHEMA_V1 = {
         "computed_at": "ISO timestamp",
         "current_state": {
             "risk_score": "Value-weighted SII (0-100)",
-            "risk_grade": "Letter grade (A+ through F)",
             "concentration_hhi": "Herfindahl index (0-10000)",
             "total_value_usd": "Total stablecoin value",
             "holdings_count": "Number of stablecoin positions",
@@ -29,10 +28,8 @@ WALLET_PROFILE_SCHEMA_V1 = {
             "max_drawdown_90d": "Largest score drop in trailing 90 days",
             "diversification_trend": "improving | stable | deteriorating (based on HHI trend)",
         },
-        "quality_history": {
-            "pct_days_a_grade": "Percentage of tracked days at A- or better",
-            "pct_days_b_grade": "Percentage of tracked days at B- or better",
-            "worst_grade_ever": "Lowest grade recorded",
+        "score_consistency": {
+            "pct_days_high_score": "Percentage of tracked days at score >= 80",
             "best_score_ever": "Highest score recorded",
             "worst_score_ever": "Lowest score recorded",
         },

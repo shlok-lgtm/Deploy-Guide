@@ -34,7 +34,7 @@ SEVERITY_V1 = {
             "ordinal": 2,
             "description": "Requires attention. Potential risk change.",
             "broadcast": True,
-            "example_triggers": ["score change >5 points", "grade downgrade", "large movement >$10M"]
+            "example_triggers": ["score change >5 points", "score decrease", "large movement >$10M"]
         },
         {
             "name": "critical",

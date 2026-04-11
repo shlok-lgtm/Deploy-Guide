@@ -111,8 +111,6 @@ def _extract_scores(report_data: dict) -> dict:
     scores = {}
     if report_data.get("score") is not None:
         scores["primary_score"] = round(float(report_data["score"]), 2)
-    if report_data.get("grade"):
-        scores["primary_grade"] = report_data["grade"]
     for key in ("categories", "category_scores"):
         if report_data.get(key):
             scores[key] = {k: round(float(v), 2) if isinstance(v, (int, float)) else v

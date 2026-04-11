@@ -7,7 +7,7 @@ criterion-level pass/fail, evidence trail, methodology docs.
 
 from app.templates._html import (
     page, section, score_header, attestation_footer,
-    table, proof_link, grade_color, CANONICAL_BASE_URL,
+    table, proof_link, CANONICAL_BASE_URL,
 )
 
 
@@ -17,7 +17,6 @@ def render(report_data: dict, lens_result: dict = None,
     entity_id = d.get("entity_id", "?")
     name = d.get("name") or d.get("symbol") or entity_id
     score = d.get("score")
-    grade = d.get("grade", "—")
 
     if not lens_result:
         return page("Compliance Report — Lens Required",
@@ -31,7 +30,7 @@ def render(report_data: dict, lens_result: dict = None,
     overall = lens_result.get("overall_pass", False)
 
     body = f'<p class="meta">Compliance Report · {name} · {framework} · {timestamp}</p>'
-    body += score_header(name, score, grade, f"Lens: {lens_id} v{lens_version}")
+    body += score_header(name, score, subtitle=f"Lens: {lens_id} v{lens_version}")
 
     # Classification header
     status = "ELIGIBLE" if overall else "NOT ELIGIBLE"
@@ -64,10 +63,10 @@ def render(report_data: dict, lens_result: dict = None,
     # Score history (temporal stability)
     history = d.get("history") or []
     if history:
-        rows = [[h.get("date", "—")[:10], f"{h['score']:.1f}", h.get("grade", "—")] for h in history[:14]]
+        rows = [[h.get("date", "—")[:10], f"{h['score']:.1f}"] for h in history[:14]]
         body += section("Temporal Stability (14-day)",
                         '<p class="meta">Score consistency over time strengthens classification confidence.</p>' +
-                        table(["Date", "Score", "Grade"], rows, [1]))
+                        table(["Date", "Score"], rows, [1]))
 
     # Methodology
     body += section("Methodology",

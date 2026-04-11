@@ -21,7 +21,6 @@ def format_alert_text(assessment: dict) -> str:
     severity = assessment.get("severity", "silent").upper()
     score = assessment.get("wallet_risk_score")
     prev_score = assessment.get("wallet_risk_score_prev")
-    grade = assessment.get("wallet_risk_grade", "")
     hhi = assessment.get("concentration_hhi")
     prev_hhi = assessment.get("concentration_hhi_prev")
 

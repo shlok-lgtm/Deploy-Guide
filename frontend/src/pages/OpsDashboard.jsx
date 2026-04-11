@@ -1183,7 +1183,7 @@ function ProtocolDeepDive({ slug }) {
         <div style={{ fontSize: 24, fontWeight: 700, marginTop: 4 }}>{data.protocol_name}</div>
         <div style={{ display: "flex", gap: 16, marginTop: 8, fontFamily: T.mono, fontSize: 13 }}>
           <span>PSI Score: <strong>{data.score}</strong></span>
-          <span>Grade: <strong>{data.grade}</strong></span>
+          <span>Score: <strong>{data.overall_score ? Number(data.overall_score).toFixed(1) : "—"}</strong></span>
           <span style={{ color: confColor(data.confidence) }}>Confidence: {data.confidence}{data.confidence_tag ? ` (${data.confidence_tag})` : ""}</span>
           <span style={{ color: T.inkFaint }}>Coverage: {(data.component_coverage * 100).toFixed(0)}% ({data.components_populated}/{data.components_total})</span>
         </div>
@@ -1264,7 +1264,7 @@ function ProtocolDeepDive({ slug }) {
               <div style={{ fontFamily: T.mono, fontSize: 10, color: T.inkLight, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>Treasury Holdings</div>
               <table style={{ width: "100%", fontSize: 10, fontFamily: T.mono, borderCollapse: "collapse" }}>
                 <thead><tr style={{ borderBottom: `1px solid ${T.ruleMid}`, color: T.inkLight, textAlign: "left" }}>
-                  <th style={{ padding: "3px 0" }}>Token</th><th style={{ textAlign: "right" }}>USD Value</th><th>SII Score</th><th>Grade</th>
+                  <th style={{ padding: "3px 0" }}>Token</th><th style={{ textAlign: "right" }}>USD Value</th><th>SII Score</th>
                 </tr></thead>
                 <tbody>
                   {data.stablecoin_exposure.treasury.map((t, i) => (
@@ -1272,7 +1272,7 @@ function ProtocolDeepDive({ slug }) {
                       <td style={{ padding: "3px 0" }}>{t.token_symbol}</td>
                       <td style={{ textAlign: "right" }}>${(t.usd_value || 0).toLocaleString()}</td>
                       <td>{t.sii_score ?? "—"}</td>
-                      <td>{t.sii_grade ?? <span style={{ color: "#ef4444" }}>unscored</span>}</td>
+                      <td>{t.is_scored ? "" : <span style={{ color: "#ef4444" }}>unscored</span>}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1310,7 +1310,7 @@ function ProtocolDeepDive({ slug }) {
           <div style={{ padding: "0 10px" }}>
             <table style={{ width: "100%", fontSize: 10, fontFamily: T.mono, borderCollapse: "collapse" }}>
               <thead><tr style={{ borderBottom: `1px solid ${T.ruleMid}`, color: T.inkLight, textAlign: "left" }}>
-                <th style={{ padding: "3px 0" }}>Asset</th><th>SII</th><th>PSI</th><th>CQI</th><th>Grade</th><th>Confidence</th>
+                <th style={{ padding: "3px 0" }}>Asset</th><th>SII</th><th>PSI</th><th>CQI</th><th>Confidence</th>
               </tr></thead>
               <tbody>
                 {data.cqi_matrix_row.map((r, i) => (
@@ -1319,7 +1319,6 @@ function ProtocolDeepDive({ slug }) {
                     <td>{r.sii_score?.toFixed(1)}</td>
                     <td>{r.psi_score?.toFixed(1)}</td>
                     <td style={{ fontWeight: 600 }}>{r.cqi_score?.toFixed(1)}</td>
-                    <td>{r.cqi_grade}</td>
                     <td style={{ color: confColor(r.cqi_confidence) }}>{r.cqi_confidence}</td>
                   </tr>
                 ))}
@@ -2648,7 +2647,6 @@ function ABMPanel() {
                     <tr style={{ borderBottom: `1px solid ${T.ruleMid}`, textAlign: "left" }}>
                       <th style={{ padding: "4px 8px", color: T.inkLight }}>Coin</th>
                       <th style={{ padding: "4px 8px", color: T.inkLight }}>Score</th>
-                      <th style={{ padding: "4px 8px", color: T.inkLight }}>Grade</th>
                       <th style={{ padding: "4px 8px", color: T.inkLight }}>Peg</th>
                       <th style={{ padding: "4px 8px", color: T.inkLight }}>Liquidity</th>
                       <th style={{ padding: "4px 8px", color: T.inkLight }}>Structural</th>
@@ -2659,7 +2657,6 @@ function ABMPanel() {
                       <tr key={i} style={{ borderBottom: `1px solid ${T.ruleLight}` }}>
                         <td style={{ padding: "4px 8px", fontWeight: 600 }}>{s.symbol || s.stablecoin}</td>
                         <td style={{ padding: "4px 8px" }}>{s.overall_score != null ? Number(s.overall_score).toFixed(1) : "—"}</td>
-                        <td style={{ padding: "4px 8px" }}>{s.grade || "—"}</td>
                         <td style={{ padding: "4px 8px", color: T.inkMid }}>{s.peg_score != null ? Number(s.peg_score).toFixed(1) : "—"}</td>
                         <td style={{ padding: "4px 8px", color: T.inkMid }}>{s.liquidity_score != null ? Number(s.liquidity_score).toFixed(1) : "—"}</td>
                         <td style={{ padding: "4px 8px", color: T.inkMid }}>{s.structural_score != null ? Number(s.structural_score).toFixed(1) : "—"}</td>
@@ -3070,6 +3067,11 @@ export default function OpsDashboard() {
 
         <div style={{ fontFamily: T.mono, fontSize: 10, color: T.inkFaint, textAlign: "center", marginTop: 24, paddingBottom: 16 }}>
           Basis Protocol · Operations Hub · Internal Use Only
+        </div>
+        <div style={{ fontFamily: T.mono, fontSize: 9, color: T.inkFaint, textAlign: "center", paddingBottom: 16, lineHeight: 1.6 }}>
+          Plausible: To exclude your traffic, install the{" "}
+          <a href="https://plausible.io/docs/excluding" style={{ color: T.inkLight }} target="_blank" rel="noopener">Plausible exclusion extension</a>,
+          {" "}or run in console: <code style={{ fontSize: 8, background: T.paperWarm, padding: "1px 3px" }}>localStorage.setItem('plausible_ignore','true')</code>
         </div>
       </div>
     </div>

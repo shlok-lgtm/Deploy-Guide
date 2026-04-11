@@ -38,7 +38,7 @@ def register_wallet_routes(app: FastAPI) -> None:
                 agg.address,
                 agg.total_stablecoin_value,
                 w.label, w.is_contract, w.last_indexed_at, w.source,
-                wrs.risk_score, wrs.risk_grade, wrs.concentration_hhi,
+                wrs.risk_score, wrs.concentration_hhi,
                 wrs.coverage_quality, wrs.num_total_holdings, wrs.dominant_asset
             FROM (
                 SELECT LOWER(wallet_address) AS address, SUM(value_usd) AS total_stablecoin_value
@@ -58,7 +58,7 @@ def register_wallet_routes(app: FastAPI) -> None:
                 LIMIT 1
             ) w ON TRUE
             LEFT JOIN LATERAL (
-                SELECT risk_score, risk_grade, concentration_hhi,
+                SELECT risk_score, concentration_hhi,
                        coverage_quality, num_total_holdings, dominant_asset
                 FROM wallet_graph.wallet_risk_scores
                 WHERE LOWER(wallet_address) = agg.address
@@ -93,13 +93,13 @@ def register_wallet_routes(app: FastAPI) -> None:
                     AND indexed_at > NOW() - INTERVAL '7 days'
                     AND value_usd >= 0.01) AS total_stablecoin_value,
                    w.label,
-                   wrs.risk_score, wrs.risk_grade, wrs.concentration_hhi,
+                   wrs.risk_score, wrs.concentration_hhi,
                    wrs.unscored_pct, wrs.coverage_quality,
                    wrs.dominant_asset, wrs.dominant_asset_pct,
                    wrs.num_total_holdings, wrs.computed_at
             FROM (
                 SELECT DISTINCT ON (LOWER(wallet_address))
-                       wallet_address, risk_score, risk_grade, concentration_hhi,
+                       wallet_address, risk_score, concentration_hhi,
                        unscored_pct, coverage_quality, dominant_asset, dominant_asset_pct,
                        num_total_holdings, computed_at
                 FROM wallet_graph.wallet_risk_scores
@@ -254,7 +254,7 @@ def register_wallet_routes(app: FastAPI) -> None:
         # Latest risk score (best chain)
         risk = fetch_one(
             """
-            SELECT risk_score, risk_grade, concentration_hhi, concentration_grade,
+            SELECT risk_score, concentration_hhi,
                    unscored_pct, coverage_quality,
                    num_scored_holdings, num_unscored_holdings, num_total_holdings,
                    dominant_asset, dominant_asset_pct,
@@ -271,7 +271,7 @@ def register_wallet_routes(app: FastAPI) -> None:
         holdings_raw = fetch_all(
             """
             SELECT token_address, symbol, chain, balance, value_usd,
-                   is_scored, sii_score, sii_grade, pct_of_wallet, indexed_at
+                   is_scored, sii_score, pct_of_wallet, indexed_at
             FROM wallet_graph.wallet_holdings
             WHERE wallet_address = %s
               AND indexed_at > NOW() - INTERVAL '7 days'
@@ -304,7 +304,6 @@ def register_wallet_routes(app: FastAPI) -> None:
                 "total_value_all_chains": float(profile["total_value_all_chains"]) if profile.get("total_value_all_chains") else 0,
                 "holdings_by_chain": profile.get("holdings_by_chain", {}),
                 "edge_count_all_chains": profile.get("edge_count_all_chains", 0),
-                "risk_grade_aggregate": profile.get("risk_grade_aggregate"),
             }
 
         return result
@@ -317,7 +316,7 @@ def register_wallet_routes(app: FastAPI) -> None:
         """Daily risk score history for a wallet."""
         rows = fetch_all(
             """
-            SELECT risk_score, risk_grade, concentration_hhi, unscored_pct,
+            SELECT risk_score, concentration_hhi, unscored_pct,
                    coverage_quality, total_stablecoin_value, size_tier, computed_at
             FROM wallet_graph.wallet_risk_scores
             WHERE wallet_address = %s
@@ -500,7 +499,7 @@ def register_wallet_routes(app: FastAPI) -> None:
         if truncated:
             rows = rows[:MAX_NODES]
 
-        # Batch-fetch risk grades + actor types for all discovered nodes
+        # Batch-fetch risk scores + actor types for all discovered nodes
         node_addrs = [r["address"] for r in rows]
         risk_map = {}
         actor_map = {}
@@ -508,7 +507,7 @@ def register_wallet_routes(app: FastAPI) -> None:
             risk_rows = fetch_all(
                 """
                 SELECT DISTINCT ON (wallet_address)
-                    wallet_address, risk_score, risk_grade
+                    wallet_address, risk_score
                 FROM wallet_graph.wallet_risk_scores
                 WHERE wallet_address = ANY(%s)
                 ORDER BY wallet_address, computed_at DESC
@@ -542,7 +541,7 @@ def register_wallet_routes(app: FastAPI) -> None:
                 "depth": r["depth"],
                 "edge_weight": round(float(r["edge_weight"]), 4) if r["edge_weight"] else 0,
                 "exposure_usd": exposure,
-                "risk_grade": risk["risk_grade"] if risk else None,
+                "risk_score": float(risk["risk_score"]) if risk and risk.get("risk_score") is not None else None,
                 "actor_type": atype,
                 "agent_probability": round(float(actor["agent_probability"]), 3) if actor else None,
                 "path": r["path"],

@@ -50,7 +50,6 @@ def generate_daily_pulse(pulse_date: date | None = None) -> dict | None:
         scores.append({
             "symbol": r["stablecoin_id"],
             "score": float(r["overall_score"]) if r["overall_score"] is not None else None,
-            "grade": r["grade"],
             "delta_24h": float(r["daily_change"]) if r.get("daily_change") is not None else 0.0,
         })
 
@@ -89,7 +88,6 @@ def generate_daily_pulse(pulse_date: date | None = None) -> dict | None:
             "trigger": r["trigger_type"],
             "severity": r["severity"],
             "risk_score": float(r["wallet_risk_score"]) if r["wallet_risk_score"] is not None else None,
-            "risk_grade": r["wallet_risk_grade"],
             "value": float(r["total_stablecoin_value"]) if r["total_stablecoin_value"] is not None else None,
         })
 

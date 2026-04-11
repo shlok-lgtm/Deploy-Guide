@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 def _get_previous_assessment(wallet_address: str) -> dict | None:
     """Get the most recent assessment for a wallet (used as baseline)."""
     row = fetch_one("""
-        SELECT wallet_risk_score, wallet_risk_grade, concentration_hhi,
+        SELECT wallet_risk_score, concentration_hhi,
                coverage_ratio, total_stablecoin_value, holdings_snapshot
         FROM assessment_events
         WHERE wallet_address = %s

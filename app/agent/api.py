@@ -45,7 +45,7 @@ def register_agent_routes(app: FastAPI) -> None:
         rows = fetch_all(f"""
             SELECT id::text, created_at, wallet_address, chain,
                    trigger_type, trigger_detail,
-                   wallet_risk_score, wallet_risk_grade,
+                   wallet_risk_score,
                    wallet_risk_score_prev, concentration_hhi,
                    concentration_hhi_prev, coverage_ratio,
                    total_stablecoin_value, holdings_snapshot,
@@ -74,7 +74,7 @@ def register_agent_routes(app: FastAPI) -> None:
         row = fetch_one("""
             SELECT id::text, created_at, wallet_address, chain,
                    trigger_type, trigger_detail,
-                   wallet_risk_score, wallet_risk_grade,
+                   wallet_risk_score,
                    wallet_risk_score_prev, concentration_hhi,
                    concentration_hhi_prev, coverage_ratio,
                    total_stablecoin_value, holdings_snapshot,
@@ -97,7 +97,7 @@ def register_agent_routes(app: FastAPI) -> None:
         rows = fetch_all("""
             SELECT id::text, created_at, wallet_address, chain,
                    trigger_type, trigger_detail,
-                   wallet_risk_score, wallet_risk_grade,
+                   wallet_risk_score,
                    wallet_risk_score_prev, concentration_hhi,
                    severity, broadcast, content_hash,
                    total_stablecoin_value

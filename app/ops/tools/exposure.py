@@ -55,7 +55,6 @@ def generate_exposure(target_id: int) -> dict:
             if score:
                 sii_scores[score["symbol"].upper()] = {
                     "score": float(score["overall_score"]) if score["overall_score"] else None,
-                    "grade": score.get("grade"),
                 }
 
     # Build report data
