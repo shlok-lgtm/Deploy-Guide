@@ -2013,6 +2013,302 @@ async def seed_metrics(request: Request):
         return {"error": str(e)}
 
 
+# =============================================================================
+# ABM Engine — Account-Based Marketing campaigns
+# =============================================================================
+
+from app.ops.abm_config import ABM_ICP_TYPES, ABM_DRIP_TEMPLATES, ABM_STATE_LABELS
+
+
+@router.get("/abm/config")
+async def abm_config(request: Request):
+    _check_admin_key(request)
+    try:
+        return {
+            "icp_types": ABM_ICP_TYPES,
+            "state_labels": ABM_STATE_LABELS,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
+
+
+@router.get("/abm/campaigns")
+async def abm_list_campaigns(request: Request):
+    _check_admin_key(request)
+    try:
+        rows = fetch_all(
+            "SELECT * FROM abm_campaigns ORDER BY updated_at DESC", None
+        )
+        campaigns = []
+        for r in rows:
+            c = dict(r)
+            # Parse JSONB fields if they come back as strings
+            for k in ("stablecoins", "lenses", "pain_points"):
+                if isinstance(c.get(k), str):
+                    c[k] = json.loads(c[k])
+            campaigns.append(c)
+        return {"campaigns": campaigns}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
+
+
+@router.get("/abm/campaigns/{campaign_id}")
+async def abm_get_campaign(campaign_id: int, request: Request):
+    _check_admin_key(request)
+    try:
+        campaign = fetch_one("SELECT * FROM abm_campaigns WHERE id = %s", (campaign_id,))
+        if not campaign:
+            return JSONResponse(status_code=404, content={"error": "Campaign not found"})
+        c = dict(campaign)
+        for k in ("stablecoins", "lenses", "pain_points"):
+            if isinstance(c.get(k), str):
+                c[k] = json.loads(c[k])
+
+        touches = fetch_all(
+            "SELECT * FROM abm_drip_touches WHERE campaign_id = %s ORDER BY day, id", (campaign_id,)
+        )
+        log = fetch_all(
+            "SELECT * FROM abm_touch_log WHERE campaign_id = %s ORDER BY created_at DESC", (campaign_id,)
+        )
+        return {
+            "campaign": c,
+            "touches": [dict(t) for t in touches],
+            "log": [dict(l) for l in log],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
+
+
+@router.post("/abm/campaigns")
+async def abm_create_campaign(request: Request):
+    _check_admin_key(request)
+    try:
+        body = await request.json()
+        mode = body.get("mode", "icp")
+        icp_type = body.get("icp_type", "")
+        org = body.get("org", "")
+        person = body.get("person")
+        title = body.get("title")
+        stablecoins = body.get("stablecoins", [])
+        lenses = body.get("lenses", [])
+        pain_points = body.get("pain_points", [])
+        entry_piece = body.get("entry_piece")
+        named_target_id = body.get("named_target_id")
+
+        if not org:
+            return JSONResponse(status_code=400, content={"error": "org is required"})
+        if not icp_type:
+            return JSONResponse(status_code=400, content={"error": "icp_type is required"})
+
+        # Fill defaults from ICP config if not provided
+        icp_cfg = ABM_ICP_TYPES.get(icp_type, {})
+        if not stablecoins:
+            stablecoins = icp_cfg.get("default_coins", [])
+        if not lenses:
+            lenses = icp_cfg.get("lenses", [])
+        if not pain_points:
+            pain_points = icp_cfg.get("pain_points", [])
+
+        # Pre-generate report for the first stablecoin + first lens
+        report_hash = None
+        if stablecoins:
+            try:
+                from app.report import assemble_report_data
+                report_data = assemble_report_data("stablecoin", stablecoins[0])
+                if report_data:
+                    import hashlib
+                    report_json = json.dumps(report_data, sort_keys=True, default=str)
+                    report_hash = hashlib.sha256(report_json.encode()).hexdigest()[:16]
+            except Exception as re:
+                logger.warning(f"ABM report pre-generation failed: {re}")
+
+        # Insert campaign
+        execute(
+            """INSERT INTO abm_campaigns
+               (mode, icp_type, org, person, title, stablecoins, lenses, pain_points,
+                entry_piece, state, named_target_id, report_hash)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 0, %s, %s)""",
+            (mode, icp_type, org, person, title,
+             json.dumps(stablecoins), json.dumps(lenses), json.dumps(pain_points),
+             entry_piece, named_target_id, report_hash)
+        )
+
+        # Fetch the newly created campaign
+        campaign = fetch_one(
+            "SELECT * FROM abm_campaigns WHERE org = %s AND icp_type = %s ORDER BY id DESC LIMIT 1",
+            (org, icp_type)
+        )
+        campaign_id = campaign["id"]
+
+        # Insert drip touches from template
+        drip_template = ABM_DRIP_TEMPLATES.get(icp_type, [])
+        first_coin = stablecoins[0] if stablecoins else ""
+        for touch in drip_template:
+            subj = touch["subj"].replace("{org}", org).replace("{coin}", first_coin)
+            desc = touch.get("desc", "")
+            execute(
+                """INSERT INTO abm_drip_touches
+                   (campaign_id, day, channel, subject, description, is_gate)
+                   VALUES (%s, %s, %s, %s, %s, %s)""",
+                (campaign_id, touch["day"], touch["ch"], subj, desc, touch["gate"])
+            )
+
+        # Add initial touch log entry
+        execute(
+            "INSERT INTO abm_touch_log (campaign_id, note) VALUES (%s, %s)",
+            (campaign_id, f"Campaign created — {icp_type} for {org}")
+        )
+
+        return {"status": "ok", "campaign_id": campaign_id, "report_hash": report_hash}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
+
+
+@router.put("/abm/campaigns/{campaign_id}/state")
+async def abm_update_state(campaign_id: int, request: Request):
+    _check_admin_key(request)
+    try:
+        body = await request.json()
+        new_state = body.get("state")
+        if new_state is None or not isinstance(new_state, int) or new_state < 0 or new_state > 8:
+            return JSONResponse(status_code=400, content={"error": "state must be integer 0-8"})
+
+        campaign = fetch_one("SELECT id, state FROM abm_campaigns WHERE id = %s", (campaign_id,))
+        if not campaign:
+            return JSONResponse(status_code=404, content={"error": "Campaign not found"})
+
+        old_state = campaign["state"]
+        execute(
+            "UPDATE abm_campaigns SET state = %s, updated_at = NOW() WHERE id = %s",
+            (new_state, campaign_id)
+        )
+
+        old_label = ABM_STATE_LABELS.get(old_state, str(old_state))
+        new_label = ABM_STATE_LABELS.get(new_state, str(new_state))
+        execute(
+            "INSERT INTO abm_touch_log (campaign_id, note) VALUES (%s, %s)",
+            (campaign_id, f"State changed: {old_label} -> {new_label}")
+        )
+
+        return {"status": "ok", "old_state": old_state, "new_state": new_state}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
+
+
+@router.post("/abm/campaigns/{campaign_id}/log")
+async def abm_add_log(campaign_id: int, request: Request):
+    _check_admin_key(request)
+    try:
+        body = await request.json()
+        note = body.get("note", "").strip()
+        if not note:
+            return JSONResponse(status_code=400, content={"error": "note is required"})
+
+        campaign = fetch_one("SELECT id FROM abm_campaigns WHERE id = %s", (campaign_id,))
+        if not campaign:
+            return JSONResponse(status_code=404, content={"error": "Campaign not found"})
+
+        execute(
+            "INSERT INTO abm_touch_log (campaign_id, note) VALUES (%s, %s)",
+            (campaign_id, note)
+        )
+        execute(
+            "UPDATE abm_campaigns SET updated_at = NOW() WHERE id = %s",
+            (campaign_id,)
+        )
+        return {"status": "ok"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
+
+
+@router.put("/abm/drip/{touch_id}")
+async def abm_update_drip(touch_id: int, request: Request):
+    _check_admin_key(request)
+    try:
+        body = await request.json()
+        status = body.get("status", "")
+        response_text = body.get("response")
+        if status not in ("pending", "sent", "skipped"):
+            return JSONResponse(status_code=400, content={"error": "status must be pending, sent, or skipped"})
+
+        touch = fetch_one("SELECT * FROM abm_drip_touches WHERE id = %s", (touch_id,))
+        if not touch:
+            return JSONResponse(status_code=404, content={"error": "Touch not found"})
+
+        sent_at = "NOW()" if status == "sent" else "NULL"
+        if response_text is not None:
+            execute(
+                f"UPDATE abm_drip_touches SET status = %s, sent_at = {sent_at}, response = %s WHERE id = %s",
+                (status, response_text, touch_id)
+            )
+        else:
+            execute(
+                f"UPDATE abm_drip_touches SET status = %s, sent_at = {sent_at} WHERE id = %s",
+                (status, touch_id)
+            )
+
+        # Log the touch action
+        campaign_id = touch["campaign_id"]
+        execute(
+            "INSERT INTO abm_touch_log (campaign_id, note) VALUES (%s, %s)",
+            (campaign_id, f"Drip touch day {touch['day']} ({touch['channel']}): {status}")
+        )
+        execute(
+            "UPDATE abm_campaigns SET updated_at = NOW() WHERE id = %s",
+            (campaign_id,)
+        )
+        return {"status": "ok"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
+
+
+@router.delete("/abm/campaigns/{campaign_id}")
+async def abm_delete_campaign(campaign_id: int, request: Request):
+    _check_admin_key(request)
+    try:
+        campaign = fetch_one("SELECT id, org FROM abm_campaigns WHERE id = %s", (campaign_id,))
+        if not campaign:
+            return JSONResponse(status_code=404, content={"error": "Campaign not found"})
+
+        # CASCADE handles drip_touches and touch_log
+        execute("DELETE FROM abm_campaigns WHERE id = %s", (campaign_id,))
+        return {"status": "ok", "deleted": campaign_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
+
+
+@router.post("/migrate/049")
+async def run_migration_049(request: Request):
+    _check_admin_key(request)
+    try:
+        from app.database import run_migration
+        migration_path = os.path.join(
+            os.path.dirname(__file__), "..", "..", "migrations", "049_abm_campaigns.sql"
+        )
+        run_migration(migration_path)
+        return {"status": "ok", "migration": "049_abm_campaigns"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
+
+
 def register_ops_routes(app):
     """Register the ops router with the main FastAPI app."""
     app.include_router(router)

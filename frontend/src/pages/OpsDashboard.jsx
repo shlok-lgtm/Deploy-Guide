@@ -2141,6 +2141,665 @@ function CqiMatrixPanel() {
   );
 }
 
+// ─── ABM Panel ───────────────────────────────────────────────────────
+
+const ABM_STATE_LABELS = {
+  0: "Unaware", 1: "Seen", 2: "Engaged", 3: "Opened Private",
+  4: "Asked Question", 5: "Call Booked", 6: "Call Done", 7: "Ask Made", 8: "Committed",
+};
+
+const ABM_STATE_COLORS = {
+  0: "#999", 1: "#95a5a6", 2: "#3498db", 3: "#2980b9",
+  4: "#8e44ad", 5: "#f39c12", 6: "#e67e22", 7: "#e74c3c", 8: "#27ae60",
+};
+
+function AbmStateBadge({ state }) {
+  const label = ABM_STATE_LABELS[state] || `State ${state}`;
+  const color = ABM_STATE_COLORS[state] || "#999";
+  return (
+    <span style={{
+      fontSize: 10, fontFamily: T.mono, padding: "2px 6px", borderRadius: 3,
+      background: color + "22", color: color, border: `1px solid ${color}44`,
+    }}>
+      {label}
+    </span>
+  );
+}
+
+function ABMPanel() {
+  const [campaigns, setCampaigns] = useState([]);
+  const [config, setConfig] = useState(null);
+  const [targets, setTargets] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [flash, showFlash] = useFlash();
+  const [busy, setBusy] = useState(null);
+
+  // View state
+  const [view, setView] = useState("list"); // list | create | detail
+  const [selectedId, setSelectedId] = useState(null);
+  const [detail, setDetail] = useState(null);
+
+  // Create wizard state
+  const [step, setStep] = useState(0);
+  const [form, setForm] = useState({
+    mode: "icp", icp_type: "", org: "", person: "", title: "",
+    stablecoins: [], lenses: [], pain_points: [], named_target_id: null,
+  });
+
+  // Score data for detail view
+  const [scores, setScores] = useState(null);
+
+  const loadCampaigns = async () => {
+    setLoading(true);
+    try {
+      const res = await opsFetch("/api/ops/abm/campaigns");
+      setCampaigns(res.campaigns || []);
+    } catch (e) { showFlash(e.message, false); }
+    setLoading(false);
+  };
+
+  const loadConfig = async () => {
+    try {
+      const res = await opsFetch("/api/ops/abm/config");
+      setConfig(res);
+    } catch (e) { /* config load failure is non-fatal */ }
+  };
+
+  const loadTargets = async () => {
+    try {
+      const res = await opsFetch("/api/ops/targets");
+      setTargets(res.targets || []);
+    } catch (e) { /* targets load failure is non-fatal */ }
+  };
+
+  useEffect(() => {
+    loadCampaigns();
+    loadConfig();
+    loadTargets();
+  }, []);
+
+  const openDetail = async (id) => {
+    setSelectedId(id);
+    setView("detail");
+    setBusy("detail");
+    try {
+      const res = await opsFetch(`/api/ops/abm/campaigns/${id}`);
+      setDetail(res);
+      // Fetch SII scores for campaign stablecoins
+      const coins = res.campaign?.stablecoins || [];
+      if (coins.length > 0) {
+        try {
+          const scoresRes = await fetch("/api/scores");
+          if (scoresRes.ok) {
+            const scoresData = await scoresRes.json();
+            setScores(scoresData.scores || scoresData);
+          }
+        } catch (e) { /* scores are optional */ }
+      }
+    } catch (e) { showFlash(e.message, false); setView("list"); }
+    setBusy(null);
+  };
+
+  const handleCreate = async () => {
+    setBusy("create");
+    try {
+      await opsFetch("/api/ops/abm/campaigns", {
+        method: "POST",
+        body: JSON.stringify(form),
+      });
+      showFlash("Campaign created");
+      setView("list");
+      setStep(0);
+      setForm({ mode: "icp", icp_type: "", org: "", person: "", title: "", stablecoins: [], lenses: [], pain_points: [], named_target_id: null });
+      await loadCampaigns();
+    } catch (e) { showFlash(e.message, false); }
+    setBusy(null);
+  };
+
+  const handleStateChange = async (campaignId, newState) => {
+    setBusy("state");
+    try {
+      await opsFetch(`/api/ops/abm/campaigns/${campaignId}/state`, {
+        method: "PUT",
+        body: JSON.stringify({ state: newState }),
+      });
+      showFlash(`State updated to ${ABM_STATE_LABELS[newState]}`);
+      await openDetail(campaignId);
+      await loadCampaigns();
+    } catch (e) { showFlash(e.message, false); }
+    setBusy(null);
+  };
+
+  const handleAddLog = async (campaignId, note) => {
+    setBusy("log");
+    try {
+      await opsFetch(`/api/ops/abm/campaigns/${campaignId}/log`, {
+        method: "POST",
+        body: JSON.stringify({ note }),
+      });
+      showFlash("Log entry added");
+      await openDetail(campaignId);
+    } catch (e) { showFlash(e.message, false); }
+    setBusy(null);
+  };
+
+  const handleDripUpdate = async (touchId, status) => {
+    setBusy("drip");
+    try {
+      await opsFetch(`/api/ops/abm/drip/${touchId}`, {
+        method: "PUT",
+        body: JSON.stringify({ status }),
+      });
+      showFlash(`Touch marked ${status}`);
+      if (selectedId) await openDetail(selectedId);
+    } catch (e) { showFlash(e.message, false); }
+    setBusy(null);
+  };
+
+  const handleDelete = async (campaignId) => {
+    setBusy("delete");
+    try {
+      await opsFetch(`/api/ops/abm/campaigns/${campaignId}`, { method: "DELETE" });
+      showFlash("Campaign deleted");
+      setView("list");
+      setDetail(null);
+      await loadCampaigns();
+    } catch (e) { showFlash(e.message, false); }
+    setBusy(null);
+  };
+
+  // Toggle helpers for stablecoins / lenses / pain_points
+  const toggleItem = (field, item) => {
+    setForm(prev => {
+      const arr = prev[field] || [];
+      return { ...prev, [field]: arr.includes(item) ? arr.filter(x => x !== item) : [...arr, item] };
+    });
+  };
+
+  const icpTypes = config?.icp_types || {};
+  const stateLabels = config?.state_labels || ABM_STATE_LABELS;
+
+  // ─── Create Wizard ───────────────────────────────────────────────
+
+  const renderCreateWizard = () => {
+    const selectedIcp = icpTypes[form.icp_type] || {};
+
+    return (
+      <Section title="NEW ABM CAMPAIGN" actions={
+        <button onClick={() => { setView("list"); setStep(0); }} style={{ fontSize: 9, fontFamily: T.mono, padding: "2px 6px", border: `1px solid ${T.paper}44`, background: "transparent", color: T.paper, cursor: "pointer" }}>
+          Cancel
+        </button>
+      }>
+        <div style={{ padding: "8px 10px" }}>
+          {/* Step indicator */}
+          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            {["Mode", "Type", "Details", "Configure", "Launch"].map((s, i) => (
+              <span key={i} style={{
+                fontSize: 9, fontFamily: T.mono, padding: "2px 6px",
+                background: step === i ? T.ink : "transparent",
+                color: step === i ? T.paper : T.inkFaint,
+                border: `1px solid ${step === i ? T.ink : T.ruleMid}`,
+              }}>
+                {i + 1}. {s}
+              </span>
+            ))}
+          </div>
+
+          {/* Step 0: Mode */}
+          {step === 0 && (
+            <div>
+              <Lbl>Campaign Mode</Lbl>
+              <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+                <button onClick={() => { setForm({ ...form, mode: "named" }); setStep(1); }}
+                  style={form.mode === "named" ? btnActive({ padding: "6px 12px" }) : btn({ padding: "6px 12px" })}>
+                  Named Target
+                </button>
+                <button onClick={() => { setForm({ ...form, mode: "icp" }); setStep(1); }}
+                  style={form.mode === "icp" ? btnActive({ padding: "6px 12px" }) : btn({ padding: "6px 12px" })}>
+                  ICP at Organization
+                </button>
+              </div>
+              <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 6 }}>
+                {form.mode === "named"
+                  ? "Link to an existing ops target for integrated tracking."
+                  : "Create a campaign for a new organization by ICP type."}
+              </div>
+            </div>
+          )}
+
+          {/* Step 1: ICP type or Named target */}
+          {step === 1 && (
+            <div>
+              {form.mode === "named" ? (
+                <div>
+                  <Lbl>Select Existing Target</Lbl>
+                  <div style={{ marginTop: 6, maxHeight: 200, overflowY: "auto" }}>
+                    {targets.length === 0 && <div style={{ fontSize: 11, color: T.inkFaint }}>No targets found.</div>}
+                    {targets.map(t => (
+                      <div key={t.id} onClick={() => {
+                        setForm({ ...form, named_target_id: t.id, org: t.name, icp_type: form.icp_type || "exchange_eu" });
+                      }} style={{
+                        padding: "4px 8px", fontSize: 11, fontFamily: T.mono, cursor: "pointer",
+                        borderBottom: `1px dotted ${T.ruleMid}`,
+                        background: form.named_target_id === t.id ? T.paperWarm : "transparent",
+                      }}>
+                        <TierBadge tier={t.tier} /> {t.name} <span style={{ color: T.inkFaint }}>({t.type})</span>
+                      </div>
+                    ))}
+                  </div>
+                  {form.named_target_id && (
+                    <div style={{ marginTop: 8 }}>
+                      <Lbl>ICP Type</Lbl>
+                      <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
+                        {Object.entries(icpTypes).map(([key, val]) => (
+                          <button key={key} onClick={() => setForm({ ...form, icp_type: key })}
+                            style={form.icp_type === key ? btnActive() : btn()}>
+                            {val.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {form.named_target_id && form.icp_type && (
+                    <button onClick={() => setStep(3)} style={{ ...btn({ marginTop: 8 }), background: T.paperWarm }}>Next →</button>
+                  )}
+                </div>
+              ) : (
+                <div>
+                  <Lbl>Select ICP Type</Lbl>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+                    {Object.entries(icpTypes).map(([key, val]) => (
+                      <button key={key} onClick={() => {
+                        const cfg = icpTypes[key] || {};
+                        setForm({
+                          ...form, icp_type: key,
+                          stablecoins: cfg.default_coins || [],
+                          lenses: cfg.lenses || [],
+                          pain_points: cfg.pain_points || [],
+                        });
+                        setStep(2);
+                      }} style={form.icp_type === key ? btnActive({ padding: "6px 12px" }) : btn({ padding: "6px 12px" })}>
+                        {val.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <button onClick={() => setStep(0)} style={btn({ marginTop: 8 })}>← Back</button>
+            </div>
+          )}
+
+          {/* Step 2: Org / Person / Title (ICP mode) */}
+          {step === 2 && (
+            <div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+                <div style={{ flex: 1, minWidth: 180 }}>
+                  <Lbl>Organization</Lbl>
+                  <input value={form.org} onChange={e => setForm({ ...form, org: e.target.value })}
+                    placeholder="e.g. Kraken, MakerDAO..."
+                    style={{ display: "block", width: "100%", fontFamily: T.mono, fontSize: 11, padding: "4px 6px", border: `1px solid ${T.ruleMid}`, background: T.paper, marginTop: 2, boxSizing: "border-box" }} />
+                </div>
+                <div style={{ flex: 1, minWidth: 140 }}>
+                  <Lbl>Contact Person</Lbl>
+                  <input value={form.person || ""} onChange={e => setForm({ ...form, person: e.target.value })}
+                    placeholder="Optional"
+                    style={{ display: "block", width: "100%", fontFamily: T.mono, fontSize: 11, padding: "4px 6px", border: `1px solid ${T.ruleMid}`, background: T.paper, marginTop: 2, boxSizing: "border-box" }} />
+                </div>
+                <div style={{ flex: 1, minWidth: 140 }}>
+                  <Lbl>Title / Role</Lbl>
+                  <input value={form.title || ""} onChange={e => setForm({ ...form, title: e.target.value })}
+                    placeholder="e.g. Head of Compliance"
+                    style={{ display: "block", width: "100%", fontFamily: T.mono, fontSize: 11, padding: "4px 6px", border: `1px solid ${T.ruleMid}`, background: T.paper, marginTop: 2, boxSizing: "border-box" }} />
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={() => setStep(1)} style={btn()}>← Back</button>
+                <button onClick={() => setStep(3)} disabled={!form.org.trim()}
+                  style={btn({ background: form.org.trim() ? T.paperWarm : T.paper, opacity: form.org.trim() ? 1 : 0.5 })}>
+                  Next →
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Step 3: Configure stablecoins, lenses, pain points */}
+          {step === 3 && (
+            <div>
+              <div style={{ marginBottom: 10 }}>
+                <Lbl>Stablecoins</Lbl>
+                <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
+                  {["USDT", "USDC", "DAI", "FRAX", "PYUSD", "FDUSD", "TUSD", "USDD", "USDe", "USD1", "GUSD", "LUSD", "XSGD"].map(coin => (
+                    <button key={coin} onClick={() => toggleItem("stablecoins", coin)}
+                      style={form.stablecoins.includes(coin) ? btnActive() : btn()}>
+                      {coin}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div style={{ marginBottom: 10 }}>
+                <Lbl>Regulatory Lenses</Lbl>
+                <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
+                  {["MICA67", "SCO60", "GENIUS", "OCC", "MAS10"].map(lens => (
+                    <button key={lens} onClick={() => toggleItem("lenses", lens)}
+                      style={form.lenses.includes(lens)
+                        ? btnActive({ padding: "4px 10px" })
+                        : btn({ padding: "4px 10px" })}>
+                      {lens}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div style={{ marginBottom: 10 }}>
+                <Lbl>Pain Points</Lbl>
+                <div style={{ marginTop: 4 }}>
+                  {form.pain_points.map((pp, i) => (
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 3 }}>
+                      <span style={{ fontSize: 10, fontFamily: T.mono, color: T.inkMid, flex: 1 }}>{pp}</span>
+                      <button onClick={() => setForm(prev => ({ ...prev, pain_points: prev.pain_points.filter((_, j) => j !== i) }))}
+                        style={{ fontSize: 9, fontFamily: T.mono, border: "none", background: "transparent", color: T.accent, cursor: "pointer" }}>
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={() => setStep(form.mode === "named" ? 1 : 2)} style={btn()}>← Back</button>
+                <button onClick={() => setStep(4)} style={btn({ background: T.paperWarm })}>Next →</button>
+              </div>
+            </div>
+          )}
+
+          {/* Step 4: Summary + Launch */}
+          {step === 4 && (
+            <div>
+              <div style={{ background: T.paperWarm, border: `1px solid ${T.ruleLight}`, padding: 10, marginBottom: 10 }}>
+                <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 8 }}>
+                  <div><Lbl>Mode</Lbl><div style={{ fontSize: 11, fontFamily: T.mono }}>{form.mode}</div></div>
+                  <div><Lbl>ICP Type</Lbl><div style={{ fontSize: 11, fontFamily: T.mono }}>{icpTypes[form.icp_type]?.label || form.icp_type}</div></div>
+                  <div><Lbl>Organization</Lbl><div style={{ fontSize: 11, fontFamily: T.mono, fontWeight: 600 }}>{form.org}</div></div>
+                  {form.person && <div><Lbl>Person</Lbl><div style={{ fontSize: 11, fontFamily: T.mono }}>{form.person}</div></div>}
+                  {form.title && <div><Lbl>Title</Lbl><div style={{ fontSize: 11, fontFamily: T.mono }}>{form.title}</div></div>}
+                </div>
+                <div style={{ marginBottom: 6 }}>
+                  <Lbl>Stablecoins</Lbl>
+                  <div style={{ fontSize: 10, fontFamily: T.mono, color: T.inkMid, marginTop: 2 }}>{form.stablecoins.join(", ") || "—"}</div>
+                </div>
+                <div style={{ marginBottom: 6 }}>
+                  <Lbl>Lenses</Lbl>
+                  <div style={{ fontSize: 10, fontFamily: T.mono, color: T.inkMid, marginTop: 2 }}>{form.lenses.join(", ") || "—"}</div>
+                </div>
+                <div>
+                  <Lbl>Pain Points</Lbl>
+                  <div style={{ fontSize: 10, fontFamily: T.mono, color: T.inkMid, marginTop: 2 }}>
+                    {form.pain_points.length > 0 ? form.pain_points.map((pp, i) => <div key={i}>· {pp}</div>) : "—"}
+                  </div>
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={() => setStep(3)} style={btn()}>← Back</button>
+                <button onClick={handleCreate} disabled={busy === "create" || !form.org.trim() || !form.icp_type}
+                  style={btnActive({ padding: "6px 14px", opacity: busy === "create" ? 0.5 : 1 })}>
+                  {busy === "create" ? "Creating..." : "Launch Campaign"}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </Section>
+    );
+  };
+
+  // ─── Detail View ─────────────────────────────────────────────────
+
+  const renderDetail = () => {
+    if (!detail) return <div style={{ padding: 10, color: T.inkFaint, fontSize: 12 }}>Loading...</div>;
+    const c = detail.campaign;
+    const touches = detail.touches || [];
+    const log = detail.log || [];
+    const campaignCoins = c.stablecoins || [];
+    const campaignLenses = c.lenses || [];
+
+    // Filter SII scores to campaign stablecoins
+    const coinScores = scores
+      ? (Array.isArray(scores) ? scores : Object.values(scores)).filter(s => campaignCoins.includes(s.symbol || s.stablecoin))
+      : [];
+
+    return (
+      <>
+        <Section title={`CAMPAIGN: ${c.org}`} actions={
+          <div style={{ display: "flex", gap: 4 }}>
+            <button onClick={() => { setView("list"); setDetail(null); setScores(null); }}
+              style={{ fontSize: 9, fontFamily: T.mono, padding: "2px 6px", border: `1px solid ${T.paper}44`, background: "transparent", color: T.paper, cursor: "pointer" }}>
+              ← Back
+            </button>
+            <button onClick={() => handleDelete(c.id)} disabled={busy === "delete"}
+              style={{ fontSize: 9, fontFamily: T.mono, padding: "2px 6px", border: `1px solid ${T.accent}44`, background: "transparent", color: "#fc988f", cursor: "pointer", opacity: busy === "delete" ? 0.5 : 1 }}>
+              {busy === "delete" ? "..." : "Delete"}
+            </button>
+          </div>
+        }>
+          <div style={{ padding: "8px 10px" }}>
+            {/* Campaign header */}
+            <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 10, paddingBottom: 8, borderBottom: `1px solid ${T.ruleLight}` }}>
+              <div><Lbl>ICP Type</Lbl><div style={{ fontSize: 11, fontFamily: T.mono }}>{icpTypes[c.icp_type]?.label || c.icp_type}</div></div>
+              <div><Lbl>Mode</Lbl><div style={{ fontSize: 11, fontFamily: T.mono }}>{c.mode}</div></div>
+              {c.person && <div><Lbl>Person</Lbl><div style={{ fontSize: 11, fontFamily: T.mono }}>{c.person}{c.title ? ` — ${c.title}` : ""}</div></div>}
+              <div><Lbl>State</Lbl><div style={{ marginTop: 2 }}><AbmStateBadge state={c.state} /></div></div>
+              {c.report_hash && <div><Lbl>Report Hash</Lbl><div style={{ fontSize: 10, fontFamily: T.mono, color: T.inkFaint }}>{c.report_hash}</div></div>}
+              <div><Lbl>Created</Lbl><div style={{ fontSize: 10, fontFamily: T.mono, color: T.inkFaint }}>{new Date(c.created_at).toLocaleDateString()}</div></div>
+            </div>
+
+            {/* Stablecoins + Lenses */}
+            <div style={{ display: "flex", gap: 16, marginBottom: 10 }}>
+              <div>
+                <Lbl>Stablecoins</Lbl>
+                <div style={{ display: "flex", gap: 3, marginTop: 3 }}>
+                  {campaignCoins.map(coin => (
+                    <span key={coin} style={{ fontSize: 10, fontFamily: T.mono, padding: "2px 5px", background: T.paperWarm, border: `1px solid ${T.ruleLight}` }}>{coin}</span>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <Lbl>Lenses</Lbl>
+                <div style={{ display: "flex", gap: 3, marginTop: 3 }}>
+                  {campaignLenses.map(lens => (
+                    <span key={lens} style={{ fontSize: 10, fontFamily: T.mono, padding: "2px 5px", background: T.accent + "15", border: `1px solid ${T.accent}33`, color: T.accent }}>{lens}</span>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Pain Points */}
+            {(c.pain_points || []).length > 0 && (
+              <div style={{ marginBottom: 10 }}>
+                <Lbl>Pain Points</Lbl>
+                <div style={{ marginTop: 3 }}>
+                  {c.pain_points.map((pp, i) => (
+                    <div key={i} style={{ fontSize: 10, fontFamily: T.mono, color: T.inkMid, padding: "2px 0", borderBottom: `1px dotted ${T.ruleMid}` }}>· {pp}</div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* SII Scores table */}
+            {coinScores.length > 0 && (
+              <div style={{ marginBottom: 10 }}>
+                <Lbl>SII Scores</Lbl>
+                <table style={{ width: "100%", fontSize: 10, fontFamily: T.mono, borderCollapse: "collapse", marginTop: 4 }}>
+                  <thead>
+                    <tr style={{ borderBottom: `1px solid ${T.ruleMid}`, textAlign: "left" }}>
+                      <th style={{ padding: "4px 8px", color: T.inkLight }}>Coin</th>
+                      <th style={{ padding: "4px 8px", color: T.inkLight }}>Score</th>
+                      <th style={{ padding: "4px 8px", color: T.inkLight }}>Grade</th>
+                      <th style={{ padding: "4px 8px", color: T.inkLight }}>Peg</th>
+                      <th style={{ padding: "4px 8px", color: T.inkLight }}>Liquidity</th>
+                      <th style={{ padding: "4px 8px", color: T.inkLight }}>Structural</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {coinScores.map((s, i) => (
+                      <tr key={i} style={{ borderBottom: `1px solid ${T.ruleLight}` }}>
+                        <td style={{ padding: "4px 8px", fontWeight: 600 }}>{s.symbol || s.stablecoin}</td>
+                        <td style={{ padding: "4px 8px" }}>{s.overall_score != null ? Number(s.overall_score).toFixed(1) : "—"}</td>
+                        <td style={{ padding: "4px 8px" }}>{s.grade || "—"}</td>
+                        <td style={{ padding: "4px 8px", color: T.inkMid }}>{s.peg_score != null ? Number(s.peg_score).toFixed(1) : "—"}</td>
+                        <td style={{ padding: "4px 8px", color: T.inkMid }}>{s.liquidity_score != null ? Number(s.liquidity_score).toFixed(1) : "—"}</td>
+                        <td style={{ padding: "4px 8px", color: T.inkMid }}>{s.structural_score != null ? Number(s.structural_score).toFixed(1) : "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </Section>
+
+        {/* State Tracker */}
+        <Section title="STATE TRACKER">
+          <div style={{ padding: "8px 10px" }}>
+            <div style={{ display: "flex", gap: 3, flexWrap: "wrap", marginBottom: 10 }}>
+              {[0, 1, 2, 3, 4, 5, 6, 7, 8].map(s => (
+                <button key={s} onClick={() => handleStateChange(c.id, s)} disabled={busy === "state"}
+                  style={c.state === s
+                    ? btnActive({ padding: "4px 8px", fontSize: 9 })
+                    : btn({ padding: "4px 8px", fontSize: 9, opacity: c.state > s ? 0.6 : 1 })}>
+                  {s}: {ABM_STATE_LABELS[s]}
+                </button>
+              ))}
+            </div>
+          </div>
+        </Section>
+
+        {/* Drip Sequence */}
+        <Section title={`DRIP SEQUENCE (${touches.length} touches)`}>
+          <div style={{ padding: "8px 10px" }}>
+            {touches.length === 0 && <div style={{ fontSize: 11, color: T.inkFaint }}>No drip touches configured.</div>}
+            {touches.map((t, i) => (
+              <div key={t.id} style={{
+                display: "flex", gap: 8, alignItems: "center", padding: "5px 0",
+                borderBottom: `1px dotted ${T.ruleMid}`,
+                opacity: t.status === "skipped" ? 0.4 : 1,
+              }}>
+                <span style={{ fontSize: 10, fontFamily: T.mono, color: T.inkFaint, minWidth: 32 }}>D{t.day}</span>
+                <span style={{
+                  fontSize: 9, fontFamily: T.mono, padding: "1px 4px", minWidth: 50, textAlign: "center",
+                  background: t.channel === "email" ? "#3498db15" : t.channel === "linkedin" ? "#0077b515" : t.channel === "twitter" ? "#1da1f215" : "#95a5a615",
+                  border: `1px solid ${t.channel === "email" ? "#3498db33" : t.channel === "linkedin" ? "#0077b533" : t.channel === "twitter" ? "#1da1f233" : "#95a5a633"}`,
+                  color: T.inkMid,
+                }}>
+                  {t.channel}
+                </span>
+                {t.is_gate && <span style={{ fontSize: 8, fontFamily: T.mono, padding: "1px 3px", background: T.accent + "22", color: T.accent, border: `1px solid ${T.accent}44` }}>GATE</span>}
+                <span style={{ flex: 1, fontSize: 10, fontFamily: T.mono, color: T.inkMid }}>{t.subject}</span>
+                <span style={{
+                  fontSize: 9, fontFamily: T.mono, padding: "1px 4px",
+                  color: t.status === "sent" ? "#27ae60" : t.status === "skipped" ? T.inkFaint : T.inkLight,
+                }}>
+                  {t.status}
+                </span>
+                {t.status === "pending" && (
+                  <div style={{ display: "flex", gap: 2 }}>
+                    <button onClick={() => handleDripUpdate(t.id, "sent")} disabled={busy === "drip"}
+                      style={btn({ fontSize: 8, padding: "1px 4px", color: "#27ae60" })}>sent</button>
+                    <button onClick={() => handleDripUpdate(t.id, "skipped")} disabled={busy === "drip"}
+                      style={btn({ fontSize: 8, padding: "1px 4px", color: T.inkFaint })}>skip</button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </Section>
+
+        {/* Touch Log */}
+        <AbmLogSection campaignId={c.id} log={log} onAddLog={handleAddLog} busy={busy} />
+      </>
+    );
+  };
+
+  // ─── Campaigns List ──────────────────────────────────────────────
+
+  return (
+    <>
+      <Flash flash={flash} />
+
+      {view === "list" && (
+        <Section title={`ABM CAMPAIGNS (${campaigns.length})`} actions={
+          <div style={{ display: "flex", gap: 4 }}>
+            <button onClick={loadCampaigns} disabled={loading}
+              style={{ fontSize: 9, fontFamily: T.mono, padding: "2px 6px", border: `1px solid ${T.paper}44`, background: "transparent", color: T.paper, cursor: "pointer", opacity: loading ? 0.5 : 1 }}>
+              {loading ? "..." : "Refresh"}
+            </button>
+            <button onClick={() => setView("create")}
+              style={{ fontSize: 9, fontFamily: T.mono, padding: "2px 6px", border: `1px solid ${T.paper}44`, background: "transparent", color: T.paper, cursor: "pointer" }}>
+              + New
+            </button>
+          </div>
+        }>
+          <div style={{ padding: "0 10px" }}>
+            {campaigns.length === 0 && !loading && (
+              <div style={{ color: T.inkFaint, fontSize: 12, lineHeight: 1.6, padding: "8px 0" }}>
+                No ABM campaigns yet. Create one to start a personalized Comply experience for a target account.
+              </div>
+            )}
+            {loading && campaigns.length === 0 && (
+              <div style={{ color: T.inkFaint, fontSize: 12, padding: "8px 0" }}>Loading campaigns...</div>
+            )}
+            {campaigns.map(c => (
+              <div key={c.id} onClick={() => openDetail(c.id)} style={{
+                display: "flex", gap: 8, alignItems: "center", padding: "6px 0",
+                borderBottom: `1px dotted ${T.ruleMid}`, cursor: "pointer",
+              }}>
+                <AbmStateBadge state={c.state} />
+                <span style={{ fontFamily: T.mono, fontSize: 11, fontWeight: 600, flex: 1 }}>{c.org}</span>
+                <span style={{ fontSize: 10, fontFamily: T.mono, color: T.inkLight }}>{icpTypes[c.icp_type]?.label || c.icp_type}</span>
+                {c.person && <span style={{ fontSize: 10, color: T.inkFaint }}>{c.person}</span>}
+                <span style={{ fontSize: 9, fontFamily: T.mono, color: T.inkFaint }}>
+                  {c.updated_at ? new Date(c.updated_at).toLocaleDateString() : ""}
+                </span>
+              </div>
+            ))}
+          </div>
+        </Section>
+      )}
+
+      {view === "create" && renderCreateWizard()}
+
+      {view === "detail" && renderDetail()}
+    </>
+  );
+}
+
+function AbmLogSection({ campaignId, log, onAddLog, busy }) {
+  const [note, setNote] = useState("");
+  return (
+    <Section title={`TOUCH LOG (${log.length})`}>
+      <div style={{ padding: "8px 10px" }}>
+        <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
+          <input value={note} onChange={e => setNote(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter" && note.trim()) { onAddLog(campaignId, note); setNote(""); } }}
+            placeholder="Add log entry..."
+            style={{ flex: 1, fontFamily: T.mono, fontSize: 11, padding: "4px 6px", border: `1px solid ${T.ruleMid}`, background: T.paper }} />
+          <button onClick={() => { if (note.trim()) { onAddLog(campaignId, note); setNote(""); } }}
+            disabled={!note.trim() || busy === "log"}
+            style={btn({ opacity: note.trim() ? 1 : 0.5 })}>
+            {busy === "log" ? "..." : "Add"}
+          </button>
+        </div>
+        {log.length === 0 && <div style={{ fontSize: 11, color: T.inkFaint }}>No log entries yet.</div>}
+        {log.map(l => (
+          <div key={l.id} style={{ padding: "3px 0", borderBottom: `1px dotted ${T.ruleLight}`, display: "flex", gap: 8 }}>
+            <span style={{ fontSize: 9, fontFamily: T.mono, color: T.inkFaint, minWidth: 80 }}>
+              {new Date(l.created_at).toLocaleString()}
+            </span>
+            <span style={{ fontSize: 10, fontFamily: T.mono, color: T.inkMid }}>{l.note}</span>
+          </div>
+        ))}
+      </div>
+    </Section>
+  );
+}
+
 export default function OpsDashboard() {
   // Check for protocol deep-dive route
   const pathMatch = window.location.pathname.match(/^\/ops\/protocol\/([^/]+)/);
@@ -2280,7 +2939,7 @@ export default function OpsDashboard() {
 
         {/* Tabs */}
         <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
-          {["dashboard", "targets", "content", "metrics", "reports", "query", "graph", "backtest", "matrix"].map((tb) => (
+          {["dashboard", "targets", "content", "metrics", "reports", "query", "graph", "backtest", "matrix", "abm"].map((tb) => (
             <button key={tb} onClick={() => setTab(tb)} style={{
               fontFamily: T.mono, fontSize: 11, padding: "4px 0", border: "none",
               background: "transparent", cursor: "pointer", fontWeight: tab === tb ? 700 : 400,
@@ -2376,6 +3035,8 @@ export default function OpsDashboard() {
         {tab === "graph" && <GraphPanel />}
         {tab === "backtest" && <BacktestPanel />}
         {tab === "matrix" && <CqiMatrixPanel />}
+
+        {tab === "abm" && <ABMPanel />}
 
         <div style={{ fontFamily: T.mono, fontSize: 10, color: T.inkFaint, textAlign: "center", marginTop: 24, paddingBottom: 16 }}>
           Basis Protocol · Operations Hub · Internal Use Only
