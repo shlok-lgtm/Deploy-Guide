@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 import requests
 
 from app.database import execute, fetch_all, fetch_one
+from app.data_source_registry import register_data_source
 from app.index_definitions.psi_v01 import PSI_V01_DEFINITION, TARGET_PROTOCOLS
 from app.scoring_engine import score_entity
 
@@ -59,6 +60,10 @@ def get_solana_program_authority(program_id: str) -> dict | None:
     if cached and (time.time() - cached[0]) < _AUTHORITY_CACHE_TTL:
         return cached[1]
 
+    register_data_source("mainnet.helius-rpc.com", "/rpc/getAccountInfo", "psi_collector",
+                         method="POST", prove=False,
+                         description="Solana program authority check for PSI admin key scoring",
+                         notes="POST/JSON-RPC — TLSNotary POST support unverified, skip proving")
     try:
         payload = {
             "jsonrpc": "2.0",
@@ -259,6 +264,8 @@ ONCHAIN_GOVERNANCE_FALLBACK = {
 
 def fetch_protocol_data(slug):
     """Fetch protocol data from DeFiLlama."""
+    register_data_source("api.llama.fi", f"/protocol/{slug}", "psi_collector",
+                         description="Protocol TVL data for PSI scoring")
     time.sleep(1)  # rate limit
     try:
         resp = requests.get(f"{DEFILLAMA_BASE}/protocol/{slug}", timeout=45)
@@ -271,6 +278,8 @@ def fetch_protocol_data(slug):
 
 def fetch_fees_data(slug):
     """Fetch fee/revenue data from DeFiLlama."""
+    register_data_source("api.llama.fi", f"/summary/fees/{slug}", "psi_collector",
+                         description="Protocol fees/revenue data for PSI scoring")
     time.sleep(1)
     try:
         resp = requests.get(f"{DEFILLAMA_BASE}/summary/fees/{slug}", timeout=45)
@@ -283,6 +292,8 @@ def fetch_fees_data(slug):
 
 def fetch_treasury_data(slug):
     """Fetch protocol treasury data from DeFiLlama."""
+    register_data_source("api.llama.fi", f"/treasury/{slug}", "psi_collector",
+                         description="Protocol treasury data for PSI scoring")
     time.sleep(1)
     try:
         resp = requests.get(f"{DEFILLAMA_BASE}/treasury/{slug}", timeout=15)
@@ -332,6 +343,9 @@ def fetch_coingecko_token(gecko_id):
     """Fetch governance token data from CoinGecko for holder count and volume."""
     if not gecko_id:
         return None
+    register_data_source("pro-api.coingecko.com", f"/api/v3/coins/{gecko_id}", "psi_collector",
+                         description="Governance token data for PSI scoring",
+                         params_template={"localization": "false", "market_data": "true"})
     time.sleep(1)
     try:
         from app.config import STABLECOIN_REGISTRY
@@ -359,6 +373,10 @@ def fetch_snapshot_proposals(space_id):
     """Fetch governance proposal count from Snapshot in the last 90 days."""
     if not space_id:
         return None
+    register_data_source("hub.snapshot.org", "/graphql", "psi_collector",
+                         method="POST", prove=False,
+                         description="Governance proposals for PSI scoring",
+                         notes="POST/GraphQL — TLSNotary POST support unverified, skip proving")
     time.sleep(0.5)
     try:
         query = """
@@ -825,6 +843,8 @@ SII_SCORED_SYMBOLS = {"USDC", "USDT", "DAI", "FRAX", "PYUSD", "FDUSD", "TUSD", "
 
 def fetch_protocol_pools():
     """Fetch all pools from DeFiLlama yields API to map protocol stablecoin exposure."""
+    register_data_source("yields.llama.fi", "/pools", "psi_collector",
+                         description="Protocol pool data for PSI collateral exposure scoring")
     try:
         resp = requests.get("https://yields.llama.fi/pools", timeout=60)
         if resp.status_code == 200:

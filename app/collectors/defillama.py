@@ -11,6 +11,7 @@ from typing import Any
 import httpx
 
 from app.scoring import normalize_log
+from app.data_source_registry import register_data_source
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,8 @@ YIELDS_URL = "https://yields.llama.fi"
 
 async def fetch_stablecoin_data(client: httpx.AsyncClient, coingecko_id: str) -> dict:
     """Get stablecoin data including chain breakdown."""
+    register_data_source("stablecoins.llama.fi", "/stablecoins", "sii_collector",
+                         description="Stablecoin chain breakdown for SII liquidity scoring")
     try:
         resp = await client.get(f"{STABLECOINS_URL}/stablecoins", timeout=15)
         resp.raise_for_status()
@@ -35,6 +38,8 @@ async def fetch_stablecoin_data(client: httpx.AsyncClient, coingecko_id: str) ->
 
 async def fetch_lending_yields(client: httpx.AsyncClient, symbol: str) -> dict:
     """Get lending yields from major protocols."""
+    register_data_source("yields.llama.fi", "/pools", "sii_collector",
+                         description="Lending yields for SII liquidity scoring")
     try:
         resp = await client.get(f"{YIELDS_URL}/pools", timeout=15)
         resp.raise_for_status()

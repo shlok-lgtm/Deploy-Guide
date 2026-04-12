@@ -6275,6 +6275,86 @@ async def provenance_attestor_pubkey():
     }
 
 
+@app.get("/api/provenance/sources")
+async def provenance_sources(prove: str = None):
+    """Return all registered data sources, optionally filtered by prove status.
+
+    The basis-provenance service calls this at the start of each cycle:
+        GET /api/provenance/sources?prove=true
+    to discover which external endpoints need TLSNotary proving.
+    """
+    from app.database import fetch_all as _src_all
+    if prove is not None:
+        prove_bool = prove.lower() in ("true", "1", "yes")
+        rows = _src_all(
+            """SELECT dsr.*, pp.latest_proof_at
+               FROM data_source_registry dsr
+               LEFT JOIN LATERAL (
+                   SELECT MAX(proved_at) AS latest_proof_at
+                   FROM provenance_proofs pp
+                   WHERE pp.source_domain = dsr.source_domain
+               ) pp ON TRUE
+               WHERE dsr.prove = %s
+               ORDER BY dsr.source_domain, dsr.source_endpoint""",
+            (prove_bool,),
+        )
+    else:
+        rows = _src_all(
+            """SELECT dsr.*, pp.latest_proof_at
+               FROM data_source_registry dsr
+               LEFT JOIN LATERAL (
+                   SELECT MAX(proved_at) AS latest_proof_at
+                   FROM provenance_proofs pp
+                   WHERE pp.source_domain = dsr.source_domain
+               ) pp ON TRUE
+               ORDER BY dsr.source_domain, dsr.source_endpoint""",
+        )
+    sources = []
+    for r in (rows or []):
+        d = dict(r)
+        for k in ("first_seen", "last_seen", "latest_proof_at"):
+            if d.get(k):
+                d[k] = str(d[k])
+        sources.append(d)
+    return {"sources": sources, "count": len(sources)}
+
+
+@app.get("/api/provenance/gaps")
+async def provenance_gaps():
+    """Return data sources registered but lacking a proof in the last 24 hours.
+
+    This is the provenance gap report — sources feeding active scoring that
+    the provenance service hasn't proved recently.
+    """
+    from app.database import fetch_all as _gap_all
+    rows = _gap_all(
+        """SELECT dsr.source_domain, dsr.source_endpoint, dsr.method,
+                  dsr.collector, dsr.description, dsr.prove, dsr.prove_frequency,
+                  dsr.last_seen, dsr.notes,
+                  MAX(pp.proved_at) AS last_proved_at
+           FROM data_source_registry dsr
+           LEFT JOIN provenance_proofs pp
+               ON pp.source_domain = dsr.source_domain
+               AND pp.proved_at > NOW() - INTERVAL '24 hours'
+           WHERE dsr.prove = TRUE
+           GROUP BY dsr.id
+           HAVING MAX(pp.proved_at) IS NULL
+           ORDER BY dsr.last_seen DESC""",
+    )
+    gaps = []
+    for r in (rows or []):
+        d = dict(r)
+        for k in ("last_seen", "last_proved_at"):
+            if d.get(k):
+                d[k] = str(d[k])
+        gaps.append(d)
+    return {
+        "gaps": gaps,
+        "gap_count": len(gaps),
+        "note": "Sources with prove=true that have no proof in the last 24 hours.",
+    }
+
+
 # =============================================================================
 
 def _register_spa_catch_all(app_instance):

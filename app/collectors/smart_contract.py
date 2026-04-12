@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 import httpx
 
 from app.database import fetch_one
+from app.data_source_registry import register_data_source
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +106,9 @@ async def _check_contract_verified(
     client: httpx.AsyncClient, contract: str, api_key: str
 ) -> bool:
     """Check if contract source is verified on Etherscan."""
+    register_data_source("api.etherscan.io", "/v2/api?action=getabi", "sii_smart_contract_collector",
+                         description="Contract ABI verification for SII security scoring",
+                         params_template={"chainid": 1, "module": "contract", "action": "getabi"})
     try:
         resp = await client.get(ETHERSCAN_V2_BASE, params={
             "chainid": 1,

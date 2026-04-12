@@ -15,6 +15,7 @@ import httpx
 from app.scoring import (
     normalize_inverse_linear, normalize_linear, normalize_log,
 )
+from app.data_source_registry import register_data_source
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,9 @@ async def fetch_current(client: httpx.AsyncClient, coingecko_id: str) -> dict:
         "community_data": "false",
         "developer_data": "false",
     }
+    register_data_source("pro-api.coingecko.com", f"/api/v3/coins/{coingecko_id}",
+                         "sii_collector", description="Current coin data for SII scoring",
+                         params_template={"localization": "false", "tickers": "true", "market_data": "true"})
     try:
         resp = await client.get(url, params=params, headers=_headers(), timeout=15)
         resp.raise_for_status()
@@ -52,6 +56,9 @@ async def fetch_price_history(client: httpx.AsyncClient, coingecko_id: str, days
     """Get historical USD prices for peg analysis."""
     url = f"{BASE_URL}/coins/{coingecko_id}/market_chart"
     params = {"vs_currency": "usd", "days": days}
+    register_data_source("pro-api.coingecko.com", f"/api/v3/coins/{coingecko_id}/market_chart",
+                         "sii_collector", description="Price history for peg analysis",
+                         params_template={"vs_currency": "usd", "days": str(days)})
     try:
         resp = await client.get(url, params=params, headers=_headers(), timeout=15)
         resp.raise_for_status()

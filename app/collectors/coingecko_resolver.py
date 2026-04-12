@@ -18,6 +18,7 @@ from typing import Optional
 import httpx
 
 from app.database import execute, fetch_all, fetch_one
+from app.data_source_registry import register_data_source
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,9 @@ def fetch_coins_list() -> list[dict]:
                 pass
 
     # Fetch from API
+    register_data_source("pro-api.coingecko.com", "/api/v3/coins/list", "coingecko_resolver",
+                         description="CoinGecko coins list for ID resolution",
+                         params_template={"include_platform": "true"}, prove_frequency="daily")
     logger.info("Fetching CoinGecko coins list (include_platform=true)...")
     try:
         resp = httpx.get(

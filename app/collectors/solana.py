@@ -16,6 +16,8 @@ import logging
 
 import httpx
 
+from app.data_source_registry import register_data_source
+
 logger = logging.getLogger(__name__)
 
 HELIUS_API_KEY = os.environ.get("HELIUS_API_KEY", "")
@@ -211,6 +213,9 @@ async def get_solana_token_transfers(
     client: httpx.AsyncClient, mint_address: str, limit: int = 100
 ) -> list:
     """Get recent parsed token transfers via Helius."""
+    register_data_source("api.helius.xyz", "/v0/addresses/{address}/transactions", "sii_solana_collector",
+                         description="Solana token transfers for SII flow analysis",
+                         params_template={"type": "TRANSFER"})
     url = f"{HELIUS_API_URL}/v0/addresses/{mint_address}/transactions"
     params = {
         "api-key": HELIUS_API_KEY,
@@ -322,6 +327,15 @@ async def collect_solana_components(
     if not HELIUS_API_KEY:
         logger.debug(f"HELIUS_API_KEY not set — skipping Solana collection for {stablecoin_id}")
         return []
+
+    register_data_source("mainnet.helius-rpc.com", "/rpc/getTokenSupply", "sii_solana_collector",
+                         method="POST", prove=False,
+                         description="Solana token supply for SII scoring",
+                         notes="POST/JSON-RPC — TLSNotary POST support unverified")
+    register_data_source("mainnet.helius-rpc.com", "/rpc/getTokenLargestAccounts", "sii_solana_collector",
+                         method="POST", prove=False,
+                         description="Solana top holders for SII distribution scoring",
+                         notes="POST/JSON-RPC — TLSNotary POST support unverified")
 
     components = []
     supply_val = None  # populated by section 1, used by later sections

@@ -31,6 +31,7 @@ from datetime import datetime, timezone, timedelta
 import httpx
 
 from app.database import fetch_all, fetch_one, get_conn
+from app.data_source_registry import register_data_source
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +144,9 @@ async def _fetch_transfers(
     pages: int = 3,
 ) -> list[dict]:
     """Fetch recent ERC-20 transfers for a wallet (up to 300 most recent)."""
+    register_data_source("api.etherscan.io", "/v2/api?action=tokentx", "treasury_flows_collector",
+                         description="Treasury wallet token transfers for behavioral event detection",
+                         params_template={"chainid": 1, "module": "account", "action": "tokentx"})
     all_transfers = []
     for page in range(1, pages + 1):
         try:

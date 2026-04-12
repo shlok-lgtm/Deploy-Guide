@@ -9,6 +9,7 @@ import logging
 import httpx
 
 from app.scoring import normalize_log
+from app.data_source_registry import register_data_source
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,8 @@ THREEPOOL_ADDRESS = "0xbEbc44782C7dB0a1A60Cb6fe97d0b483032FF1C7"
 
 async def fetch_3pool_data(client: httpx.AsyncClient) -> dict:
     """Get 3pool balances and imbalance metrics."""
+    register_data_source("api.curve.finance", "/v1/getPools/ethereum/main", "sii_collector",
+                         description="3pool balances for SII liquidity scoring")
     try:
         resp = await client.get(f"{CURVE_URL}/getPools/ethereum/main", timeout=15)
         resp.raise_for_status()

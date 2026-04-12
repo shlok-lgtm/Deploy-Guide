@@ -22,6 +22,7 @@ from datetime import datetime, timezone, timedelta
 import httpx
 
 from app.database import fetch_all, fetch_one
+from app.data_source_registry import register_data_source
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,9 @@ async def _fetch_recent_transfers(
     client: httpx.AsyncClient, contract: str, api_key: str
 ) -> list[dict]:
     """Fetch the most recent 200 token transfers for a contract."""
+    register_data_source("api.etherscan.io", "/v2/api?action=tokentx", "sii_flows_collector",
+                         description="Token transfers for mint/burn detection",
+                         params_template={"chainid": 1, "module": "account", "action": "tokentx"})
     params = {
         "chainid": 1,
         "module": "account",

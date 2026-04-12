@@ -21,6 +21,7 @@ from typing import Optional
 import httpx
 
 from app.config import STABLECOIN_REGISTRY
+from app.data_source_registry import register_data_source
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +159,9 @@ async def fetch_token_holder_count(
     api_key: str,
 ) -> Optional[int]:
     """Fetch live unique holder count for an ERC-20 token via Etherscan tokenholdercount."""
+    register_data_source("api.etherscan.io", "/v2/api?action=tokenholdercount", "sii_collector",
+                         description="Unique holder count for SII distribution scoring",
+                         params_template={"chainid": 1, "module": "token", "action": "tokenholdercount"})
     try:
         resp = await client.get(
             ETHERSCAN_V2_BASE,
@@ -208,6 +212,10 @@ async def collect_holder_distribution(
         return []
 
     decimals = cfg.get("decimals", 18)
+
+    register_data_source("api.etherscan.io", "/v2/api?action=tokenbalance", "sii_collector",
+                         description="Token holder balances for SII distribution scoring",
+                         params_template={"chainid": 1, "module": "account", "action": "tokenbalance"})
 
     # Fetch balances for all known holder addresses
     holder_balances = []

@@ -855,6 +855,25 @@ async def run_scoring_cycle():
     except Exception as e:
         logger.debug(f"Provenance attestation skipped: {e}")
 
+    # Provenance gap check — warn about scoring-relevant sources without recent proofs
+    try:
+        from app.database import fetch_all as _gap_fetch
+        gaps = _gap_fetch(
+            """SELECT dsr.source_domain, dsr.source_endpoint, dsr.collector
+               FROM data_source_registry dsr
+               LEFT JOIN provenance_proofs pp
+                   ON pp.source_domain = dsr.source_domain
+                   AND pp.proved_at > NOW() - INTERVAL '24 hours'
+               WHERE dsr.prove = TRUE
+               GROUP BY dsr.id
+               HAVING MAX(pp.proved_at) IS NULL"""
+        )
+        if gaps:
+            gap_domains = [f"{g['source_domain']}{g['source_endpoint']}" for g in gaps]
+            logger.warning(f"Provenance gaps: {len(gaps)} sources with prove=true lack proofs in last 24h: {gap_domains[:5]}")
+    except Exception as e:
+        logger.debug(f"Provenance gap check skipped: {e}")
+
     # -------------------------------------------------------------------------
     # Daily digest — send operational summary once per 24h
     # -------------------------------------------------------------------------

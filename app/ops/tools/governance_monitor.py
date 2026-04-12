@@ -7,6 +7,7 @@ import logging
 import httpx
 from datetime import datetime, timezone
 from app.database import fetch_one, fetch_all, execute
+from app.data_source_registry import register_data_source
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +114,10 @@ async def _fetch_snapshot_proposals(target_id: int, space_id: str, days_back: in
     }
     """
 
+    register_data_source("hub.snapshot.org", "/graphql", "governance_monitor",
+                         method="POST", prove=False, prove_frequency="daily",
+                         description="Snapshot proposals for governance monitoring",
+                         notes="POST/GraphQL — TLSNotary POST support unverified")
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
             SNAPSHOT_GRAPHQL,
@@ -266,6 +271,10 @@ async def _fetch_tally_proposals(target_id: int, org_slug: str, api_key: str) ->
     }
     """
 
+    register_data_source("api.tally.xyz", "/query", "governance_monitor",
+                         method="POST", prove=False, prove_frequency="daily",
+                         description="Tally on-chain proposals for governance monitoring",
+                         notes="POST/GraphQL — TLSNotary POST support unverified")
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
             TALLY_API,
