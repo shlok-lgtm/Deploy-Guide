@@ -125,8 +125,63 @@ def _check_sec_edgar(exchange_names: list[str]) -> dict:
     return result
 
 
+def _fetch_page_content(url: str) -> str | None:
+    """Fetch page content using Parallel Extract (primary) or requests (fallback).
+
+    Exchange about/legal pages are often JS-heavy — Parallel Extract handles
+    these much better than raw requests.
+    """
+    # Try Parallel Extract first
+    try:
+        import asyncio
+        from app.services import parallel_client
+
+        async def _extract():
+            return await parallel_client.extract(
+                url,
+                objective="Extract corporate information: registered entity name, directors, "
+                          "physical address, regulatory licenses, financial statements",
+            )
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(asyncio.run, _extract())
+                result = future.result(timeout=130)
+        else:
+            result = asyncio.run(_extract())
+
+        if result and "error" not in result:
+            results_list = result.get("results", [])
+            if results_list:
+                content = results_list[0].get("full_content", "")
+                if content and len(content) > 50:
+                    return content.lower()
+    except Exception as e:
+        logger.debug(f"Parallel Extract failed for {url}: {e}")
+
+    # Fallback to requests
+    try:
+        time.sleep(1)
+        resp = requests.get(url, timeout=15, allow_redirects=True)
+        if resp.status_code == 200:
+            return resp.text.lower()
+    except Exception:
+        pass
+
+    return None
+
+
 def _check_corporate_disclosure(about_url: str, legal_url: str) -> dict:
     """Score corporate disclosure by checking about and legal pages.
+
+    Uses Parallel Extract for JS-heavy exchange pages (primary),
+    falls back to requests.
 
     Rubric: 20pts each for:
     - Registered entity name disclosed
@@ -144,11 +199,9 @@ def _check_corporate_disclosure(about_url: str, legal_url: str) -> dict:
         if not url:
             continue
         try:
-            time.sleep(1)
-            resp = requests.get(url, timeout=15, allow_redirects=True)
-            if resp.status_code != 200:
+            text = _fetch_page_content(url)
+            if not text:
                 continue
-            text = resp.text.lower()
 
             # Check for registered entity disclosure
             if any(kw in text for kw in ["incorporated", "registered in", "company number",

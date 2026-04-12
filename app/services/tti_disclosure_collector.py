@@ -253,9 +253,53 @@ def _extract_from_markdown(markdown: str) -> dict:
     return data
 
 
-def _try_scrape_page(url: str) -> str | None:
-    """Try to scrape a page using Firecrawl, fall back to requests."""
-    # Try Firecrawl first (handles JS-rendered pages)
+def _try_scrape_page(url: str, entity_slug: str = "") -> str | None:
+    """Scrape a page using Parallel Extract (primary) or Firecrawl (fallback).
+
+    Parallel Extract is preferred because it does objective-guided extraction —
+    much better at pulling disclosure facts from complex JS-rendered product pages.
+    """
+    # Try Parallel Extract first (objective-guided, handles JS pages)
+    try:
+        import asyncio
+        from app.services import parallel_client
+
+        async def _extract():
+            return await parallel_client.extract(
+                url,
+                objective=(
+                    "Extract issuer disclosure information: regulatory registrations, "
+                    "custodians, banking partners, KYC/AML requirements, accreditation, "
+                    "prospectus availability, attestation details, redemption terms, "
+                    "transfer restrictions, tax reporting, jurisdiction, named officers, "
+                    "settlement time, business continuity, conflict of interest disclosures"
+                ),
+            )
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(asyncio.run, _extract())
+                result = future.result(timeout=130)
+        else:
+            result = asyncio.run(_extract())
+
+        if result and "error" not in result:
+            results_list = result.get("results", [])
+            if results_list:
+                content = results_list[0].get("full_content", "")
+                if content and len(content) > 100:
+                    logger.info(f"TTI Parallel Extract OK for {entity_slug}: {len(content)} chars")
+                    return content
+    except Exception as e:
+        logger.debug(f"Parallel Extract failed for {url}: {e}")
+
+    # Fallback to Firecrawl (JS-rendered page scraping)
     try:
         from app.services.firecrawl_client import scrape_js_page
         result = scrape_js_page(url, wait_ms=3000)
@@ -264,20 +308,144 @@ def _try_scrape_page(url: str) -> str | None:
         if isinstance(result, dict) and result.get("markdown"):
             return result["markdown"]
     except Exception as e:
-        logger.debug(f"Firecrawl scrape failed for {url}, falling back to requests: {e}")
+        logger.debug(f"Firecrawl scrape failed for {url}: {e}")
 
-    # Fallback to plain requests
+    # Last resort: plain requests
     try:
         import requests
         resp = requests.get(url, timeout=15, allow_redirects=True)
         if resp.status_code == 200:
-            # Strip HTML tags for simple extraction
             text = re.sub(r'<[^>]+>', ' ', resp.text)
             return re.sub(r'\s+', ' ', text).strip()
     except Exception as e:
         logger.debug(f"Requests fallback also failed for {url}: {e}")
 
     return None
+
+
+def _try_parallel_task_research(entity_slug: str, entity_name: str, issuer: str) -> dict | None:
+    """Use Parallel Task deep research to find issuer disclosure facts.
+
+    This is the most powerful tool — it searches the web and synthesizes
+    structured data. Used when page scraping yields sparse results.
+    Follows the exact pattern from cda_collector._step_parallel_task.
+    """
+    try:
+        import asyncio
+        from app.services import parallel_client
+
+        research_q = (
+            f"Research the tokenized treasury product {entity_name} issued by {issuer}. "
+            f"Find: regulatory registrations (SEC, FINRA, state), custodians, banking partners, "
+            f"KYC/AML requirements, whether accredited-only, prospectus/offering memo availability, "
+            f"attestation frequency and auditor, settlement time, jurisdiction, named officers/directors, "
+            f"business continuity plan, conflict of interest disclosures, transfer restrictions."
+        )
+        research_fields = {
+            "regulatory_registrations": "List of regulatory registrations (SEC RIA, FINRA, state MTLs)",
+            "custodians": "Names of custodians holding the underlying assets",
+            "banking_partners": "Banking partners used by the issuer",
+            "kyc_aml_required": "Whether KYC/AML verification is required (yes/no)",
+            "accredited_only": "Whether limited to accredited investors (yes/no)",
+            "prospectus_available": "Whether a prospectus or offering memo is publicly available (yes/no)",
+            "auditor_name": "Name of the auditing/attestation firm",
+            "attestation_frequency": "How often attestations are published (monthly/quarterly/annually)",
+            "jurisdiction": "Primary legal jurisdiction of the issuer",
+            "settlement_time_hours": "Redemption settlement time in hours",
+            "named_officers": "Named officers, CEO, CTO, directors",
+            "securities_registered": "Whether registered as a security or exempt (Reg D, Reg S, etc.)",
+        }
+
+        async def _run():
+            return await parallel_client.task(
+                question=research_q,
+                fields=research_fields,
+                processor="base",  # $0.005 per call — cost-effective
+            )
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(asyncio.run, _run())
+                result = future.result(timeout=330)
+        else:
+            result = asyncio.run(_run())
+
+        if result and "error" not in result:
+            fields = result.get("fields", result.get("data", {}))
+            if fields and isinstance(fields, dict):
+                # Convert Parallel Task structured output to our extraction format
+                data = {}
+                if fields.get("regulatory_registrations"):
+                    regs = fields["regulatory_registrations"]
+                    data["regulatory_registrations"] = (
+                        [r.strip() for r in regs.split(",")] if isinstance(regs, str)
+                        else regs
+                    )
+                if fields.get("custodians"):
+                    custs = fields["custodians"]
+                    data["custodians"] = (
+                        [c.strip() for c in custs.split(",")] if isinstance(custs, str)
+                        else custs
+                    )
+                if fields.get("banking_partners"):
+                    banks = fields["banking_partners"]
+                    data["banking_partners"] = (
+                        [b.strip() for b in banks.split(",")] if isinstance(banks, str)
+                        else banks
+                    )
+                if _is_yes(fields.get("kyc_aml_required")):
+                    data["kyc_aml_required"] = True
+                if _is_yes(fields.get("accredited_only")):
+                    data["accredited_only"] = True
+                if _is_yes(fields.get("prospectus_available")):
+                    data["prospectus_available"] = True
+                if _is_yes(fields.get("securities_registered")):
+                    data["securities_registered"] = True
+                    exemption = fields.get("securities_registered", "")
+                    for ex in ["reg d", "reg s", "reg a"]:
+                        if ex in exemption.lower():
+                            data["exemption_type"] = ex.upper()
+                            break
+                if fields.get("auditor_name"):
+                    data["auditor_name"] = fields["auditor_name"]
+                if fields.get("attestation_frequency"):
+                    data["attestation_frequency"] = fields["attestation_frequency"]
+                if fields.get("jurisdiction"):
+                    data["jurisdiction"] = fields["jurisdiction"]
+                if fields.get("named_officers"):
+                    officers = fields["named_officers"]
+                    data["named_officers"] = (
+                        [o.strip() for o in officers.split(",")] if isinstance(officers, str)
+                        else officers
+                    )
+                settle = fields.get("settlement_time_hours")
+                if settle:
+                    try:
+                        data["settlement_time_hours"] = int(re.sub(r'[^\d]', '', str(settle)))
+                    except (ValueError, TypeError):
+                        pass
+
+                logger.info(f"TTI Parallel Task OK for {entity_slug}: {len(data)} fields")
+                return data
+    except Exception as e:
+        logger.warning(f"Parallel Task research failed for {entity_slug}: {e}")
+
+    return None
+
+
+def _is_yes(value) -> bool:
+    """Check if a Parallel Task field value indicates 'yes'."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("yes", "true", "required", "mandatory")
+    return False
 
 
 def _try_parse_pdf(entity_slug: str, pdf_url: str) -> dict | None:
@@ -355,7 +523,7 @@ def collect_entity_disclosures(entity_slug: str, entity_name: str) -> dict | Non
         logger.info(f"TTI disclosure scraping {entity_slug}: {url}")
         time.sleep(2)  # Rate limit between sources
 
-        markdown = _try_scrape_page(url)
+        markdown = _try_scrape_page(url, entity_slug=entity_slug)
         if not markdown:
             continue
 
@@ -394,9 +562,44 @@ def collect_entity_disclosures(entity_slug: str, entity_name: str) -> dict | Non
             _store_extraction(
                 entity_slug, entity_name, url,
                 source_type, page_data,
-                "firecrawl_markdown", 0.6,
+                "parallel_extract", 0.7,  # Parallel Extract is primary scraper
             )
             combined_data.update(page_data)
+
+    # If page scraping yielded sparse results (<5 fields), supplement with Parallel Task
+    # deep research — it searches the web and synthesizes structured facts
+    if len(combined_data) < 5:
+        issuer = ""
+        for slug, url_list in TTI_DISCLOSURE_URLS.items():
+            if slug == entity_slug:
+                break
+        # Look up issuer name from entity config
+        try:
+            from app.index_definitions.tti_v01 import TTI_ENTITIES
+            for ent in TTI_ENTITIES:
+                if ent["slug"] == entity_slug:
+                    issuer = ent.get("issuer", entity_name)
+                    break
+        except Exception:
+            issuer = entity_name
+
+        logger.info(
+            f"TTI disclosure {entity_slug}: only {len(combined_data)} fields from pages, "
+            f"supplementing with Parallel Task research"
+        )
+        task_data = _try_parallel_task_research(entity_slug, entity_name, issuer)
+        if task_data:
+            # Task data fills gaps — don't overwrite existing page extractions
+            for k, v in task_data.items():
+                if k not in combined_data:
+                    combined_data[k] = v
+
+            _store_extraction(
+                entity_slug, entity_name,
+                f"parallel_task://{entity_slug}",
+                "deep_research", task_data,
+                "parallel_task", 0.7,
+            )
 
     if combined_data:
         logger.info(f"TTI disclosure {entity_slug}: extracted {len(combined_data)} fields")

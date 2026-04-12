@@ -19,6 +19,7 @@ import json
 import hashlib
 import logging
 import os
+import re
 import time
 from datetime import datetime, timezone, timedelta
 
@@ -657,6 +658,46 @@ def _automate_dao_audit_cadence(entity: dict, static: dict) -> dict:
     found_auditors = set()
     found_years = set()
 
+    # Try Parallel Search first — finds audit reports across the web
+    try:
+        import asyncio
+        from app.services import parallel_client
+
+        protocol_name = entity.get("name", slug)
+        search_query = f"{protocol_name} smart contract security audit report"
+
+        async def _search():
+            return await parallel_client.search(search_query, num_results=5)
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(asyncio.run, _search())
+                search_result = future.result(timeout=40)
+        else:
+            search_result = asyncio.run(_search())
+
+        if search_result and "error" not in search_result:
+            results_list = search_result.get("results", [])
+            for sr in results_list:
+                snippet = (sr.get("snippet") or sr.get("title") or "").lower()
+                for auditor in KNOWN_AUDITORS:
+                    if auditor in snippet:
+                        found_auditors.add(auditor)
+                year_matches = re.findall(r'20(?:2[0-6]|1[0-9])', snippet)
+                for y in year_matches:
+                    found_years.add(int(y))
+            if found_auditors:
+                logger.info(f"DAO audit Parallel Search {slug}: found {found_auditors}")
+    except Exception as e:
+        logger.debug(f"DAO audit Parallel Search failed for {slug}: {e}")
+
+    # Also check known audit pages directly (supplements search results)
     for url in audit_urls:
         try:
             time.sleep(1)
@@ -672,7 +713,6 @@ def _automate_dao_audit_cadence(entity: dict, static: dict) -> dict:
                     found_auditors.add(auditor)
 
             # Detect years (audit dates)
-            import re
             year_matches = re.findall(r'20(?:2[0-6]|1[0-9])', text)
             for y in year_matches:
                 found_years.add(int(y))
