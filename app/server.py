@@ -4089,15 +4089,18 @@ async def rpi_components(slug: str):
 
 
 @app.get("/api/rpi/history/{slug}")
-async def rpi_history(slug: str):
-    """Base score history for a protocol."""
+async def rpi_history(slug: str, limit: int = Query(default=90)):
+    """Base score history for a protocol (live + backfilled). Includes confidence tags."""
     rows = fetch_all("""
-        SELECT score_date, overall_score, component_scores, methodology_version
-        FROM rpi_score_history
-        WHERE protocol_slug = %s
-        ORDER BY score_date DESC
-        LIMIT 90
-    """, (slug,))
+        SELECT h.score_date, h.overall_score, h.component_scores, h.methodology_version,
+               d.confidence
+        FROM rpi_score_history h
+        LEFT JOIN historical_rpi_data d
+            ON d.protocol_slug = h.protocol_slug AND d.record_date = h.score_date
+        WHERE h.protocol_slug = %s
+        ORDER BY h.score_date DESC
+        LIMIT %s
+    """, (slug, limit))
     return {
         "protocol_slug": slug,
         "history": [
@@ -4105,11 +4108,47 @@ async def rpi_history(slug: str):
                 "date": r["score_date"].isoformat() if hasattr(r["score_date"], "isoformat") else str(r["score_date"]),
                 "score": float(r["overall_score"]) if r.get("overall_score") else None,
                 "component_scores": r.get("component_scores"),
+                "confidence": r.get("confidence", "high"),
+                "reconstructed": "reconstructed" in (r.get("methodology_version") or ""),
             }
             for r in rows
         ],
         "count": len(rows),
     }
+
+
+@app.get("/api/rpi/history/{slug}/at/{date_str}")
+async def rpi_history_at_date(slug: str, date_str: str):
+    """Reconstruct BASE RPI score for a protocol at a specific historical date."""
+    try:
+        from datetime import date as date_type
+        from app.rpi.historical import reconstruct_rpi_score
+        target = date_type.fromisoformat(date_str)
+        return reconstruct_rpi_score(slug, target)
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+
+@app.post("/api/admin/rpi-backfill")
+async def admin_rpi_backfill(request: Request, background_tasks: BackgroundTasks):
+    """Trigger historical RPI reconstruction for all protocols. Admin-key protected."""
+    _check_admin_key(request)
+    try:
+        body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+    except Exception:
+        body = {}
+
+    protocols = body.get("protocols")
+    since_years = body.get("since_years", 2)
+    interval_days = body.get("interval_days", 30)
+
+    def _run_backfill():
+        from app.rpi.historical import run_historical_backfill
+        run_historical_backfill(protocols, since_years, interval_days)
+
+    background_tasks.add_task(_run_backfill)
+    return {"status": "backfill_started", "protocols": protocols or "all", "since_years": since_years}
 
 
 @app.get("/api/rpi/compare")

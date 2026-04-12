@@ -667,6 +667,44 @@ async def run_scoring_cycle():
             collect_tally_proposals()
             collect_parameter_changes()
 
+            # Phase 2A: Automate lens components
+            try:
+                from app.rpi.forum_scraper import scrape_all_forums, update_vendor_diversity_lens
+                forum_results = scrape_all_forums(since_days=90)
+                logger.info(f"RPI forum scraper: {sum(forum_results.values())} posts across {len(forum_results)} protocols")
+                update_vendor_diversity_lens()
+            except Exception as fa_err:
+                logger.warning(f"RPI forum scraper failed: {fa_err}")
+
+            try:
+                from app.rpi.docs_scorer import score_all_docs
+                score_all_docs()
+            except Exception as ds_err:
+                logger.warning(f"RPI docs scorer failed: {ds_err}")
+
+            try:
+                from app.rpi.incident_detector import run_incident_detection
+                run_incident_detection()
+            except Exception as id_err:
+                logger.warning(f"RPI incident detection failed: {id_err}")
+
+            # Phase 2B: Expansion pipeline (weekly gate)
+            try:
+                last_expansion = fetch_one(
+                    "SELECT MAX(created_at) AS latest FROM rpi_protocol_config WHERE discovery_source != 'manual'"
+                )
+                expansion_age = 169  # default: run if no records
+                if last_expansion and last_expansion.get("latest"):
+                    exp_ts = last_expansion["latest"]
+                    if exp_ts.tzinfo is None:
+                        exp_ts = exp_ts.replace(tzinfo=timezone.utc)
+                    expansion_age = (datetime.now(timezone.utc) - exp_ts).total_seconds() / 3600
+                if expansion_age >= 168:  # weekly
+                    from app.rpi.expansion import run_expansion_pipeline
+                    run_expansion_pipeline()
+            except Exception as exp_err:
+                logger.warning(f"RPI expansion failed: {exp_err}")
+
             # Score all protocols
             from app.rpi.scorer import run_rpi_scoring
             rpi_results = run_rpi_scoring()
