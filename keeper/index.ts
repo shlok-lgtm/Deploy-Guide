@@ -466,14 +466,56 @@ async function main(): Promise<void> {
   // Check balance at startup
   await checkWalletBalance();
 
+  // Log keeper cycle to the hub API for observability
+  async function logCycleStart(trigger: string): Promise<number | null> {
+    try {
+      const res = await fetch(`${config.apiUrl}/api/ops/keeper-cycle/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ trigger_reason: trigger }),
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (res.ok) {
+        const data = await res.json() as { id: number };
+        return data.id;
+      }
+    } catch {
+      // Non-blocking — cycle logging is best-effort
+    }
+    return null;
+  }
+
+  async function logCycleComplete(cycleId: number, durationMs: number, errors: string[]): Promise<void> {
+    try {
+      await fetch(`${config.apiUrl}/api/ops/keeper-cycle/${cycleId}/complete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ duration_ms: durationMs, errors: errors.length > 0 ? errors : null }),
+        signal: AbortSignal.timeout(5_000),
+      });
+    } catch {
+      // Non-blocking
+    }
+  }
+
   // Run first cycle immediately (unless deferred above), then on schedule
   while (true) {
+    const cycleStartMs = Date.now();
+    const cycleId = await logCycleStart("scheduled");
+    const cycleErrors: string[] = [];
+
     try {
       await runCycle(config, walletBase, walletArb, providerBase, providerArb);
     } catch (err) {
       const msg = `Unhandled error in keeper cycle`;
-      logger.error(msg, { error: err instanceof Error ? err.message : String(err) });
+      const errStr = err instanceof Error ? err.message : String(err);
+      logger.error(msg, { error: errStr });
+      cycleErrors.push(errStr);
       await sendAlert(msg, err);
+    }
+
+    if (cycleId != null) {
+      await logCycleComplete(cycleId, Date.now() - cycleStartMs, cycleErrors);
     }
 
     // Check balance after each cycle
