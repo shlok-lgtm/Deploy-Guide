@@ -169,8 +169,8 @@ async def rate_limit_and_track(request: Request, call_next):
         if len(parts) > 1 and parts[1]:
             entity_type = "wallet"
             entity_id = parts[1].split("/")[0].split("?")[0][:42]
-    elif "/api/protocols/" in path or "/api/psi/" in path:
-        for prefix in ["/api/protocols/", "/api/psi/scores/"]:
+    elif "/api/protocols/" in path or "/api/psi/" in path or "/api/rpi/" in path:
+        for prefix in ["/api/protocols/", "/api/psi/scores/", "/api/rpi/scores/"]:
             if prefix in path:
                 parts = path.split(prefix)
                 if len(parts) > 1 and parts[1]:
@@ -457,6 +457,13 @@ async def startup():
         logger.info("Squads Guard routes registered at /api/squads")
     except Exception as e:
         logger.warning(f"Squads Guard not available: {e}")
+    # Register RPI (Risk Posture Index) routes
+    try:
+        from app.rpi.routes import rpi_router
+        app.include_router(rpi_router)
+        logger.info("RPI routes registered at /api/rpi/*")
+    except Exception as e:
+        logger.warning(f"RPI module not available: {e}")
     # MCP HTTP endpoint
     try:
         from app.mcp_server import mcp as mcp_server

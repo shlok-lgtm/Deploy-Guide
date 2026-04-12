@@ -199,6 +199,12 @@ def create_x402_middleware():
         "GET /api/paid/report/{entity_type}/{entity_id}": _route(
             "$0.01", "Attested risk report with optional regulatory lens"
         ),
+        "GET /api/paid/rpi/scores": _route(
+            "$0.005", "All protocol risk posture scores"
+        ),
+        "GET /api/paid/rpi/scores/{slug}": _route(
+            "$0.001", "Single protocol risk posture score with component breakdown"
+        ),
     }
 
     return PaymentMiddlewareASGI, {"routes": routes, "server": server}
@@ -473,5 +479,54 @@ async def paid_report(
         "lens_result": lens_result,
         "report_hash": report_hash,
         "generated_at": ts,
+        "tier": "paid",
+    }
+
+
+@paid_router.get("/rpi/scores")
+async def paid_rpi_all():
+    """Paid: All RPI scores."""
+    rows = fetch_all("""
+        SELECT DISTINCT ON (protocol_slug)
+            protocol_slug, protocol_name, overall_score, grade,
+            category_scores, formula_version, computed_at
+        FROM rpi_scores ORDER BY protocol_slug, computed_at DESC
+    """)
+    from app.index_definitions.rpi_v01 import RPI_V01_DEFINITION
+    return {
+        "protocols": [
+            {
+                "protocol_slug": r["protocol_slug"],
+                "protocol_name": r["protocol_name"],
+                "score": float(r["overall_score"]) if r.get("overall_score") else None,
+                "category_scores": r.get("category_scores"),
+                "computed_at": r["computed_at"].isoformat() if r.get("computed_at") else None,
+            }
+            for r in rows
+        ],
+        "count": len(rows),
+        "version": RPI_V01_DEFINITION["version"],
+        "tier": "paid",
+    }
+
+
+@paid_router.get("/rpi/scores/{slug}")
+async def paid_rpi_detail(slug: str):
+    """Paid: Single RPI detail."""
+    row = fetch_one("""
+        SELECT protocol_slug, protocol_name, overall_score, grade,
+               category_scores, component_scores, raw_values, formula_version, computed_at
+        FROM rpi_scores WHERE protocol_slug = %s ORDER BY computed_at DESC LIMIT 1
+    """, (slug,))
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Protocol '{slug}' not found")
+    return {
+        "protocol_slug": row["protocol_slug"],
+        "protocol_name": row["protocol_name"],
+        "score": float(row["overall_score"]) if row.get("overall_score") else None,
+        "category_scores": row.get("category_scores"),
+        "component_scores": row.get("component_scores"),
+        "raw_values": row.get("raw_values"),
+        "computed_at": row["computed_at"].isoformat() if row.get("computed_at") else None,
         "tier": "paid",
     }

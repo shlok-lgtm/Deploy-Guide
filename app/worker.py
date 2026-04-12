@@ -644,6 +644,35 @@ async def run_scoring_cycle():
         logger.warning(f"PSI expansion pipeline failed: {e}")
 
     # -------------------------------------------------------------------------
+    # RPI scoring — daily gate (governance data changes slowly)
+    # -------------------------------------------------------------------------
+    try:
+        last_rpi = fetch_one(
+            "SELECT MAX(computed_at) AS latest FROM rpi_scores"
+        )
+        rpi_age_hours = 25  # default: run if no prior record
+        if last_rpi and last_rpi.get("latest"):
+            latest_rpi = last_rpi["latest"]
+            if latest_rpi.tzinfo is None:
+                latest_rpi = latest_rpi.replace(tzinfo=timezone.utc)
+            rpi_age_hours = (datetime.now(timezone.utc) - latest_rpi).total_seconds() / 3600
+
+        if rpi_age_hours >= 24:
+            logger.info("Running RPI data collection...")
+            from app.rpi.collectors import collect_all_rpi_data
+            rpi_collection = collect_all_rpi_data()
+            logger.info(f"RPI collection: {rpi_collection}")
+
+            logger.info("Running RPI scoring cycle...")
+            from app.rpi.scorer import run_rpi_scoring
+            rpi_results = run_rpi_scoring()
+            logger.info(f"RPI scoring complete: {len(rpi_results)} protocols scored")
+        else:
+            logger.info(f"RPI scoring skipped — last ran {rpi_age_hours:.0f}h ago")
+    except Exception as e:
+        logger.warning(f"RPI scoring pipeline failed: {e}")
+
+    # -------------------------------------------------------------------------
     # CDA collection — daily gate via DB timestamp
     # -------------------------------------------------------------------------
     try:
