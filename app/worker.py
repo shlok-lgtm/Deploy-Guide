@@ -601,6 +601,16 @@ async def run_scoring_cycle():
     except Exception as e:
         logger.warning(f"PSI scoring failed: {e}")
 
+    # CQI composition — runs after SII + PSI so both inputs are fresh
+    try:
+        from app.composition import compute_cqi_matrix
+        logger.info("Running CQI composition matrix...")
+        cqi_result = compute_cqi_matrix()
+        cqi_count = cqi_result.get("count", 0)
+        logger.info(f"CQI composition complete: {cqi_count} pairs attested")
+    except Exception as e:
+        logger.warning(f"CQI composition failed: {e}")
+
     # PSI expansion pipeline — daily gate (discover → enrich → promote)
     try:
         from app.collectors.psi_collector import (
