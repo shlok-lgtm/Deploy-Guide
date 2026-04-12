@@ -4998,6 +4998,73 @@ async def protocol_full_exposure(slug: str):
     }
 
 
+# =============================================================================
+# Pool Wallets — wallets supplying stablecoins into protocol pools
+# =============================================================================
+
+@app.get("/api/protocols/{slug}/pool-wallets/{symbol}")
+async def protocol_pool_wallets(
+    slug: str,
+    symbol: str,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+):
+    """Wallets in a protocol's stablecoin pool with risk profiles."""
+    sym_upper = symbol.upper()
+
+    rows = fetch_all("""
+        SELECT pw.wallet_address, pw.pool_contract_address, pw.balance,
+               pw.discovered_at, pw.last_seen
+        FROM protocol_pool_wallets pw
+        WHERE pw.protocol_slug = %s AND UPPER(pw.stablecoin_symbol) = %s
+        ORDER BY pw.balance DESC NULLS LAST, pw.discovered_at ASC
+        LIMIT %s OFFSET %s
+    """, (slug, sym_upper, limit, offset))
+
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"No pool wallets for {slug}/{sym_upper}")
+
+    total_row = fetch_one("""
+        SELECT COUNT(*) AS total
+        FROM protocol_pool_wallets
+        WHERE protocol_slug = %s AND UPPER(stablecoin_symbol) = %s
+    """, (slug, sym_upper))
+    total = total_row["total"] if total_row else len(rows)
+
+    # Batch-fetch risk scores for returned wallets
+    addrs = [r["wallet_address"] for r in rows]
+    risk_rows = fetch_all("""
+        SELECT DISTINCT ON (wallet_address)
+            wallet_address, risk_score, risk_grade, concentration_hhi
+        FROM wallet_graph.wallet_risk_scores
+        WHERE wallet_address = ANY(%s)
+        ORDER BY wallet_address, computed_at DESC
+    """, (addrs,))
+    risk_map = {r["wallet_address"]: r for r in risk_rows}
+
+    wallets = []
+    for r in rows:
+        risk = risk_map.get(r["wallet_address"])
+        wallets.append({
+            "address": r["wallet_address"],
+            "balance": r["balance"],
+            "pool_contract": r["pool_contract_address"],
+            "discovered_at": r["discovered_at"].isoformat() if r.get("discovered_at") else None,
+            "risk_score": float(risk["risk_score"]) if risk and risk.get("risk_score") is not None else None,
+            "risk_grade": risk["risk_grade"] if risk else None,
+            "concentration_hhi": float(risk["concentration_hhi"]) if risk and risk.get("concentration_hhi") is not None else None,
+        })
+
+    return {
+        "protocol_slug": slug,
+        "stablecoin_symbol": sym_upper,
+        "wallets": wallets,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
 @app.get("/api/protocols/drift/vault-balances")
 async def drift_vault_balances():
     """On-chain Drift vault token balances via Helius RPC. Real-time, not DeFiLlama."""
@@ -5364,6 +5431,143 @@ async def compose_cqi_matrix():
     """CQI for all stablecoin x protocol combinations."""
     from app.composition import compute_cqi_matrix
     return compute_cqi_matrix()
+
+
+@app.get("/api/cqi/{protocol_slug}/{stablecoin_symbol}/contagion")
+async def cqi_contagion(
+    protocol_slug: str,
+    stablecoin_symbol: str,
+    depth: int = Query(default=2, ge=1, le=3),
+):
+    """
+    CQI pair enriched with contagion summary from pool wallets.
+
+    Runs depth-limited contagion traversal on the top 50 pool wallets by balance,
+    then aggregates into a contagion summary: pool HHI, depth reach, worst SII
+    exposure, and % connected to D/F-rated assets.
+    """
+    sym_upper = stablecoin_symbol.upper()
+
+    # Get CQI score
+    from app.composition import compute_cqi
+    cqi = compute_cqi(sym_upper, protocol_slug)
+    if "error" in cqi:
+        raise HTTPException(status_code=404, detail=cqi["error"])
+
+    # Get top 50 pool wallets by balance
+    pool_wallets = fetch_all("""
+        SELECT wallet_address, balance
+        FROM protocol_pool_wallets
+        WHERE protocol_slug = %s AND UPPER(stablecoin_symbol) = %s
+        ORDER BY balance DESC NULLS LAST
+        LIMIT 50
+    """, (protocol_slug, sym_upper))
+
+    if not pool_wallets:
+        cqi["contagion"] = {
+            "status": "no_pool_wallets",
+            "message": f"No pool wallets discovered for {protocol_slug}/{sym_upper}. Run pool wallet collection first.",
+        }
+        return cqi
+
+    pool_addrs = [pw["wallet_address"] for pw in pool_wallets]
+
+    # Pool HHI — concentration among top holders
+    balances = [float(pw["balance"]) for pw in pool_wallets if pw.get("balance") and pw["balance"] > 0]
+    pool_hhi = None
+    if balances:
+        total_balance = sum(balances)
+        if total_balance > 0:
+            shares = [b / total_balance for b in balances]
+            pool_hhi = round(sum(s * s for s in shares) * 10000, 1)
+
+    # Contagion traversal — depth-2 CTE across all pool wallets in one query
+    MAX_NODES = 500
+    contagion_rows = fetch_all("""
+        WITH RECURSIVE contagion_path AS (
+            SELECT
+                CASE WHEN e.from_address = ANY(%s) THEN e.to_address ELSE e.from_address END AS node,
+                e.weight,
+                e.total_value_usd,
+                1 AS depth,
+                ARRAY[e.from_address, e.to_address] AS path
+            FROM wallet_graph.wallet_edges e
+            WHERE (e.from_address = ANY(%s) OR e.to_address = ANY(%s))
+              AND e.weight > 0.05
+              AND NOT (e.from_address = ANY(%s) AND e.to_address = ANY(%s))
+
+            UNION ALL
+
+            SELECT
+                CASE WHEN e.from_address = cp.node THEN e.to_address ELSE e.from_address END,
+                e.weight,
+                e.total_value_usd,
+                cp.depth + 1,
+                cp.path || CASE WHEN e.from_address = cp.node THEN e.to_address ELSE e.from_address END
+            FROM wallet_graph.wallet_edges e
+            JOIN contagion_path cp ON (e.from_address = cp.node OR e.to_address = cp.node)
+            WHERE cp.depth < %s
+              AND NOT (CASE WHEN e.from_address = cp.node THEN e.to_address ELSE e.from_address END) = ANY(cp.path)
+              AND e.weight > 0.05
+        )
+        SELECT DISTINCT ON (node) node AS address, depth, weight, total_value_usd
+        FROM contagion_path
+        WHERE NOT node = ANY(%s)
+        ORDER BY node, depth ASC, weight DESC
+        LIMIT %s
+    """, (pool_addrs, pool_addrs, pool_addrs, pool_addrs, pool_addrs,
+          depth, pool_addrs, MAX_NODES))
+
+    # Batch-fetch risk scores for connected nodes
+    connected_addrs = [r["address"] for r in contagion_rows]
+    risk_map = {}
+    if connected_addrs:
+        risk_rows = fetch_all("""
+            SELECT DISTINCT ON (wallet_address)
+                wallet_address, risk_score, risk_grade
+            FROM wallet_graph.wallet_risk_scores
+            WHERE wallet_address = ANY(%s)
+            ORDER BY wallet_address, computed_at DESC
+        """, (connected_addrs,))
+        risk_map = {r["wallet_address"]: r for r in risk_rows}
+
+    # Compute contagion summary
+    total_exposed_usd = 0.0
+    worst_risk_score = None
+    low_grade_count = 0
+    scored_count = 0
+    depth_counts = {}
+
+    for r in contagion_rows:
+        d = r["depth"]
+        depth_counts[d] = depth_counts.get(d, 0) + 1
+        total_exposed_usd += float(r["total_value_usd"]) if r.get("total_value_usd") else 0
+
+        risk = risk_map.get(r["address"])
+        if risk and risk.get("risk_score") is not None:
+            rs = float(risk["risk_score"])
+            scored_count += 1
+            if worst_risk_score is None or rs < worst_risk_score:
+                worst_risk_score = rs
+            if risk.get("risk_grade") in ("D+", "D", "D-", "F"):
+                low_grade_count += 1
+
+    pct_low_grade = round(low_grade_count / scored_count * 100, 1) if scored_count > 0 else 0
+
+    cqi["contagion"] = {
+        "pool_wallet_count": len(pool_wallets),
+        "pool_hhi": pool_hhi,
+        "depth": depth,
+        "connected_nodes": len(contagion_rows),
+        "truncated": len(contagion_rows) >= MAX_NODES,
+        "depth_distribution": depth_counts,
+        "total_exposed_usd": round(total_exposed_usd, 2),
+        "worst_connected_risk_score": round(worst_risk_score, 1) if worst_risk_score is not None else None,
+        "pct_connected_to_low_grade": pct_low_grade,
+        "scored_connected_count": scored_count,
+    }
+
+    return cqi
 
 
 # =============================================================================

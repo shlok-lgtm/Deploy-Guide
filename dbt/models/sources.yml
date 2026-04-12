@@ -13,6 +13,8 @@ sources:
       - name: assessment_input_vectors
       - name: cda_vendor_extractions
       - name: cda_issuer_registry
+      - name: protocol_pool_wallets
+      - name: protocol_collateral_exposure
 
   - name: wallet_graph
     schema: wallet_graph

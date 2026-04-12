@@ -1230,6 +1230,36 @@ async def run_slow_cycle():
     except Exception as e:
         logger.warning(f"PSI expansion pipeline failed: {e}")
 
+    # -------------------------------------------------------------------------
+    # Pool wallet discovery — daily gate via DB timestamp
+    # Discovers wallets in protocol stablecoin pools (e.g. Aave aUSDC holders)
+    # and seeds them into the wallet graph for edge building + risk scoring.
+    # -------------------------------------------------------------------------
+    try:
+        last_pool_wallet = fetch_one(
+            "SELECT MAX(discovered_at) AS latest FROM protocol_pool_wallets"
+        )
+        pool_wallet_age_hours = 25  # default: run if no prior record
+        if last_pool_wallet and last_pool_wallet.get("latest"):
+            latest = last_pool_wallet["latest"]
+            if latest.tzinfo is None:
+                latest = latest.replace(tzinfo=timezone.utc)
+            pool_wallet_age_hours = (datetime.now(timezone.utc) - latest).total_seconds() / 3600
+
+        if pool_wallet_age_hours >= 24:
+            from app.collectors.pool_wallet_collector import run_pool_wallet_collection
+            logger.info("Running pool wallet discovery...")
+            pool_result = await run_pool_wallet_collection()
+            logger.info(
+                f"Pool wallet discovery complete: {pool_result.get('pools_processed', 0)} pools, "
+                f"{pool_result.get('wallets_discovered', 0)} holders, "
+                f"{pool_result.get('wallets_seeded', 0)} new wallets seeded"
+            )
+        else:
+            logger.info(f"Pool wallet discovery skipped — last ran {pool_wallet_age_hours:.1f}h ago")
+    except Exception as e:
+        logger.warning(f"Pool wallet discovery failed: {e}")
+
     elapsed = time.time() - start
     logger.info(f"=== Slow cycle complete in {elapsed:.0f}s ===")
 

@@ -16,3 +16,5 @@ UNION ALL
 SELECT * FROM {{ ref('disc_attestation_signals') }}
 UNION ALL
 SELECT * FROM {{ ref('disc_actor_signals') }}
+UNION ALL
+SELECT * FROM {{ ref('disc_cqi_contagion_signals') }}
