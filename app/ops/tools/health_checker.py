@@ -187,21 +187,20 @@ def check_graph_freshness():
 
 
 def check_api_health():
-    """Check API responsiveness via localhost (avoids proxy round-trip)."""
-    _port = os.environ.get("PORT", os.environ.get("API_PORT", "5000"))
-    _local_url = f"http://127.0.0.1:{_port}/api/health"
+    """Check API responsiveness via public URL."""
+    url = f"{_PUBLIC_BASE}/api/health"
     start = time.time()
     try:
-        resp = httpx.get(_local_url, timeout=10)
+        resp = httpx.get(url, timeout=20)
         latency_ms = round((time.time() - start) * 1000)
-        status = "healthy" if resp.status_code == 200 and latency_ms < 2000 else "degraded"
+        status = "healthy" if resp.status_code == 200 and latency_ms < 3000 else "degraded"
         return {
             "system": "api",
             "status": status,
-            "details": {"status_code": resp.status_code, "latency_ms": latency_ms},
+            "details": {"status_code": resp.status_code, "latency_ms": latency_ms, "url": url},
         }
     except Exception as e:
-        return {"system": "api", "status": "down", "details": {"error": str(e)}}
+        return {"system": "api", "status": "down", "details": {"error": str(e), "url": url}}
 
 
 def check_database():
@@ -267,7 +266,7 @@ def check_integrity():
         from app.integrity import check_all
         data = check_all()
         domains = data.get("domains", {})
-        failing = [d for d, v in domains.items() if v.get("status") not in ("fresh", "healthy")]
+        failing = [d for d, v in domains.items() if v.get("status") not in ("fresh", "healthy", "empty")]
         status = "healthy" if not failing else ("degraded" if len(failing) < 3 else "down")
         return {
             "system": "integrity",

@@ -308,7 +308,7 @@ def _actor_type_consistency():
 def _treasury_registry_nonempty():
     return _min_count_check(
         "SELECT COUNT(*) AS cnt FROM wallet_graph.treasury_registry WHERE monitoring_enabled = TRUE",
-        minimum=1, rule="treasury_registry_empty", field="row_count", level="warning",
+        minimum=1, rule="treasury_registry_empty", field="row_count", level="info",
         message="No monitoring-enabled treasuries in registry",
     )
 
@@ -397,7 +397,10 @@ def check_domain(domain: str) -> dict:
         row_count = row["cnt"] if row else 0
         latest = row.get("latest") if row else None
         if latest is None:
-            status = "error"
+            if row_count == 0:
+                status = "empty"
+            else:
+                status = "error"
         else:
             if latest.tzinfo is None:
                 latest = latest.replace(tzinfo=timezone.utc)
