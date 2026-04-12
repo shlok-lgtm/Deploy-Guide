@@ -394,6 +394,32 @@ def check_db_connections():
     return {"system": "db_connections", "status": status, "details": {"active_connections": count}}
 
 
+def check_collector_health():
+    """Check if any collectors are consistently failing."""
+    rows = _safe_query("""
+        SELECT collector_name,
+               SUM(coins_timeout + coins_error) as failures,
+               SUM(coins_ok + coins_timeout + coins_error) as total
+        FROM collector_cycle_stats
+        WHERE cycle_timestamp > NOW() - INTERVAL '6 hours'
+        GROUP BY collector_name
+        HAVING SUM(coins_timeout + coins_error) > SUM(coins_ok) * 0.5
+        ORDER BY failures DESC
+    """)
+    if rows and len(rows) > 0:
+        worst = rows[0]
+        return {
+            "system": "collectors",
+            "status": "degraded",
+            "details": {
+                "degraded_collectors": len(rows),
+                "worst": worst["collector_name"],
+                "failure_rate": f"{worst['failures']}/{worst['total']}",
+            },
+        }
+    return {"system": "collectors", "status": "healthy", "details": {}}
+
+
 ALL_CHECKS = [
     check_sii_freshness,
     check_psi_freshness,
@@ -410,6 +436,7 @@ ALL_CHECKS = [
     check_report_endpoints,
     check_stablecoin_coverage,
     check_db_connections,
+    check_collector_health,
 ]
 
 

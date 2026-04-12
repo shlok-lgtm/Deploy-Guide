@@ -30,22 +30,7 @@ from app.scoring import (
     calculate_sii, calculate_structural_composite,
     aggregate_legacy_to_v1, score_to_grade, FORMULA_VERSION, SII_V1_WEIGHTS,
 )
-from app.collectors.coingecko import (
-    collect_peg_components, collect_liquidity_components,
-    collect_market_activity_components, fetch_current, extract_price_context,
-)
-from app.collectors.defillama import collect_defillama_components
-from app.collectors.curve import collect_curve_components
-from app.collectors.offline import (
-    collect_transparency_components, collect_regulatory_components,
-    collect_governance_components, collect_reserve_components,
-    collect_network_components,
-)
-from app.collectors.etherscan import collect_holder_distribution
-from app.collectors.flows import collect_flows_components
-from app.collectors.smart_contract import collect_smart_contract_components
-from app.collectors.derived import collect_derived_components
-from app.collectors.solana import collect_solana_components
+from app.collectors.coingecko import fetch_current, extract_price_context
 
 logging.basicConfig(
     level=logging.INFO,
@@ -119,86 +104,20 @@ def _mark_scoring_status(coingecko_id: str, status: str) -> None:
 # Core: Collect all components for one stablecoin
 # =============================================================================
 
-async def _collect_actor_metrics(client, stablecoin_id):
-    """Lazy wrapper for actor metrics collector."""
-    from app.collectors.actor_metrics import collect_actor_metrics
-    return await collect_actor_metrics(client, stablecoin_id)
-
-
 async def collect_all_components(
-    client: httpx.AsyncClient, stablecoin_id: str
+    client: httpx.AsyncClient, stablecoin_id: str,
+    cycle_stats=None
 ) -> list[dict]:
-    """
-    Collect all components from all sources for one stablecoin.
-    Returns flat list of component dicts ready for DB insert.
-    """
+    """Collect all components from all registered collectors."""
     cfg = get_stablecoin_config(stablecoin_id)
     if not cfg:
         logger.error(f"Unknown stablecoin: {stablecoin_id}")
         return []
-    
-    cg_id = cfg["coingecko_id"]
-    all_components = []
-    
-    # Async collectors (with timeouts)
-    async def safe_collect(name, coro):
-        try:
-            result = await asyncio.wait_for(coro, timeout=20.0)
-            return result
-        except asyncio.TimeoutError:
-            logger.warning(f"{name} timed out for {stablecoin_id}")
-            return []
-        except Exception as e:
-            logger.error(f"{name} error for {stablecoin_id}: {e}")
-            return []
-    
-    # Run API collectors in parallel
-    results = await asyncio.gather(
-        safe_collect("peg", collect_peg_components(client, cg_id, stablecoin_id)),
-        safe_collect("liquidity", collect_liquidity_components(client, cg_id, stablecoin_id)),
-        safe_collect("market", collect_market_activity_components(client, cg_id, stablecoin_id)),
-        safe_collect("defillama", collect_defillama_components(client, cg_id, stablecoin_id)),
-        safe_collect("curve", collect_curve_components(client, stablecoin_id)),
-        safe_collect("etherscan", collect_holder_distribution(client, stablecoin_id)),
-        safe_collect("flows", collect_flows_components(client, stablecoin_id)),
-        safe_collect("smart_contract", collect_smart_contract_components(client, stablecoin_id)),
-        safe_collect("solana", collect_solana_components(client, stablecoin_id)),
-        safe_collect("actor_metrics", _collect_actor_metrics(client, stablecoin_id)),
-    )
-    
-    for result in results:
-        if result:
-            all_components.extend(result)
-    
-    # Offline collectors (synchronous, from config/scraped data)
-    for collector in [
-        collect_transparency_components,
-        collect_regulatory_components,
-        collect_governance_components,
-        collect_reserve_components,
-        collect_network_components,
-        collect_derived_components,
-    ]:
-        try:
-            offline = collector(stablecoin_id)
-            all_components.extend(offline)
-        except Exception as e:
-            logger.error(f"Offline collector error for {stablecoin_id}: {e}")
 
-    # CDA vendor data (overlays/improves offline transparency + reserve components)
-    try:
-        from app.services.cda_scores import get_cda_components
-        cda_components = get_cda_components(stablecoin_id)
-        if cda_components:
-            all_components.extend(cda_components)
-    except Exception as e:
-        logger.debug(f"CDA collector skipped for {stablecoin_id}: {e}")
-    
-    # Tag all components with stablecoin_id
-    for comp in all_components:
-        comp["stablecoin_id"] = stablecoin_id
-    
-    return all_components
+    from app.collectors.registry import run_all_collectors
+    return await run_all_collectors(
+        client, cfg["coingecko_id"], stablecoin_id, cycle_stats
+    )
 
 
 # =============================================================================
@@ -466,16 +385,16 @@ def _store_component_batch_hash(entity_id: str, entity_type: str,
 # Orchestrator: Score one stablecoin
 # =============================================================================
 
-async def score_stablecoin(client: httpx.AsyncClient, stablecoin_id: str) -> dict:
+async def score_stablecoin(client: httpx.AsyncClient, stablecoin_id: str, cycle_stats=None) -> dict:
     """Full pipeline: collect → compute → store for one stablecoin."""
     cfg = get_stablecoin_config(stablecoin_id)
     if not cfg:
         return {"error": f"Unknown stablecoin: {stablecoin_id}"}
-    
+
     start = time.time()
-    
+
     # 1. Collect all components
-    components = await collect_all_components(client, stablecoin_id)
+    components = await collect_all_components(client, stablecoin_id, cycle_stats=cycle_stats)
     
     if not components:
         logger.warning(f"No components collected for {stablecoin_id}")
@@ -541,94 +460,85 @@ async def score_stablecoin(client: httpx.AsyncClient, stablecoin_id: str) -> dic
 
 
 # =============================================================================
-# Orchestrator: Fast cycle — critical scoring + lightweight tasks (<15 min)
+# Task wiring — connect registry entries to actual implementations
 # =============================================================================
 
-async def run_fast_cycle():
-    """Critical scoring + lightweight tasks. Must complete in <15 min."""
-    fast_start = time.time()
-    logger.info("=== Fast cycle start ===")
+def _wire_tasks(tasks: list):
+    """Connect task registry entries to actual implementations.
 
-    # -------------------------------------------------------------------------
-    # SII scoring — score all stablecoins
-    # -------------------------------------------------------------------------
-    stablecoins = get_scoring_ids_from_db()
-    logger.info(f"Starting scoring cycle for {len(stablecoins)} stablecoins")
+    Each task.fn gets set to an async closure that wraps the existing
+    task code. The logic is extracted verbatim from the old run_fast_cycle
+    and run_slow_cycle functions.
+    """
+    task_map = {t.name: t for t in tasks}
 
-    results = []
-    async with httpx.AsyncClient(timeout=30) as client:
-        for sid in stablecoins:
-            # For promoted coins (not in hardcoded registry), mark in_progress
-            is_promoted = sid not in STABLECOIN_REGISTRY
-            if is_promoted:
-                cfg = get_stablecoin_config(sid)
-                if cfg:
-                    _mark_scoring_status(cfg["coingecko_id"], "in_progress")
-            try:
-                result = await asyncio.wait_for(
-                    score_stablecoin(client, sid), timeout=120
-                )
-                results.append(result)
-                # After success, mark scored for promoted coins
-                if is_promoted and "score" in result:
+    # --- FAST TASKS ---
+
+    async def _sii_scoring():
+        from app.collectors.registry import CycleStats
+        cycle_stats = CycleStats()
+        stablecoins = get_scoring_ids_from_db()
+        logger.info(f"Starting scoring cycle for {len(stablecoins)} stablecoins")
+        results = []
+        async with httpx.AsyncClient(timeout=30) as client:
+            for sid in stablecoins:
+                is_promoted = sid not in STABLECOIN_REGISTRY
+                if is_promoted:
                     cfg = get_stablecoin_config(sid)
                     if cfg:
-                        _mark_scoring_status(cfg["coingecko_id"], "scored")
-                # Rate limit: pause between coins
-                await asyncio.sleep(2.0)
-            except asyncio.TimeoutError:
-                logger.warning(f"Timeout scoring {sid} (>120s) — skipping")
-                results.append({"stablecoin": sid, "error": "timeout_120s"})
-            except Exception as e:
-                logger.error(f"Failed to score {sid}: {e}")
-                results.append({"stablecoin": sid, "error": str(e)})
+                        _mark_scoring_status(cfg["coingecko_id"], "in_progress")
+                try:
+                    result = await asyncio.wait_for(
+                        score_stablecoin(client, sid, cycle_stats=cycle_stats), timeout=120
+                    )
+                    results.append(result)
+                    if is_promoted and "score" in result:
+                        cfg = get_stablecoin_config(sid)
+                        if cfg:
+                            _mark_scoring_status(cfg["coingecko_id"], "scored")
+                    await asyncio.sleep(2.0)
+                except asyncio.TimeoutError:
+                    logger.warning(f"Timeout scoring {sid} (>120s) — skipping")
+                    results.append({"stablecoin": sid, "error": "timeout_120s"})
+                except Exception as e:
+                    logger.error(f"Failed to score {sid}: {e}")
+                    results.append({"stablecoin": sid, "error": str(e)})
+        successes = sum(1 for r in results if "score" in r)
+        logger.info(f"Scoring cycle complete: {successes}/{len(stablecoins)} scored")
+        cycle_stats.log_summary()
+        cycle_stats.store()
+    if "sii_scoring" in task_map:
+        task_map["sii_scoring"].fn = _sii_scoring
 
-    sii_elapsed = time.time() - fast_start
-    successes = sum(1 for r in results if "score" in r)
-    logger.info(
-        f"Scoring cycle complete: {successes}/{len(stablecoins)} scored in {sii_elapsed:.0f}s"
-    )
-
-    # -------------------------------------------------------------------------
-    # PSI scoring — runs after SII, uses DeFiLlama (no explorer budget)
-    # -------------------------------------------------------------------------
-    try:
+    async def _psi_scoring():
         from app.collectors.psi_collector import run_psi_scoring
         logger.info("Running PSI scoring cycle...")
         psi_results = run_psi_scoring()
         logger.info(f"PSI scoring complete: {len(psi_results)} protocols scored")
-        # Attest PSI scores
         try:
             from app.state_attestation import attest_state
             if psi_results:
                 attest_state("psi_components", [{"slug": r.get("protocol_slug", ""), "score": r.get("overall_score")} for r in psi_results if isinstance(r, dict)])
         except Exception as ae:
             logger.debug(f"PSI attestation skipped: {ae}")
-    except Exception as e:
-        logger.warning(f"PSI scoring failed: {e}")
+    if "psi_scoring" in task_map:
+        task_map["psi_scoring"].fn = _psi_scoring
 
-    # -------------------------------------------------------------------------
-    # Verification agent cycle — every cycle
-    # -------------------------------------------------------------------------
-    try:
+    async def _verification_agent():
         from app.agent.watcher import run_agent_cycle
         result = run_agent_cycle()
         if result:
             logger.info(f"Agent cycle: {result.get('assessments', 0)} assessments")
-    except Exception as e:
-        logger.warning(f"Agent cycle error: {e}")
+    if "verification_agent" in task_map:
+        task_map["verification_agent"].fn = _verification_agent
 
-    # -------------------------------------------------------------------------
-    # Health sweep + alerting — every cycle
-    # -------------------------------------------------------------------------
-    try:
+    async def _health_sweep():
         from app.ops.tools.health_checker import run_all_checks
         logger.info("Running health sweep...")
         health_results = run_all_checks()
         healthy_count = sum(1 for r in health_results if r.get("status") == "healthy")
         total_count = len(health_results)
         logger.info(f"Health sweep: {healthy_count}/{total_count} healthy")
-
         failures = [r for r in health_results if r.get("status") in ("degraded", "down")]
         if failures:
             try:
@@ -637,22 +547,16 @@ async def run_fast_cycle():
                 logger.info(f"Health alerts dispatched for {len(failures)} failing system(s)")
             except Exception as alert_err:
                 logger.warning(f"Health alert dispatch failed: {alert_err}")
-    except Exception as e:
-        logger.warning(f"Health sweep failed: {e}")
+    if "health_sweep" in task_map:
+        task_map["health_sweep"].fn = _health_sweep
 
-    # -------------------------------------------------------------------------
-    # Generate daily pulse after scoring
-    # -------------------------------------------------------------------------
-    try:
+    async def _pulse_generation():
         from app.pulse_generator import run_daily_pulse
         run_daily_pulse()
-    except Exception as e:
-        logger.warning(f"Daily pulse generation failed: {e}")
+    if "pulse_generation" in task_map:
+        task_map["pulse_generation"].fn = _pulse_generation
 
-    # -------------------------------------------------------------------------
-    # Daily digest — send operational summary once per 24h
-    # -------------------------------------------------------------------------
-    try:
+    async def _daily_digest():
         last_digest = fetch_one(
             "SELECT MAX(sent_at) AS latest FROM ops_alert_log WHERE alert_type = 'daily_digest'"
         )
@@ -662,7 +566,6 @@ async def run_fast_cycle():
             if latest.tzinfo is None:
                 latest = latest.replace(tzinfo=timezone.utc)
             digest_age_hours = (datetime.now(timezone.utc) - latest).total_seconds() / 3600
-
         if digest_age_hours >= 24:
             logger.info("Assembling daily digest...")
             from app.ops.tools.health_checker import get_latest_health
@@ -670,7 +573,6 @@ async def run_fast_cycle():
             healthy_cnt = sum(1 for r in health if r.get("status") == "healthy")
             total_cnt = len(health)
             failing = [r for r in health if r.get("status") in ("degraded", "down")]
-
             sii_row = fetch_one("SELECT COUNT(*) as cnt, MAX(calculated_at) as latest FROM scores")
             sii_count = sii_row["cnt"] if sii_row else 0
             sii_age = "?"
@@ -679,7 +581,6 @@ async def run_fast_cycle():
                 if _sii_ts.tzinfo is None:
                     _sii_ts = _sii_ts.replace(tzinfo=timezone.utc)
                 sii_age = f"{(datetime.now(timezone.utc) - _sii_ts).total_seconds() / 3600:.1f}"
-
             psi_row = fetch_one("SELECT COUNT(*) as cnt, MAX(scored_at) as latest FROM psi_scores")
             psi_count = psi_row["cnt"] if psi_row else 0
             psi_age = "?"
@@ -688,16 +589,13 @@ async def run_fast_cycle():
                 if _psi_ts.tzinfo is None:
                     _psi_ts = _psi_ts.replace(tzinfo=timezone.utc)
                 psi_age = f"{(datetime.now(timezone.utc) - _psi_ts).total_seconds() / 3600:.1f}"
-
             db_conns = fetch_one("SELECT count(*) as cnt FROM pg_stat_activity WHERE datname = current_database()")
             conn_count = db_conns["cnt"] if db_conns else "?"
-
             failures_summary = ""
             if failing:
                 failures_summary = "\nFailing systems:\n" + "\n".join(
                     f"  - {f['system']}: {f.get('status', '?')}" for f in failing
                 )
-
             msg = (
                 f"Basis Daily Digest\n\n"
                 f"Systems: {healthy_cnt}/{total_cnt} healthy\n"
@@ -706,60 +604,34 @@ async def run_fast_cycle():
                 f"DB: {conn_count} active connections\n"
                 f"{failures_summary if failing else 'All systems operational.'}"
             )
-
             from app.ops.tools.alerter import send_alert as _send_digest
             await _send_digest("daily_digest", msg)
             logger.info("Daily digest sent")
         else:
             logger.debug(f"Daily digest skipped — last sent {digest_age_hours:.1f}h ago")
-    except Exception as e:
-        logger.warning(f"Daily digest failed: {e}")
+    if "daily_digest" in task_map:
+        task_map["daily_digest"].fn = _daily_digest
 
-    elapsed = time.time() - fast_start
-    logger.info(f"=== Fast cycle complete in {elapsed:.0f}s ===")
+    # --- SLOW TASKS ---
 
-    return {
-        "results": results,
-        "successes": successes,
-        "total": len(stablecoins),
-        "elapsed": round(elapsed, 1),
-    }
-
-
-# =============================================================================
-# Orchestrator: Slow cycle — data enrichment tasks (up to 60 min)
-# =============================================================================
-
-async def run_slow_cycle():
-    """Data enrichment tasks. Can take up to 60 min. Doesn't block scoring."""
-    start = time.time()
-    logger.info("=== Slow cycle start ===")
-
-    # -------------------------------------------------------------------------
-    # RPI scoring — daily gate (governance data changes slowly)
-    # -------------------------------------------------------------------------
-    try:
+    async def _rpi_scoring():
         last_rpi = fetch_one(
             "SELECT MAX(computed_at) AS latest FROM rpi_scores"
         )
-        rpi_age_hours = 25  # default: run if no prior record
+        rpi_age_hours = 25
         if last_rpi and last_rpi.get("latest"):
             latest = last_rpi["latest"]
             if latest.tzinfo is None:
                 latest = latest.replace(tzinfo=timezone.utc)
             rpi_age_hours = (datetime.now(timezone.utc) - latest).total_seconds() / 3600
-
         if rpi_age_hours >= 24:
             logger.info("Running RPI scoring pipeline...")
-            # Collect governance data first
             from app.rpi.snapshot_collector import collect_snapshot_proposals
             from app.rpi.tally_collector import collect_tally_proposals
             from app.rpi.parameter_collector import collect_parameter_changes
             collect_snapshot_proposals()
             collect_tally_proposals()
             collect_parameter_changes()
-
-            # Phase 2A: Automate lens components
             try:
                 from app.rpi.forum_scraper import scrape_all_forums, update_vendor_diversity_lens
                 forum_results = scrape_all_forums(since_days=90)
@@ -767,42 +639,34 @@ async def run_slow_cycle():
                 update_vendor_diversity_lens()
             except Exception as fa_err:
                 logger.warning(f"RPI forum scraper failed: {fa_err}")
-
             try:
                 from app.rpi.docs_scorer import score_all_docs
                 score_all_docs()
             except Exception as ds_err:
                 logger.warning(f"RPI docs scorer failed: {ds_err}")
-
             try:
                 from app.rpi.incident_detector import run_incident_detection
                 run_incident_detection()
             except Exception as id_err:
                 logger.warning(f"RPI incident detection failed: {id_err}")
-
-            # Phase 2B: Expansion pipeline (weekly gate)
             try:
                 last_expansion = fetch_one(
                     "SELECT MAX(created_at) AS latest FROM rpi_protocol_config WHERE discovery_source != 'manual'"
                 )
-                expansion_age = 169  # default: run if no records
+                expansion_age = 169
                 if last_expansion and last_expansion.get("latest"):
                     exp_ts = last_expansion["latest"]
                     if exp_ts.tzinfo is None:
                         exp_ts = exp_ts.replace(tzinfo=timezone.utc)
                     expansion_age = (datetime.now(timezone.utc) - exp_ts).total_seconds() / 3600
-                if expansion_age >= 168:  # weekly
+                if expansion_age >= 168:
                     from app.rpi.expansion import run_expansion_pipeline
                     run_expansion_pipeline()
             except Exception as exp_err:
                 logger.warning(f"RPI expansion failed: {exp_err}")
-
-            # Score all protocols
             from app.rpi.scorer import run_rpi_scoring
             rpi_results = run_rpi_scoring()
             logger.info(f"RPI scoring complete: {len(rpi_results)} protocols scored")
-
-            # Attest RPI scores (14th domain)
             try:
                 from app.state_attestation import attest_state
                 if rpi_results:
@@ -814,24 +678,20 @@ async def run_slow_cycle():
                 logger.debug(f"RPI attestation skipped: {ae}")
         else:
             logger.info(f"RPI scoring skipped — last ran {rpi_age_hours:.0f}h ago")
-    except Exception as e:
-        logger.warning(f"RPI scoring pipeline failed: {e}")
+    if "rpi_scoring" in task_map:
+        task_map["rpi_scoring"].fn = _rpi_scoring
 
-    # -------------------------------------------------------------------------
-    # CDA collection — daily gate via DB timestamp
-    # -------------------------------------------------------------------------
-    try:
+    async def _cda_collection():
         cda_interval_hours = int(os.environ.get("CDA_COLLECTION_INTERVAL_HOURS", "24"))
         last_cda = fetch_one(
             "SELECT MAX(extracted_at) AS latest FROM cda_vendor_extractions"
         )
-        cda_age_hours = 25  # default: run if no prior record
+        cda_age_hours = 25
         if last_cda and last_cda.get("latest"):
             latest = last_cda["latest"]
             if latest.tzinfo is None:
                 latest = latest.replace(tzinfo=timezone.utc)
             cda_age_hours = (datetime.now(timezone.utc) - latest).total_seconds() / 3600
-
         if cda_age_hours >= cda_interval_hours:
             logger.info("Running CDA collection pipeline...")
             from app.services.cda_collector import run_collection
@@ -839,13 +699,10 @@ async def run_slow_cycle():
             logger.info("CDA collection complete")
         else:
             logger.info(f"CDA collection skipped — last ran {cda_age_hours:.1f}h ago")
-    except Exception as e:
-        logger.warning(f"CDA collection failed: {e}")
+    if "cda_collection" in task_map:
+        task_map["cda_collection"].fn = _cda_collection
 
-    # -------------------------------------------------------------------------
-    # Wallet batch re-index — every cycle (500 stalest wallets)
-    # -------------------------------------------------------------------------
-    try:
+    async def _wallet_reindex():
         from app.indexer.pipeline import run_pipeline_batch
         logger.info("Running wallet batch re-index (500 stalest wallets)...")
         reindex_result = await run_pipeline_batch(batch_size=500)
@@ -855,13 +712,10 @@ async def run_slow_cycle():
             f"{reindex_result.get('errors', 0)} errors, "
             f"{reindex_result.get('remaining', '?')} remaining"
         )
-    except Exception as e:
-        logger.warning(f"Wallet batch re-index failed: {e}")
+    if "wallet_reindex" in task_map:
+        task_map["wallet_reindex"].fn = _wallet_reindex
 
-    # -------------------------------------------------------------------------
-    # Wallet expansion + profile rebuild — daily gate via DB timestamp
-    # -------------------------------------------------------------------------
-    try:
+    async def _wallet_expansion():
         last_expansion_row = fetch_one(
             "SELECT MAX(created_at) AS latest FROM wallet_graph.wallets WHERE created_at > NOW() - INTERVAL '48 hours'"
         )
@@ -871,9 +725,7 @@ async def run_slow_cycle():
             if latest.tzinfo is None:
                 latest = latest.replace(tzinfo=timezone.utc)
             wallet_expansion_age = (datetime.now(timezone.utc) - latest).total_seconds() / 3600
-
         if wallet_expansion_age >= 24:
-            # Wallet expansion — seed new addresses from under-covered stablecoins
             try:
                 from app.indexer.expander import run_wallet_expansion
                 logger.info("Running wallet expansion pipeline...")
@@ -884,8 +736,6 @@ async def run_slow_cycle():
                 )
             except Exception as e:
                 logger.warning(f"Wallet expansion failed: {e}")
-
-            # Profile rebuild — cap at 2000 stalest wallets, 30-min timeout
             try:
                 from app.indexer.profiles import rebuild_all_profiles
                 logger.info("Rebuilding wallet profiles (max 2000, 30-min timeout)...")
@@ -903,30 +753,23 @@ async def run_slow_cycle():
                 logger.warning(f"Profile rebuild failed: {e}")
         else:
             logger.info(f"Wallet expansion skipped — last ran {wallet_expansion_age:.1f}h ago")
-    except Exception as e:
-        logger.warning(f"Wallet expansion gate check failed: {e}")
+    if "wallet_expansion" in task_map:
+        task_map["wallet_expansion"].fn = _wallet_expansion
 
-    # -------------------------------------------------------------------------
-    # Treasury flow detection — every cycle, minimal API budget
-    # -------------------------------------------------------------------------
-    try:
+    async def _treasury_flows():
         from app.collectors.treasury_flows import collect_treasury_events
         logger.info("Running treasury flow detection...")
         treasury_events = await collect_treasury_events()
         logger.info(f"Treasury flow detection: {len(treasury_events)} events")
-    except Exception as e:
-        logger.warning(f"Treasury flow detection failed: {e}")
+    if "treasury_flows" in task_map:
+        task_map["treasury_flows"].fn = _treasury_flows
 
-    # -------------------------------------------------------------------------
-    # Edge building — daily gate via edge_build_status table (~10h cycle)
-    # -------------------------------------------------------------------------
-    try:
+    async def _edge_building():
         edge_ts_row = fetch_one(
             "SELECT EXTRACT(EPOCH FROM MAX(last_built_at)) AS ts FROM wallet_graph.edge_build_status"
         )
         edge_last_ts = float(edge_ts_row["ts"]) if edge_ts_row and edge_ts_row.get("ts") else 0
         edge_age_hours = (time.time() - edge_last_ts) / 3600
-
         if edge_age_hours >= 10:
             for edge_chain in ["ethereum", "base", "arbitrum", "solana"]:
                 try:
@@ -944,8 +787,6 @@ async def run_slow_cycle():
                     logger.warning(f"Edge building for {edge_chain} hit 15-minute timeout — moving to next chain")
                 except Exception as e:
                     logger.warning(f"Edge building failed for {edge_chain}: {e}")
-
-            # Decay + prune after edge building
             try:
                 from app.indexer.edges import decay_edges, prune_stale_edges
                 decay_result = decay_edges()
@@ -956,43 +797,34 @@ async def run_slow_cycle():
                 logger.warning(f"Edge decay/prune failed: {e}")
         else:
             logger.info(f"Edge building skipped — last ran {edge_age_hours:.1f}h ago")
-    except Exception as e:
-        logger.warning(f"Edge build gate check failed: {e}")
+    if "edge_building" in task_map:
+        task_map["edge_building"].fn = _edge_building
 
-    # -------------------------------------------------------------------------
-    # Actor classification
-    # -------------------------------------------------------------------------
-    try:
+    async def _actor_classification():
         from app.actor_classification import classify_all_active
         actor_result = classify_all_active()
         logger.info(
             f"Actor classification: {actor_result.get('classified', 0)} classified, "
             f"{actor_result.get('reclassified', 0)} reclassified"
         )
-    except Exception as e:
-        logger.warning(f"Actor classification failed: {e}")
+    if "actor_classification" in task_map:
+        task_map["actor_classification"].fn = _actor_classification
 
-    # Run discovery layer after actor classification
-    try:
+    async def _discovery():
         from app.discovery import run_discovery_cycle
         run_discovery_cycle()
-    except Exception as e:
-        logger.warning(f"Discovery cycle failed: {e}")
+    if "discovery" in task_map:
+        task_map["discovery"].fn = _discovery
 
-    # Provenance attestation (13th domain)
-    try:
+    async def _provenance_attestation():
         from app.state_attestation import attest_state
-        from app.database import fetch_all
         prov_rows = fetch_all("SELECT source_domain, attestation_hash, proved_at FROM provenance_proofs WHERE proved_at > NOW() - INTERVAL '2 hours'")
         if prov_rows:
             attest_state("provenance", [dict(r) for r in prov_rows])
-    except Exception as e:
-        logger.debug(f"Provenance attestation skipped: {e}")
+    if "provenance_attestation" in task_map:
+        task_map["provenance_attestation"].fn = _provenance_attestation
 
-    # -------------------------------------------------------------------------
-    # PSI expansion pipeline — daily gate (discover → enrich → promote)
-    # -------------------------------------------------------------------------
-    try:
+    async def _psi_expansion():
         from app.collectors.psi_collector import (
             collect_collateral_exposure,
             sync_collateral_to_backlog,
@@ -1000,17 +832,14 @@ async def run_slow_cycle():
             enrich_protocol_backlog,
             promote_eligible_protocols,
         )
-        # Only run expansion once per day — check last run from DB
         last_expansion = fetch_one(
             "SELECT MAX(snapshot_date) AS latest FROM protocol_collateral_exposure"
         )
         last_date = last_expansion["latest"] if last_expansion else None
-        hours_since = 25  # default: run if no prior record
+        hours_since = 25
         if last_date:
-            from datetime import date
             days_diff = (date.today() - last_date).days if isinstance(last_date, date) else 1
             hours_since = days_diff * 24
-
         if hours_since >= 24:
             logger.info("Running PSI expansion pipeline...")
             collect_collateral_exposure()
@@ -1030,11 +859,45 @@ async def run_slow_cycle():
                 logger.debug(f"PSI discovery attestation skipped: {ae}")
         else:
             logger.info(f"PSI expansion skipped — last ran {hours_since:.0f}h ago")
-    except Exception as e:
-        logger.warning(f"PSI expansion pipeline failed: {e}")
+    if "psi_expansion" in task_map:
+        task_map["psi_expansion"].fn = _psi_expansion
 
-    elapsed = time.time() - start
-    logger.info(f"=== Slow cycle complete in {elapsed:.0f}s ===")
+    # --- RARE TASKS ---
+
+    async def _governance_crawl():
+        from app.governance import run_crawl as gov_crawl
+        logger.info("Running governance crawl...")
+        gov_crawl(since_days=7)
+    if "governance_crawl" in task_map:
+        task_map["governance_crawl"].fn = _governance_crawl
+
+
+# =============================================================================
+# Orchestrator: Fast cycle — critical scoring + lightweight tasks (<15 min)
+# =============================================================================
+
+async def run_fast_cycle():
+    """Critical scoring + lightweight tasks. Must complete in <15 min.
+    Kept for backward compatibility and single-run mode."""
+    from app.task_registry import get_tasks, run_tasks, Cadence
+    all_tasks = get_tasks()
+    _wire_tasks(all_tasks)
+    fast_tasks = [t for t in all_tasks if t.cadence == Cadence.FAST]
+    await run_tasks(fast_tasks, "Fast cycle")
+
+
+# =============================================================================
+# Orchestrator: Slow cycle — data enrichment tasks (up to 60 min)
+# =============================================================================
+
+async def run_slow_cycle():
+    """Data enrichment tasks. Can take up to 60 min. Doesn't block scoring.
+    Kept for backward compatibility and single-run mode."""
+    from app.task_registry import get_tasks, run_tasks, Cadence
+    all_tasks = get_tasks()
+    _wire_tasks(all_tasks)
+    slow_tasks = [t for t in all_tasks if t.cadence == Cadence.SLOW]
+    await run_tasks(slow_tasks, "Slow cycle")
 
 
 # =============================================================================
@@ -1097,31 +960,41 @@ async def main():
                 print(result)
         elif args.loop:
             logger.info(f"Starting worker loop (interval: {args.interval} min)")
+
+            from app.task_registry import get_tasks, run_tasks, Cadence
+            all_tasks = get_tasks()
+            _wire_tasks(all_tasks)
+
+            fast_tasks = [t for t in all_tasks if t.cadence == Cadence.FAST]
+            slow_tasks = [t for t in all_tasks if t.cadence == Cadence.SLOW]
+            rare_tasks = [t for t in all_tasks if t.cadence == Cadence.RARE]
+
             cycle_counter = 0
             while True:
-                # Fast cycle — ALWAYS runs, must stay under 15 min
+                # Fast tasks — ALWAYS run (scoring, health, pulse)
                 try:
-                    await asyncio.wait_for(run_fast_cycle(), timeout=FAST_CYCLE_TIMEOUT)
+                    await asyncio.wait_for(
+                        run_tasks(fast_tasks, "Fast cycle"), timeout=FAST_CYCLE_TIMEOUT
+                    )
                 except asyncio.TimeoutError:
                     logger.error("Fast cycle exceeded 15-minute timeout")
 
-                # Slow cycle — runs every 3rd cycle (every ~3 hours)
-                # This prevents slow tasks from delaying scoring
+                # Slow tasks — every 3rd cycle (~3 hours)
                 cycle_counter += 1
                 if cycle_counter % 3 == 0:
                     try:
-                        await asyncio.wait_for(run_slow_cycle(), timeout=SLOW_CYCLE_TIMEOUT)
+                        await asyncio.wait_for(
+                            run_tasks(slow_tasks, "Slow cycle"), timeout=SLOW_CYCLE_TIMEOUT
+                        )
                     except asyncio.TimeoutError:
                         logger.error("Slow cycle exceeded 60-minute timeout")
 
-                # Governance crawl — every 6th cycle (~6 hours)
+                # Rare tasks — every 6th cycle (~6 hours)
                 if cycle_counter % 6 == 0:
                     try:
-                        from app.governance import run_crawl as gov_crawl
-                        logger.info("Running governance crawl...")
-                        gov_crawl(since_days=7)
+                        await run_tasks(rare_tasks, "Rare cycle")
                     except Exception as e:
-                        logger.warning(f"Governance crawl failed: {e}")
+                        logger.warning(f"Rare cycle failed: {e}")
 
                 logger.info(f"Sleeping {args.interval} minutes...")
                 await asyncio.sleep(args.interval * 60)
