@@ -5,9 +5,12 @@ Composes indices (SII, PSI) into composite risk views (CQI).
 All scores computed on-demand — no storage.
 """
 
+import logging
 import math
 
-from app.database import fetch_all, fetch_one
+from app.database import execute, fetch_all, fetch_one
+
+logger = logging.getLogger(__name__)
 
 
 def compose_geometric_mean(scores):
@@ -60,6 +63,48 @@ def _lower_confidence(conf_a, conf_b):
     return conf_a if a_rank <= b_rank else conf_b
 
 
+def _get_latest_hash(domain, entity_id=None):
+    """Fetch the latest batch hash from state_attestations for a domain/entity."""
+    try:
+        if entity_id:
+            row = fetch_one(
+                """SELECT batch_hash FROM state_attestations
+                   WHERE domain = %s AND entity_id = %s
+                   ORDER BY cycle_timestamp DESC LIMIT 1""",
+                (domain, entity_id),
+            )
+        else:
+            row = fetch_one(
+                """SELECT batch_hash FROM state_attestations
+                   WHERE domain = %s
+                   ORDER BY cycle_timestamp DESC LIMIT 1""",
+                (domain,),
+            )
+        return row["batch_hash"] if row else None
+    except Exception:
+        return None
+
+
+def _store_cqi_attestation(sii_symbol, psi_slug, sii_score, psi_score,
+                           cqi_score, method="geometric_mean"):
+    """Persist a CQI attestation row for full history retention."""
+    sii_hash = _get_latest_hash("sii_components", sii_symbol.lower())
+    psi_hash = _get_latest_hash("psi_components")
+    try:
+        execute(
+            """
+            INSERT INTO cqi_attestations
+                (sii_symbol, psi_slug, sii_score, psi_score, cqi_score,
+                 sii_hash, psi_hash, composition_method, methodology_version)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (sii_symbol.upper(), psi_slug, sii_score, psi_score, cqi_score,
+             sii_hash, psi_hash, method, "composition-v1.0.0"),
+        )
+    except Exception as e:
+        logger.debug(f"CQI attestation skipped for {sii_symbol}/{psi_slug}: {e}")
+
+
 def compute_cqi(asset_symbol, protocol_slug):
     """
     Compute Collateral Quality Index for an asset-in-protocol pair.
@@ -95,6 +140,9 @@ def compute_cqi(asset_symbol, protocol_slug):
     sii_conf = _sii_confidence(sii_row.get("component_count") or 0)
     psi_conf = _psi_confidence(psi_row.get("component_scores") or {})
     cqi_conf = _lower_confidence(sii_conf, psi_conf)
+
+    # Persist attestation for full history
+    _store_cqi_attestation(asset_symbol, protocol_slug, sii_score, psi_score, cqi_score)
 
     return {
         "composite_id": "cqi",
@@ -156,7 +204,14 @@ def compute_cqi_matrix():
 
     matrix.sort(key=lambda x: x.get("cqi_score", 0), reverse=True)
 
-    # Attest CQI compositions
+    # Persist per-pair attestations for full history
+    for row in matrix:
+        _store_cqi_attestation(
+            row["asset"], row["protocol_slug"],
+            row["sii_score"], row["psi_score"], row["cqi_score"],
+        )
+
+    # Batch-level attestation (state hash)
     try:
         from app.state_attestation import attest_state
         if matrix:
