@@ -2282,14 +2282,54 @@ function ABMPanel() {
     setBusy(null);
   };
 
-  const handleDripUpdate = async (touchId, status) => {
+  const handleDripUpdate = async (touchId, status, response_text) => {
+    setBusy("drip");
+    try {
+      const body = { status };
+      if (response_text !== undefined) body.response = response_text;
+      await opsFetch(`/api/ops/abm/drip/${touchId}`, {
+        method: "PUT",
+        body: JSON.stringify(body),
+      });
+      showFlash(`Touch marked ${status}`);
+      if (selectedId) await openDetail(selectedId);
+    } catch (e) { showFlash(e.message, false); }
+    setBusy(null);
+  };
+
+  // Drip touch accordion state
+  const [openTouchId, setOpenTouchId] = useState(null);
+  const [touchDrafts, setTouchDrafts] = useState({}); // { touchId: string }
+  const [touchResponses, setTouchResponses] = useState({}); // { touchId: string }
+  const [dripDmDraft, setDripDmDraft] = useState(null); // { touchId, draft }
+  const [dripDmBusy, setDripDmBusy] = useState(null); // touchId
+
+  const toggleTouch = (touchId) => {
+    setOpenTouchId(prev => prev === touchId ? null : touchId);
+  };
+
+  const handleDripDraftDm = async (touchId, targetId, trigger) => {
+    if (!targetId) { showFlash("No linked target — cannot draft DM", false); return; }
+    setDripDmBusy(touchId);
+    try {
+      const res = await opsFetch("/api/ops/draft/dm", {
+        method: "POST", body: JSON.stringify({ target_id: targetId, trigger }),
+      });
+      setDripDmDraft({ touchId, draft: res.draft });
+      showFlash("DM draft generated");
+    } catch (e) { showFlash(e.message, false); }
+    setDripDmBusy(null);
+  };
+
+  const handleDripLogResponse = async (touchId, responseText) => {
     setBusy("drip");
     try {
       await opsFetch(`/api/ops/abm/drip/${touchId}`, {
         method: "PUT",
-        body: JSON.stringify({ status }),
+        body: JSON.stringify({ status: "sent", response: responseText }),
       });
-      showFlash(`Touch marked ${status}`);
+      showFlash("Response logged");
+      setTouchResponses(prev => ({ ...prev, [touchId]: "" }));
       if (selectedId) await openDetail(selectedId);
     } catch (e) { showFlash(e.message, false); }
     setBusy(null);
@@ -2686,44 +2726,189 @@ function ABMPanel() {
         </Section>
 
         {/* Drip Sequence */}
-        <Section title={`DRIP SEQUENCE (${touches.length} touches)`}>
-          <div style={{ padding: "8px 10px" }}>
-            {touches.length === 0 && <div style={{ fontSize: 11, color: T.inkFaint }}>No drip touches configured.</div>}
-            {touches.map((t, i) => (
-              <div key={t.id} style={{
-                display: "flex", gap: 8, alignItems: "center", padding: "5px 0",
-                borderBottom: `1px dotted ${T.ruleMid}`,
-                opacity: t.status === "skipped" ? 0.4 : 1,
-              }}>
-                <span style={{ fontSize: 10, fontFamily: T.mono, color: T.inkFaint, minWidth: 32 }}>D{t.day}</span>
-                <span style={{
-                  fontSize: 9, fontFamily: T.mono, padding: "1px 4px", minWidth: 50, textAlign: "center",
-                  background: t.channel === "email" ? "#3498db15" : t.channel === "linkedin" ? "#0077b515" : t.channel === "twitter" ? "#1da1f215" : "#95a5a615",
-                  border: `1px solid ${t.channel === "email" ? "#3498db33" : t.channel === "linkedin" ? "#0077b533" : t.channel === "twitter" ? "#1da1f233" : "#95a5a633"}`,
-                  color: T.inkMid,
-                }}>
-                  {t.channel}
-                </span>
-                {t.is_gate && <span style={{ fontSize: 8, fontFamily: T.mono, padding: "1px 3px", background: T.accent + "22", color: T.accent, border: `1px solid ${T.accent}44` }}>GATE</span>}
-                <span style={{ flex: 1, fontSize: 10, fontFamily: T.mono, color: T.inkMid }}>{t.subject}</span>
-                <span style={{
-                  fontSize: 9, fontFamily: T.mono, padding: "1px 4px",
-                  color: t.status === "sent" ? "#27ae60" : t.status === "skipped" ? T.inkFaint : T.inkLight,
-                }}>
-                  {t.status}
-                </span>
-                {t.status === "pending" && (
-                  <div style={{ display: "flex", gap: 2 }}>
-                    <button onClick={() => handleDripUpdate(t.id, "sent")} disabled={busy === "drip"}
-                      style={btn({ fontSize: 8, padding: "1px 4px", color: "#27ae60" })}>sent</button>
-                    <button onClick={() => handleDripUpdate(t.id, "skipped")} disabled={busy === "drip"}
-                      style={btn({ fontSize: 8, padding: "1px 4px", color: T.inkFaint })}>skip</button>
-                  </div>
-                )}
+        {(() => {
+          // Find the "current" touch: first pending after last sent
+          let lastSentIdx = -1;
+          touches.forEach((t, i) => { if (t.status === "sent") lastSentIdx = i; });
+          const currentTouchId = touches.find((t, i) => t.status === "pending" && i > lastSentIdx)?.id || null;
+
+          return (
+            <Section title={`DRIP SEQUENCE (${touches.length} touches)`}>
+              <div style={{ padding: "4px 0" }}>
+                {touches.length === 0 && <div style={{ fontSize: 11, color: T.inkFaint, padding: "8px 10px" }}>No drip touches configured.</div>}
+                {touches.map((t) => {
+                  const isOpen = openTouchId === t.id;
+                  const isCurrent = t.id === currentTouchId;
+                  const isSent = t.status === "sent";
+                  const isSkipped = t.status === "skipped";
+                  const dotColor = isSent ? "#27ae60" : isSkipped ? T.ruleLight : T.inkFaint;
+                  const channelBg = t.channel === "email" ? "#3498db15" : t.channel === "linkedin" ? "#0077b515" : t.channel === "twitter" ? "#1da1f215" : "#95a5a615";
+                  const channelBorder = t.channel === "email" ? "#3498db33" : t.channel === "linkedin" ? "#0077b533" : t.channel === "twitter" ? "#1da1f233" : "#95a5a633";
+
+                  return (
+                    <div key={t.id} style={{ borderBottom: `1px dotted ${T.ruleMid}` }}>
+                      {/* Collapsed row — always visible */}
+                      <div onClick={() => toggleTouch(t.id)} style={{
+                        display: "flex", gap: 8, alignItems: "center", padding: "6px 10px",
+                        cursor: "pointer", opacity: isSkipped ? 0.4 : 1,
+                        background: isCurrent && !isOpen ? T.paperWarm : isOpen ? T.paperWarm : "transparent",
+                        transition: "background 0.15s",
+                      }}>
+                        {/* Status dot */}
+                        <span style={{
+                          width: 6, height: 6, borderRadius: "50%", flexShrink: 0,
+                          background: dotColor,
+                        }} />
+                        <span style={{ fontSize: 10, fontFamily: T.mono, color: T.inkFaint, minWidth: 28 }}>D{t.day}</span>
+                        <span style={{
+                          fontSize: 9, fontFamily: T.mono, padding: "1px 4px", minWidth: 50, textAlign: "center",
+                          background: channelBg, border: `1px solid ${channelBorder}`, color: T.inkMid,
+                        }}>
+                          {t.channel}
+                        </span>
+                        {t.is_gate && (
+                          <span style={{ fontSize: 9, fontFamily: T.mono, padding: "1px 3px", border: `1px solid ${T.accent}`, color: T.accent }}>GATE</span>
+                        )}
+                        <span style={{
+                          flex: 1, fontSize: 10, fontFamily: T.mono, color: T.inkMid,
+                          textDecoration: isSent ? "line-through" : "none",
+                        }}>
+                          {t.subject}
+                        </span>
+                        {isSent && t.sent_at && (
+                          <span style={{ fontSize: 9, fontFamily: T.mono, color: "#27ae60" }}>
+                            {new Date(t.sent_at).toLocaleDateString()}
+                          </span>
+                        )}
+                        <span style={{ fontSize: 10, color: T.inkFaint }}>{isOpen ? "\u25BC" : "\u25B6"}</span>
+                      </div>
+
+                      {/* Expanded detail panel */}
+                      {isOpen && (
+                        <div style={{
+                          padding: "8px 10px 12px 24px", background: T.paperWarm,
+                          animation: "fadeIn 0.15s ease",
+                        }}>
+                          {/* Description */}
+                          {t.description && (
+                            <div style={{ fontSize: 11, color: T.inkMid, marginBottom: 8, lineHeight: 1.5 }}>
+                              {t.description}
+                            </div>
+                          )}
+
+                          {/* Gate context — prominent display */}
+                          {t.is_gate && (
+                            <div style={{
+                              padding: "6px 8px", marginBottom: 8,
+                              border: `1px solid ${T.accent}`, background: T.accent + "08",
+                            }}>
+                              <div style={{ fontSize: 9, fontFamily: T.mono, color: T.accent, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 3 }}>Gate Requirement</div>
+                              <div style={{ fontSize: 11, color: T.inkMid }}>
+                                {(t.description || "").replace(/^GATE:\s*/i, "") || "Prospect must complete this gate to proceed."}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Pending touch: compose + actions */}
+                          {t.status === "pending" && (
+                            <>
+                              <div style={{ marginBottom: 6 }}>
+                                <Lbl>Compose</Lbl>
+                                <textarea
+                                  value={touchDrafts[t.id] !== undefined ? touchDrafts[t.id] : t.subject}
+                                  onChange={(e) => setTouchDrafts(prev => ({ ...prev, [t.id]: e.target.value }))}
+                                  rows={3}
+                                  style={{
+                                    width: "100%", marginTop: 3, fontFamily: T.mono, fontSize: 11,
+                                    padding: "6px 8px", border: `1px solid ${T.ruleMid}`, background: T.paper,
+                                    resize: "vertical", lineHeight: 1.5,
+                                  }}
+                                />
+                              </div>
+                              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                                <button onClick={() => handleDripUpdate(t.id, "sent")} disabled={busy === "drip"}
+                                  style={btn({ background: "#27ae6018", color: "#27ae60", fontWeight: 600 })}>
+                                  {busy === "drip" ? "..." : "Mark Sent"}
+                                </button>
+                                <button onClick={() => handleDripUpdate(t.id, "skipped")} disabled={busy === "drip"}
+                                  style={btn({ color: T.inkFaint })}>
+                                  Skip
+                                </button>
+                                {c.named_target_id && (
+                                  <button onClick={() => handleDripDraftDm(t.id, c.named_target_id, t.subject)}
+                                    disabled={dripDmBusy === t.id}
+                                    style={btn({ background: "#3498db18", color: "#3498db" })}>
+                                    {dripDmBusy === t.id ? "Generating..." : "Draft Email"}
+                                  </button>
+                                )}
+                              </div>
+                            </>
+                          )}
+
+                          {/* Sent touch: show timestamp + response logging */}
+                          {isSent && (
+                            <div>
+                              <div style={{ fontSize: 10, fontFamily: T.mono, color: "#27ae60", marginBottom: 6 }}>
+                                Sent {t.sent_at ? new Date(t.sent_at).toLocaleString() : ""}
+                                {t.response && <span style={{ color: T.inkMid, marginLeft: 8 }}>Response: {t.response}</span>}
+                              </div>
+                              <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                                <input
+                                  value={touchResponses[t.id] || ""}
+                                  onChange={(e) => setTouchResponses(prev => ({ ...prev, [t.id]: e.target.value }))}
+                                  placeholder="Log response..."
+                                  onKeyDown={(e) => e.key === "Enter" && touchResponses[t.id]?.trim() && handleDripLogResponse(t.id, touchResponses[t.id].trim())}
+                                  style={{
+                                    flex: 1, fontFamily: T.mono, fontSize: 11, padding: "4px 6px",
+                                    border: `1px solid ${T.ruleMid}`, background: T.paper,
+                                  }}
+                                />
+                                <button onClick={() => touchResponses[t.id]?.trim() && handleDripLogResponse(t.id, touchResponses[t.id].trim())}
+                                  disabled={!touchResponses[t.id]?.trim() || busy === "drip"}
+                                  style={btn({ fontSize: 9 })}>
+                                  {busy === "drip" ? "..." : "Save"}
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Skipped touch: minimal info */}
+                          {isSkipped && (
+                            <div style={{ fontSize: 10, color: T.inkFaint, fontStyle: "italic" }}>Skipped</div>
+                          )}
+
+                          {/* DM Draft display */}
+                          {dripDmDraft && dripDmDraft.touchId === t.id && dripDmDraft.draft && (
+                            <div style={{ marginTop: 8, background: T.paper, border: `1px solid ${T.ruleLight}`, padding: "8px 10px", fontSize: 11 }}>
+                              {dripDmDraft.draft.twitter_dm && (
+                                <div style={{ marginBottom: 6 }}>
+                                  <Lbl>Twitter DM</Lbl>
+                                  <div style={{ fontFamily: T.mono, marginTop: 2, whiteSpace: "pre-wrap" }}>{dripDmDraft.draft.twitter_dm}</div>
+                                </div>
+                              )}
+                              {dripDmDraft.draft.email_subject && (
+                                <div style={{ marginBottom: 6 }}>
+                                  <Lbl>Email</Lbl>
+                                  <div style={{ fontFamily: T.mono, marginTop: 2 }}>Subject: {dripDmDraft.draft.email_subject}</div>
+                                  <div style={{ marginTop: 4, whiteSpace: "pre-wrap" }}>{dripDmDraft.draft.email_body}</div>
+                                </div>
+                              )}
+                              {dripDmDraft.draft.rationale && (
+                                <div style={{ fontSize: 10, color: T.inkFaint, marginTop: 4, fontStyle: "italic" }}>
+                                  Rationale: {dripDmDraft.draft.rationale}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
-            ))}
-          </div>
-        </Section>
+            </Section>
+          );
+        })()}
 
         {/* Touch Log */}
         {/* Generated Guide Preview */}
