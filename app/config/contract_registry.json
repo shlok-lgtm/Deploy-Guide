@@ -1,0 +1,107 @@
+{
+  "protocols": {
+    "aave": {
+      "governance_timelock": {"address": "0x61910EcD7e8e942136CE7Fe7943f956cea1CC2f7", "chain": "ethereum"},
+      "multisig": {"address": "0xCA76Ebd8617a03126B6FB84F9b1c1A0fB71C2633", "chain": "ethereum", "type": "gnosis_safe"},
+      "core_contract": {"address": "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2", "chain": "ethereum"}
+    },
+    "lido": {
+      "governance_timelock": {"address": "0xF82aC5937A20DC862F9bc0668779031E06000F17", "chain": "ethereum"},
+      "multisig": {"address": "0x3e40D73EB977Dc6a537aF587D48316feE66E9C8c", "chain": "ethereum", "type": "gnosis_safe"},
+      "core_contract": {"address": "0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84", "chain": "ethereum"}
+    },
+    "eigenlayer": {
+      "governance_timelock": {"address": "0x369e6F597e22EaB55fFb173C6d9cD234BD699111", "chain": "ethereum"},
+      "multisig": {"address": "0xBE1685C81aA44FF9FB319dD389addd9374383e90", "chain": "ethereum", "type": "gnosis_safe"},
+      "core_contract": {"address": "0x858646372CC42E1A627fcE94aa7A7033e7CF075A", "chain": "ethereum"}
+    },
+    "sky": {
+      "governance_timelock": {"address": "0x6d3764a21e1cB9A09fa3e9451F3C2F1977629e40", "chain": "ethereum"},
+      "multisig": null,
+      "core_contract": {"address": "0x35D1b3F3D7966A1DFe207aa4514C12a259A0492B", "chain": "ethereum"}
+    },
+    "compound-finance": {
+      "governance_timelock": {"address": "0x6d903f6003cca6255D85CcA4D3B5E5146dC33925", "chain": "ethereum"},
+      "multisig": {"address": "0xbbf3f1421D886E9b2c5D716B5192aC998af2012c", "chain": "ethereum", "type": "gnosis_safe"},
+      "core_contract": {"address": "0xc3d688B66703497DAA19211EEdff47f25384cdc3", "chain": "ethereum"}
+    },
+    "uniswap": {
+      "governance_timelock": {"address": "0x1a9C8182C09F50C8318d769245beA52c32BE35BC", "chain": "ethereum"},
+      "multisig": null,
+      "core_contract": {"address": "0x1F98431c8aD98523631AE4a59f267346ea31F984", "chain": "ethereum"}
+    },
+    "curve-finance": {
+      "governance_timelock": null,
+      "multisig": {"address": "0x40907540d8a6C65c637785e8f8B742ae6b0b9968", "chain": "ethereum", "type": "gnosis_safe"},
+      "core_contract": {"address": "0xbEbc44782C7dB0a1A60Cb6fe97d0b483032FF1C7", "chain": "ethereum"}
+    },
+    "morpho": {
+      "governance_timelock": {"address": "0x6C137b41f43C0Fa6a42e2c3E82cEbCaA8e80C3e2", "chain": "ethereum"},
+      "multisig": {"address": "0xcBa28b38103307Ec8dA98377ffF9816C164f9AFa", "chain": "ethereum", "type": "gnosis_safe"},
+      "core_contract": {"address": "0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb", "chain": "ethereum"}
+    },
+    "spark": {
+      "governance_timelock": {"address": "0xbEF99f5f55cF7cDb3a70998C57061B7e1386a9b0", "chain": "ethereum"},
+      "multisig": null,
+      "core_contract": {"address": "0xC13e21B648A5Ee794902342038FF3aDAB66BE987", "chain": "ethereum"}
+    },
+    "convex-finance": {
+      "governance_timelock": null,
+      "multisig": {"address": "0xa3C5A1e09150B75ff251c1a7815A07182c3de2FB", "chain": "ethereum", "type": "gnosis_safe"},
+      "core_contract": {"address": "0xF403C135812408BFbE8713b5A23a04b3D48AAE31", "chain": "ethereum"}
+    },
+    "drift": {
+      "governance_timelock": null,
+      "multisig": null,
+      "core_contract": null
+    },
+    "jupiter-perpetual-exchange": {
+      "governance_timelock": null,
+      "multisig": null,
+      "core_contract": null
+    },
+    "raydium": {
+      "governance_timelock": null,
+      "multisig": null,
+      "core_contract": null
+    }
+  },
+  "bridges": {
+    "wormhole": {
+      "guardian_contract": {"address": "0x98f3c9e6E3fAce36bAAd05FE09d375Ef1464288B", "chain": "ethereum"},
+      "timelock": null
+    },
+    "layerzero": {
+      "guardian_contract": {"address": "0x66A71Dcef29A0fFBDBE3c6a460a3B5BC225Cd675", "chain": "ethereum"},
+      "timelock": null
+    },
+    "axelar": {
+      "guardian_contract": {"address": "0x4F4495243837681061C4743b74B3eEdf548D56A5", "chain": "ethereum"},
+      "timelock": null
+    },
+    "circle-cctp": {
+      "guardian_contract": null,
+      "timelock": null
+    },
+    "across": {
+      "guardian_contract": null,
+      "timelock": null
+    },
+    "stargate": {
+      "guardian_contract": {"address": "0x65bb797c2B9830d891D87288F029ed8dACc19705", "chain": "ethereum"},
+      "timelock": null
+    },
+    "synapse": {
+      "guardian_contract": null,
+      "timelock": null
+    },
+    "debridge": {
+      "guardian_contract": null,
+      "timelock": null
+    },
+    "celer-cbridge": {
+      "guardian_contract": null,
+      "timelock": null
+    }
+  }
+}

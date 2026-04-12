@@ -499,6 +499,124 @@ COMPONENT_NORMALIZATIONS = {
     },
 
     # =========================================================================
+    # Phase 2: On-chain governance reads → Governance category
+    # =========================================================================
+    "dao_timelock_hours": {
+        "fn": normalize_linear,
+        "params": {"min_val": 0, "max_val": 168},
+        "category": "governance",
+        "weight": 0.30,
+    },
+    "multisig_config": {
+        "fn": normalize_direct,
+        "params": {},
+        "category": "governance",
+        "weight": 0.30,
+    },
+
+    # Phase 2: On-chain reads → Smart Contract category
+    "dao_upgrade_mechanism": {
+        "fn": normalize_direct,
+        "params": {},
+        "category": "smart_contract",
+        "weight": 0.10,
+    },
+    "access_control": {
+        "fn": normalize_direct,
+        "params": {},
+        "category": "smart_contract",
+        "weight": 0.05,
+    },
+    "emergency_mechanism": {
+        "fn": normalize_direct,
+        "params": {},
+        "category": "smart_contract",
+        "weight": 0.05,
+    },
+
+    # Phase 2: Bridge reads
+    "bridge_timelock": {
+        "fn": normalize_linear,
+        "params": {"min_val": 0, "max_val": 168},
+        "category": "governance",
+        "weight": 0.20,
+    },
+    "guardian_count": {
+        "fn": normalize_direct,
+        "params": {},
+        "category": "governance",
+        "weight": 0.20,
+    },
+
+    # Phase 2: DEX pool data (VSRI/PSI)
+    "position_liquidity": {
+        "fn": normalize_direct,
+        "params": {},
+        "category": "liquidity",
+        "weight": 0.10,
+    },
+    "collateral_diversity": {
+        "fn": normalize_direct,
+        "params": {},
+        "category": "liquidity",
+        "weight": 0.05,
+    },
+
+    # Phase 2: Bridge monitoring
+    "message_success_rate": {
+        "fn": normalize_direct,
+        "params": {},
+        "category": "network",
+        "weight": 0.25,
+    },
+    "uptime_pct": {
+        "fn": normalize_direct,
+        "params": {},
+        "category": "network",
+        "weight": 0.25,
+    },
+
+    # Phase 2: Exchange health
+    "api_availability": {
+        "fn": normalize_direct,
+        "params": {},
+        "category": "network",
+        "weight": 0.25,
+    },
+
+    # Phase 4: Web research components
+    "bridge_audit_research": {
+        "fn": normalize_direct,
+        "params": {},
+        "category": "smart_contract",
+        "weight": 0.05,
+    },
+    "por_frequency_research": {
+        "fn": normalize_direct,
+        "params": {},
+        "category": "transparency",
+        "weight": 0.10,
+    },
+    "compensation_transparency": {
+        "fn": normalize_direct,
+        "params": {},
+        "category": "governance",
+        "weight": 0.10,
+    },
+    "meeting_cadence": {
+        "fn": normalize_direct,
+        "params": {},
+        "category": "governance",
+        "weight": 0.10,
+    },
+    "por_method_research": {
+        "fn": normalize_direct,
+        "params": {},
+        "category": "transparency",
+        "weight": 0.10,
+    },
+
+    # =========================================================================
     # Flows / Mint-Burn Dynamics (5 components, weights sum to 1.0)
     # =========================================================================
     "daily_mint_volume": {

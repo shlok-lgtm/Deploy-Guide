@@ -5492,6 +5492,24 @@ async def trigger_daily_cycle(request: Request):
         return JSONResponse(status_code=500, content={"error": str(e), "traceback": traceback.format_exc()})
 
 
+# =============================================================================
+# Admin: Blockscout Comparison Summary
+# =============================================================================
+
+@app.get("/api/admin/blockscout-comparison")
+async def admin_blockscout_comparison(request: Request):
+    """Returns Blockscout vs Etherscan comparison statistics."""
+    _check_admin_key(request)
+    try:
+        from app.utils.data_source_comparator import get_comparison_summary
+        return get_comparison_summary()
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        return JSONResponse(status_code=500, content={"error": str(e), "traceback": traceback.format_exc()})
+
+
 @app.get("/api/ops/reports/recent")
 async def ops_recent_reports(request: Request):
     _check_admin_key(request)

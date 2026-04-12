@@ -169,7 +169,18 @@ async def collect_all_components(
     for result in results:
         if result:
             all_components.extend(result)
-    
+
+    # Blockscout shadow comparison (non-blocking, during evaluation period only)
+    try:
+        from app.utils.data_source_comparator import compare_contract_abi, compare_token_holder_count, is_comparison_active
+        if is_comparison_active():
+            contract = cfg.get("contract", "")
+            if contract:
+                await safe_collect("blockscout_abi_compare", compare_contract_abi(client, contract))
+                await safe_collect("blockscout_holder_compare", compare_token_holder_count(client, contract))
+    except Exception:
+        pass  # Shadow comparison is non-critical
+
     # Offline collectors (synchronous, from config/scraped data)
     for collector in [
         collect_transparency_components,
@@ -608,6 +619,30 @@ async def run_fast_cycle():
         logger.warning(f"PSI scoring failed: {e}")
 
     # -------------------------------------------------------------------------
+    # Bridge monitoring — every cycle (lightweight HTTP checks)
+    # -------------------------------------------------------------------------
+    try:
+        from app.collectors.bridge_monitors import run_bridge_monitoring
+        logger.info("Running bridge monitoring...")
+        bridge_monitor_results = run_bridge_monitoring()
+        monitored = sum(1 for r in bridge_monitor_results if "success_rate" in r)
+        logger.info(f"Bridge monitoring complete: {monitored}/{len(bridge_monitor_results)} bridges checked")
+    except Exception as e:
+        logger.warning(f"Bridge monitoring failed: {e}")
+
+    # -------------------------------------------------------------------------
+    # Exchange health checks — every cycle (lightweight HTTP pings)
+    # -------------------------------------------------------------------------
+    try:
+        from app.collectors.exchange_health import run_exchange_health_monitoring
+        logger.info("Running exchange health monitoring...")
+        exchange_health_results = run_exchange_health_monitoring()
+        healthy = sum(1 for r in exchange_health_results if r.get("is_healthy"))
+        logger.info(f"Exchange health: {healthy}/{len(exchange_health_results)} healthy")
+    except Exception as e:
+        logger.warning(f"Exchange health monitoring failed: {e}")
+
+    # -------------------------------------------------------------------------
     # Verification agent cycle — every cycle
     # -------------------------------------------------------------------------
     try:
@@ -860,6 +895,69 @@ async def run_slow_cycle():
         logger.info(f"TTI scoring complete: {len(tti_results)} treasury products scored")
     except Exception as e:
         logger.warning(f"TTI scoring failed: {e}")
+
+    # -------------------------------------------------------------------------
+    # On-chain governance reads — every slow cycle
+    # Reads timelock delays, multisig configs, proxy patterns from contracts
+    # -------------------------------------------------------------------------
+    try:
+        async with httpx.AsyncClient(timeout=30) as gov_client:
+            from app.collectors.smart_contract import collect_governance_reads
+            logger.info("Running on-chain governance reads...")
+            gov_read_results = await collect_governance_reads(gov_client)
+            logger.info(f"Governance reads complete: {len(gov_read_results)} components collected")
+    except Exception as e:
+        logger.warning(f"On-chain governance reads failed: {e}")
+
+    # -------------------------------------------------------------------------
+    # DEX pool data collection — 3-hour gate (pool data changes slowly)
+    # -------------------------------------------------------------------------
+    try:
+        last_dex = fetch_one(
+            "SELECT MAX(computed_at) AS latest FROM generic_index_scores WHERE index_id = 'dex_pool_data'"
+        )
+        dex_age_hours = 4  # default: run if no prior record
+        if last_dex and last_dex.get("latest"):
+            latest = last_dex["latest"]
+            if latest.tzinfo is None:
+                latest = latest.replace(tzinfo=timezone.utc)
+            dex_age_hours = (datetime.now(timezone.utc) - latest).total_seconds() / 3600
+
+        if dex_age_hours >= 3:
+            from app.collectors.dex_pools import run_dex_pool_collection
+            logger.info("Running DEX pool data collection...")
+            dex_results = run_dex_pool_collection()
+            scored = sum(1 for r in dex_results if "score" in r)
+            logger.info(f"DEX pool collection complete: {scored} components across {len(dex_results)} entries")
+        else:
+            logger.info(f"DEX pool collection skipped — last ran {dex_age_hours:.1f}h ago")
+    except Exception as e:
+        logger.warning(f"DEX pool data collection failed: {e}")
+
+    # -------------------------------------------------------------------------
+    # Web research collection — daily gate (expensive Parallel API calls)
+    # -------------------------------------------------------------------------
+    try:
+        last_research = fetch_one(
+            "SELECT MAX(computed_at) AS latest FROM generic_index_scores WHERE index_id LIKE 'web_research_%'"
+        )
+        research_age_hours = 25
+        if last_research and last_research.get("latest"):
+            latest = last_research["latest"]
+            if latest.tzinfo is None:
+                latest = latest.replace(tzinfo=timezone.utc)
+            research_age_hours = (datetime.now(timezone.utc) - latest).total_seconds() / 3600
+
+        if research_age_hours >= 24:
+            from app.collectors.web_research import run_web_research_collection
+            logger.info("Running web research collection...")
+            research_results = await run_web_research_collection()
+            scored = sum(1 for r in research_results if "score" in r)
+            logger.info(f"Web research complete: {scored} components collected")
+        else:
+            logger.info(f"Web research skipped — last ran {research_age_hours:.1f}h ago")
+    except Exception as e:
+        logger.warning(f"Web research collection failed: {e}")
 
     # -------------------------------------------------------------------------
     # Daily-gated: governance event collection (Snapshot/Tally)
