@@ -4622,6 +4622,23 @@ async def drift_vault_balances():
 # Circle 7 Index API Endpoints (silent accumulation — internal only)
 # =============================================================================
 
+@app.get("/api/coverage/summary")
+async def coverage_summary():
+    """Component coverage summary across all Circle 7 indices."""
+    from app.component_coverage import get_all_coverage
+    return get_all_coverage()
+
+
+@app.get("/api/{index_id}/coverage")
+async def index_coverage(index_id: str):
+    """Component coverage breakdown for a specific index."""
+    from app.component_coverage import get_coverage
+    result = get_coverage(index_id)
+    if not result:
+        raise HTTPException(status_code=404, detail=f"No coverage data for index: {index_id}")
+    return result
+
+
 @app.get("/api/{index_id}/scores")
 async def circle7_scores(index_id: str):
     """Latest scores for a Circle 7 index (lsti, bri, dohi, vsri, cxri, tti)."""

@@ -394,9 +394,126 @@ def check_db_connections():
     return {"system": "db_connections", "status": status, "details": {"active_connections": count}}
 
 
+# =============================================================================
+# Auto-discovering index health check — covers all registered indices
+# =============================================================================
+
+# Expected scoring frequency per index (hours)
+_INDEX_MAX_AGE = {
+    "lsti": 4, "bri": 4, "vsri": 4, "cxri": 4, "tti": 4,
+    "dohi": 26,  # daily-gated
+}
+
+
+def check_generic_index_freshness():
+    """Auto-discover and check freshness for all indices in generic_index_scores."""
+    rows = _safe_query("""
+        SELECT index_id,
+               COUNT(DISTINCT entity_slug) AS entities,
+               MAX(computed_at) AS last_scored
+        FROM generic_index_scores
+        WHERE scored_date >= CURRENT_DATE - 1
+        GROUP BY index_id
+        ORDER BY index_id
+    """)
+
+    if rows is None:
+        return {"system": "generic_indices", "status": "down", "details": {"error": "query_failed"}}
+
+    if not rows:
+        return {"system": "generic_indices", "status": "degraded", "details": {"error": "no_scored_indices", "indices": []}}
+
+    indices = []
+    any_stale = False
+    for r in rows:
+        idx_id = r["index_id"]
+        last = r.get("last_scored")
+        age = _age_hours(last) if last else None
+        max_age = _INDEX_MAX_AGE.get(idx_id, 4)
+        fresh = age is not None and age <= max_age
+
+        if not fresh:
+            any_stale = True
+
+        indices.append({
+            "index_id": idx_id,
+            "entities_scored": r["entities"],
+            "last_scored": last.isoformat() if last else None,
+            "age_hours": round(age, 2) if age else None,
+            "max_age_hours": max_age,
+            "fresh": fresh,
+        })
+
+    status = "healthy" if not any_stale else "degraded"
+    return {
+        "system": "generic_indices",
+        "status": status,
+        "details": {"indices": indices, "count": len(indices)},
+    }
+
+
+def check_governance_events_freshness():
+    """Check governance events pipeline freshness."""
+    row = _safe_fetch_one("SELECT MAX(created_at) AS latest, COUNT(*) AS total FROM governance_events")
+    if row is None:
+        return {"system": "governance_events", "status": "down", "details": {"error": "query_failed"}}
+
+    latest = row.get("latest")
+    total = row.get("total", 0)
+    age = _age_hours(latest) if latest else None
+
+    if total == 0:
+        status = "degraded"
+    elif age is not None and age > 48:
+        status = "degraded"
+    else:
+        status = "healthy"
+
+    return {
+        "system": "governance_events",
+        "status": status,
+        "details": {
+            "total_events": total,
+            "last_event": latest.isoformat() if latest else None,
+            "age_hours": round(age, 2) if age else None,
+            "max_age_hours": 48,
+        },
+    }
+
+
+def check_divergence_freshness():
+    """Check divergence signals pipeline freshness."""
+    row = _safe_fetch_one("SELECT MAX(cycle_timestamp) AS latest, COUNT(*) AS total FROM divergence_signals")
+    if row is None:
+        return {"system": "divergence_signals", "status": "down", "details": {"error": "query_failed"}}
+
+    latest = row.get("latest")
+    total = row.get("total", 0)
+    age = _age_hours(latest) if latest else None
+
+    status = "healthy"
+    if total == 0:
+        status = "degraded"
+    elif age is not None and age > 4:
+        status = "degraded"
+
+    return {
+        "system": "divergence_signals",
+        "status": status,
+        "details": {
+            "total_signals": total,
+            "last_cycle": latest.isoformat() if latest else None,
+            "age_hours": round(age, 2) if age else None,
+        },
+    }
+
+
 ALL_CHECKS = [
     check_sii_freshness,
     check_psi_freshness,
+    check_generic_index_freshness,
+    check_governance_events_freshness,
+    check_divergence_freshness,
     check_cda_freshness,
     check_wallet_freshness,
     check_graph_freshness,

@@ -371,6 +371,47 @@ DOMAINS = {
         "max_age_hours": 48,
         "coherence_rules": [_treasury_registry_nonempty, _treasury_events_severity_valid],
     },
+    # --- Circle 7 indices (auto-extending via generic_index_scores) ---
+    "lsti": {
+        "freshness_query": "SELECT COUNT(*) AS cnt, MAX(computed_at) AS latest FROM generic_index_scores WHERE index_id = 'lsti'",
+        "max_age_hours": 4,
+        "coherence_rules": [],
+    },
+    "bri": {
+        "freshness_query": "SELECT COUNT(*) AS cnt, MAX(computed_at) AS latest FROM generic_index_scores WHERE index_id = 'bri'",
+        "max_age_hours": 4,
+        "coherence_rules": [],
+    },
+    "dohi": {
+        "freshness_query": "SELECT COUNT(*) AS cnt, MAX(computed_at) AS latest FROM generic_index_scores WHERE index_id = 'dohi'",
+        "max_age_hours": 26,
+        "coherence_rules": [],
+    },
+    "vsri": {
+        "freshness_query": "SELECT COUNT(*) AS cnt, MAX(computed_at) AS latest FROM generic_index_scores WHERE index_id = 'vsri'",
+        "max_age_hours": 4,
+        "coherence_rules": [],
+    },
+    "cxri": {
+        "freshness_query": "SELECT COUNT(*) AS cnt, MAX(computed_at) AS latest FROM generic_index_scores WHERE index_id = 'cxri'",
+        "max_age_hours": 4,
+        "coherence_rules": [],
+    },
+    "tti": {
+        "freshness_query": "SELECT COUNT(*) AS cnt, MAX(computed_at) AS latest FROM generic_index_scores WHERE index_id = 'tti'",
+        "max_age_hours": 4,
+        "coherence_rules": [],
+    },
+    "governance_events": {
+        "freshness_query": "SELECT COUNT(*) AS cnt, MAX(created_at) AS latest FROM governance_events",
+        "max_age_hours": 26,
+        "coherence_rules": [],
+    },
+    "divergence": {
+        "freshness_query": "SELECT COUNT(*) AS cnt, MAX(cycle_timestamp) AS latest FROM divergence_signals",
+        "max_age_hours": 4,
+        "coherence_rules": [],
+    },
 }
 
 
