@@ -428,122 +428,126 @@ async def collect_governance_reads(client: httpx.AsyncClient) -> list[dict]:
         if not contracts:
             continue
 
-        entity_components = []
+        try:
+            entity_components = []
 
-        # Timelock delay
-        tl_cfg = contracts.get("governance_timelock")
-        if tl_cfg and tl_cfg.get("address"):
-            result = await read_timelock_delay(client, tl_cfg["address"], tl_cfg.get("chain", "ethereum"))
-            await asyncio.sleep(RATE_LIMIT_DELAY)
-            if result:
-                hours = result["dao_timelock_hours"]
-                entity_components.append({
-                    "entity_type": "protocol",
-                    "entity_slug": slug,
-                    "component_id": "dao_timelock_hours",
-                    "category": "governance",
-                    "raw_value": hours,
-                    "normalized_score": round(normalize_timelock_hours(hours), 2),
-                    "data_source": "onchain_read",
-                })
+            # Timelock delay
+            tl_cfg = contracts.get("governance_timelock")
+            if tl_cfg and tl_cfg.get("address"):
+                result = await read_timelock_delay(client, tl_cfg["address"], tl_cfg.get("chain", "ethereum"))
+                await asyncio.sleep(RATE_LIMIT_DELAY)
+                if result:
+                    hours = result["dao_timelock_hours"]
+                    entity_components.append({
+                        "entity_type": "protocol",
+                        "entity_slug": slug,
+                        "component_id": "dao_timelock_hours",
+                        "category": "governance",
+                        "raw_value": hours,
+                        "normalized_score": round(normalize_timelock_hours(hours), 2),
+                        "data_source": "onchain_read",
+                    })
 
-        # Multisig config
-        ms_cfg = contracts.get("multisig")
-        if ms_cfg and ms_cfg.get("address") and ms_cfg.get("type") == "gnosis_safe":
-            result = await read_multisig_config(client, ms_cfg["address"], ms_cfg.get("chain", "ethereum"))
-            await asyncio.sleep(RATE_LIMIT_DELAY)
-            if result:
-                entity_components.append({
-                    "entity_type": "protocol",
-                    "entity_slug": slug,
-                    "component_id": "multisig_config",
-                    "category": "governance",
-                    "raw_value": json.dumps(result),
-                    "normalized_score": round(normalize_multisig_config(result["signer_count"], result["threshold"]), 2),
-                    "data_source": "onchain_read",
-                })
+            # Multisig config
+            ms_cfg = contracts.get("multisig")
+            if ms_cfg and ms_cfg.get("address") and ms_cfg.get("type") == "gnosis_safe":
+                result = await read_multisig_config(client, ms_cfg["address"], ms_cfg.get("chain", "ethereum"))
+                await asyncio.sleep(RATE_LIMIT_DELAY)
+                if result and "signer_count" in result and "threshold" in result:
+                    entity_components.append({
+                        "entity_type": "protocol",
+                        "entity_slug": slug,
+                        "component_id": "multisig_config",
+                        "category": "governance",
+                        "raw_value": json.dumps(result),
+                        "normalized_score": round(normalize_multisig_config(result["signer_count"], result["threshold"]), 2),
+                        "data_source": "onchain_read",
+                    })
 
-        # Proxy pattern detection on core contract
-        core_cfg = contracts.get("core_contract")
-        if core_cfg and core_cfg.get("address"):
-            result = await detect_proxy_pattern(client, core_cfg["address"], core_cfg.get("chain", "ethereum"))
-            await asyncio.sleep(RATE_LIMIT_DELAY)
-            if result:
-                entity_components.append({
-                    "entity_type": "protocol",
-                    "entity_slug": slug,
-                    "component_id": "dao_upgrade_mechanism",
-                    "category": "smart_contract",
-                    "raw_value": json.dumps(result),
-                    "normalized_score": round(normalize_proxy_pattern(result), 2),
-                    "data_source": "onchain_read",
-                })
+            # Proxy pattern detection on core contract
+            core_cfg = contracts.get("core_contract")
+            if core_cfg and core_cfg.get("address"):
+                result = await detect_proxy_pattern(client, core_cfg["address"], core_cfg.get("chain", "ethereum"))
+                await asyncio.sleep(RATE_LIMIT_DELAY)
+                if result:
+                    entity_components.append({
+                        "entity_type": "protocol",
+                        "entity_slug": slug,
+                        "component_id": "dao_upgrade_mechanism",
+                        "category": "smart_contract",
+                        "raw_value": json.dumps(result),
+                        "normalized_score": round(normalize_proxy_pattern(result), 2),
+                        "data_source": "onchain_read",
+                    })
 
-            # Access control detection
-            ac_result = await read_access_control(client, core_cfg["address"], core_cfg.get("chain", "ethereum"))
-            await asyncio.sleep(RATE_LIMIT_DELAY)
-            if ac_result:
-                entity_components.append({
-                    "entity_type": "protocol",
-                    "entity_slug": slug,
-                    "component_id": "access_control",
-                    "category": "smart_contract",
-                    "raw_value": json.dumps(ac_result),
-                    "normalized_score": round(normalize_access_control(ac_result), 2),
-                    "data_source": "onchain_read",
-                })
+                # Access control detection
+                ac_result = await read_access_control(client, core_cfg["address"], core_cfg.get("chain", "ethereum"))
+                await asyncio.sleep(RATE_LIMIT_DELAY)
+                if ac_result:
+                    entity_components.append({
+                        "entity_type": "protocol",
+                        "entity_slug": slug,
+                        "component_id": "access_control",
+                        "category": "smart_contract",
+                        "raw_value": json.dumps(ac_result),
+                        "normalized_score": round(normalize_access_control(ac_result), 2),
+                        "data_source": "onchain_read",
+                    })
 
-            # Emergency mechanism detection
-            em_result = await detect_emergency_mechanism(client, core_cfg["address"], core_cfg.get("chain", "ethereum"))
-            await asyncio.sleep(RATE_LIMIT_DELAY)
-            if em_result:
-                entity_components.append({
-                    "entity_type": "protocol",
-                    "entity_slug": slug,
-                    "component_id": "emergency_mechanism",
-                    "category": "smart_contract",
-                    "raw_value": json.dumps(em_result),
-                    "normalized_score": round(normalize_emergency_mechanism(em_result), 2),
-                    "data_source": "onchain_read",
-                })
+                # Emergency mechanism detection
+                em_result = await detect_emergency_mechanism(client, core_cfg["address"], core_cfg.get("chain", "ethereum"))
+                await asyncio.sleep(RATE_LIMIT_DELAY)
+                if em_result:
+                    entity_components.append({
+                        "entity_type": "protocol",
+                        "entity_slug": slug,
+                        "component_id": "emergency_mechanism",
+                        "category": "smart_contract",
+                        "raw_value": json.dumps(em_result),
+                        "normalized_score": round(normalize_emergency_mechanism(em_result), 2),
+                        "data_source": "onchain_read",
+                    })
 
-        all_components.extend(entity_components)
+            all_components.extend(entity_components)
+        except Exception as e:
+            logger.debug(f"Governance reads failed for protocol {slug}: {e}")
 
     # --- Bridge reads ---
     for slug, contracts in registry.get("bridges", {}).items():
         if not contracts:
             continue
 
-        entity_components = []
+        try:
+            entity_components = []
 
-        # Timelock
-        tl_cfg = contracts.get("timelock")
-        if tl_cfg and tl_cfg.get("address"):
-            result = await read_timelock_delay(client, tl_cfg["address"], tl_cfg.get("chain", "ethereum"))
-            await asyncio.sleep(RATE_LIMIT_DELAY)
-            if result:
-                hours = result["dao_timelock_hours"]
-                entity_components.append({
-                    "entity_type": "bridge",
-                    "entity_slug": slug,
-                    "component_id": "bridge_timelock",
-                    "category": "security_architecture",
-                    "raw_value": hours,
-                    "normalized_score": round(normalize_timelock_hours(hours), 2),
-                    "data_source": "onchain_read",
-                })
+            # Timelock
+            tl_cfg = contracts.get("timelock")
+            if tl_cfg and tl_cfg.get("address"):
+                result = await read_timelock_delay(client, tl_cfg["address"], tl_cfg.get("chain", "ethereum"))
+                await asyncio.sleep(RATE_LIMIT_DELAY)
+                if result:
+                    hours = result["dao_timelock_hours"]
+                    entity_components.append({
+                        "entity_type": "bridge",
+                        "entity_slug": slug,
+                        "component_id": "bridge_timelock",
+                        "category": "security_architecture",
+                        "raw_value": hours,
+                        "normalized_score": round(normalize_timelock_hours(hours), 2),
+                        "data_source": "onchain_read",
+                    })
 
-        # Guardian set
-        gc_cfg = contracts.get("guardian_contract")
-        if gc_cfg and gc_cfg.get("address"):
-            bridge_type = "wormhole" if slug == "wormhole" else "generic"
-            result = await read_guardian_set(client, gc_cfg["address"], gc_cfg.get("chain", "ethereum"), bridge_type)
-            await asyncio.sleep(RATE_LIMIT_DELAY)
-            if result:
-                count = result["guardian_count"]
-                entity_components.append({
-                    "entity_type": "bridge",
-                    "entity_slug": slug,
+            # Guardian set
+            gc_cfg = contracts.get("guardian_contract")
+            if gc_cfg and gc_cfg.get("address"):
+                bridge_type = "wormhole" if slug == "wormhole" else "generic"
+                result = await read_guardian_set(client, gc_cfg["address"], gc_cfg.get("chain", "ethereum"), bridge_type)
+                await asyncio.sleep(RATE_LIMIT_DELAY)
+                if result and "guardian_count" in result:
+                    count = result["guardian_count"]
+                    entity_components.append({
+                        "entity_type": "bridge",
+                        "entity_slug": slug,
                     "component_id": "guardian_count",
                     "category": "decentralization",
                     "raw_value": count,
@@ -551,7 +555,9 @@ async def collect_governance_reads(client: httpx.AsyncClient) -> list[dict]:
                     "data_source": "onchain_read",
                 })
 
-        all_components.extend(entity_components)
+            all_components.extend(entity_components)
+        except Exception as e:
+            logger.debug(f"Governance reads failed for bridge {slug}: {e}")
 
     # Attest
     try:

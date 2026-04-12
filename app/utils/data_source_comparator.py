@@ -54,7 +54,7 @@ def is_comparison_active() -> bool:
         elapsed_days = (datetime.now(timezone.utc) - first).total_seconds() / 86400
         return elapsed_days < COMPARISON_DURATION_DAYS
     except Exception:
-        return True  # Table may not exist yet — will be created
+        return False  # Table doesn't exist yet — skip until migration runs
 
 
 def _hash_result(data: dict) -> str:

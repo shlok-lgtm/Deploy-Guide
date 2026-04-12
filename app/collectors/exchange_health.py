@@ -231,11 +231,16 @@ def run_exchange_health_monitoring() -> list[dict]:
     results = []
     for r in check_results:
         slug = r["exchange"]
-        uptime_data = compute_rolling_uptime(slug, hours=24)
-        score = normalize_api_availability(
-            uptime_data["uptime_pct"],
-            uptime_data["avg_response_ms"],
-        )
+        try:
+            uptime_data = compute_rolling_uptime(slug, hours=24)
+            score = normalize_api_availability(
+                uptime_data["uptime_pct"],
+                uptime_data["avg_response_ms"],
+            )
+        except Exception as e:
+            logger.debug(f"Uptime computation failed for {slug}: {e}")
+            uptime_data = {"uptime_pct": 0, "avg_response_ms": 0, "check_count": 0}
+            score = 0.0
 
         # Store normalized score in generic_index_scores
         try:

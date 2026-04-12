@@ -162,57 +162,61 @@ def compute_position_liquidity(protocol_slug: str) -> dict:
     Compute position liquidity composite for a protocol.
     Returns {"current_tvl": X, "volume_24h": Y, "tvl_30d_trend": Z, "volume_stability": W, "score": S}.
     """
-    config = PROTOCOL_DEX_MAP.get(protocol_slug)
-    if not config:
+    try:
+        config = PROTOCOL_DEX_MAP.get(protocol_slug)
+        if not config:
+            return {}
+
+        network = config["network"]
+        pools = get_protocol_pools(protocol_slug, network)
+        if not pools:
+            return {}
+
+        total_tvl = sum(p.get("reserve_in_usd", 0) for p in pools)
+        total_volume = sum(p.get("volume_24h", 0) for p in pools)
+
+        # Get 30-day OHLCV for the largest pool to measure trend
+        tvl_trend = 0.0
+        volume_stability = 0.5
+        if pools:
+            largest_pool = max(pools, key=lambda p: p.get("reserve_in_usd", 0))
+            if largest_pool.get("address"):
+                ohlcv = get_pool_ohlcv(network, largest_pool["address"], "day", 30)
+                if ohlcv and len(ohlcv) >= 7:
+                    # TVL trend: compare last 7d avg to first 7d avg
+                    recent_volumes = [float(c[5]) for c in ohlcv[:7] if len(c) > 5]
+                    older_volumes = [float(c[5]) for c in ohlcv[-7:] if len(c) > 5]
+                    if recent_volumes and older_volumes:
+                        recent_avg = sum(recent_volumes) / len(recent_volumes)
+                        older_avg = sum(older_volumes) / len(older_volumes)
+                        if older_avg > 0:
+                            tvl_trend = (recent_avg - older_avg) / older_avg
+
+                    # Volume stability: coefficient of variation (lower = more stable)
+                    all_volumes = [float(c[5]) for c in ohlcv if len(c) > 5 and float(c[5]) > 0]
+                    if len(all_volumes) >= 5:
+                        avg_vol = sum(all_volumes) / len(all_volumes)
+                        if avg_vol > 0:
+                            std_vol = (sum((v - avg_vol) ** 2 for v in all_volumes) / len(all_volumes)) ** 0.5
+                            cv = std_vol / avg_vol
+                            volume_stability = max(0, 1 - cv)  # 0 to 1, higher = more stable
+
+        # Normalize: high TVL + stable volume = higher score
+        tvl_score = min(100, max(0, 20 + 80 * min(1, total_tvl / 1e9)))  # $1B = 100
+        vol_score = min(100, max(0, 20 + 80 * min(1, total_volume / 1e8)))  # $100M = 100
+        stability_score = volume_stability * 100
+        score = 0.4 * tvl_score + 0.3 * vol_score + 0.3 * stability_score
+
+        return {
+            "current_tvl": total_tvl,
+            "volume_24h": total_volume,
+            "tvl_30d_trend": round(tvl_trend, 4),
+            "volume_stability": round(volume_stability, 4),
+            "score": round(score, 2),
+        }
+    except Exception as e:
+        logger.debug(f"compute_position_liquidity failed for {protocol_slug}: {e}")
         return {}
-
-    network = config["network"]
-    pools = get_protocol_pools(protocol_slug, network)
-    if not pools:
-        return {}
-
-    total_tvl = sum(p.get("reserve_in_usd", 0) for p in pools)
-    total_volume = sum(p.get("volume_24h", 0) for p in pools)
-
-    # Get 30-day OHLCV for the largest pool to measure trend
-    tvl_trend = 0.0
-    volume_stability = 0.5
-    if pools:
-        largest_pool = max(pools, key=lambda p: p.get("reserve_in_usd", 0))
-        if largest_pool.get("address"):
-            ohlcv = get_pool_ohlcv(network, largest_pool["address"], "day", 30)
-            if ohlcv and len(ohlcv) >= 7:
-                # TVL trend: compare last 7d avg to first 7d avg
-                recent_volumes = [float(c[5]) for c in ohlcv[:7] if len(c) > 5]
-                older_volumes = [float(c[5]) for c in ohlcv[-7:] if len(c) > 5]
-                if recent_volumes and older_volumes:
-                    recent_avg = sum(recent_volumes) / len(recent_volumes)
-                    older_avg = sum(older_volumes) / len(older_volumes)
-                    if older_avg > 0:
-                        tvl_trend = (recent_avg - older_avg) / older_avg
-
-                # Volume stability: coefficient of variation (lower = more stable)
-                all_volumes = [float(c[5]) for c in ohlcv if len(c) > 5 and float(c[5]) > 0]
-                if len(all_volumes) >= 5:
-                    avg_vol = sum(all_volumes) / len(all_volumes)
-                    if avg_vol > 0:
-                        std_vol = (sum((v - avg_vol) ** 2 for v in all_volumes) / len(all_volumes)) ** 0.5
-                        cv = std_vol / avg_vol
-                        volume_stability = max(0, 1 - cv)  # 0 to 1, higher = more stable
-
-    # Normalize: high TVL + stable volume = higher score
-    tvl_score = min(100, max(0, 20 + 80 * min(1, total_tvl / 1e9)))  # $1B = 100
-    vol_score = min(100, max(0, 20 + 80 * min(1, total_volume / 1e8)))  # $100M = 100
-    stability_score = volume_stability * 100
-    score = 0.4 * tvl_score + 0.3 * vol_score + 0.3 * stability_score
-
-    return {
-        "current_tvl": total_tvl,
-        "volume_24h": total_volume,
-        "tvl_30d_trend": round(tvl_trend, 4),
-        "volume_stability": round(volume_stability, 4),
-        "score": round(score, 2),
-    }
 
 
 def compute_collateral_diversity(protocol_slug: str) -> dict:
@@ -220,58 +224,62 @@ def compute_collateral_diversity(protocol_slug: str) -> dict:
     Compute collateral diversity for a protocol.
     Returns {"unique_tokens": N, "concentration_top3": pct, "has_stablecoin_exposure": bool, "score": S}.
     """
-    config = PROTOCOL_DEX_MAP.get(protocol_slug)
-    if not config:
-        return {}
-
-    network = config["network"]
-    pools = get_protocol_pools(protocol_slug, network)
-    if not pools:
-        return {}
-
-    # Collect unique tokens from all pools
-    token_tvl = {}
-    for pool in pools[:5]:  # Limit to top 5 pools to conserve API calls
-        if pool.get("address"):
-            tokens = get_pool_tokens(network, pool["address"])
-            if tokens:
-                for key in ["base_token", "quote_token"]:
-                    token_id = tokens.get(key, "")
-                    if token_id:
-                        token_tvl[token_id] = token_tvl.get(token_id, 0) + tokens.get("reserve_in_usd", 0) / 2
-
-    unique_count = len(token_tvl)
-    if unique_count == 0:
-        return {"unique_tokens": 0, "concentration_top3": 100, "has_stablecoin_exposure": False, "score": 10.0}
-
-    # Top 3 concentration
-    sorted_tvl = sorted(token_tvl.values(), reverse=True)
-    total_tvl = sum(sorted_tvl) or 1
-    top3_tvl = sum(sorted_tvl[:3])
-    concentration_top3 = (top3_tvl / total_tvl) * 100
-
-    # Check stablecoin exposure from existing DB data
-    has_stablecoin = False
     try:
-        row = fetch_one(
-            "SELECT COUNT(*) as cnt FROM protocol_collateral_exposure WHERE protocol_slug = %s AND stablecoin_id IS NOT NULL",
-            (protocol_slug,),
-        )
-        has_stablecoin = row and row.get("cnt", 0) > 0
-    except Exception:
-        pass
+        config = PROTOCOL_DEX_MAP.get(protocol_slug)
+        if not config:
+            return {}
 
-    # Normalize: more diverse + lower concentration = higher score
-    diversity_score = min(100, unique_count * 15)  # 7+ tokens = 100
-    concentration_score = max(0, 100 - concentration_top3)  # Lower concentration = higher
-    score = 0.5 * diversity_score + 0.5 * concentration_score
+        network = config["network"]
+        pools = get_protocol_pools(protocol_slug, network)
+        if not pools:
+            return {}
 
-    return {
-        "unique_tokens": unique_count,
-        "concentration_top3": round(concentration_top3, 2),
-        "has_stablecoin_exposure": has_stablecoin,
-        "score": round(score, 2),
-    }
+        # Collect unique tokens from all pools
+        token_tvl = {}
+        for pool in pools[:5]:  # Limit to top 5 pools to conserve API calls
+            if pool.get("address"):
+                tokens = get_pool_tokens(network, pool["address"])
+                if tokens:
+                    for key in ["base_token", "quote_token"]:
+                        token_id = tokens.get(key, "")
+                        if token_id:
+                            token_tvl[token_id] = token_tvl.get(token_id, 0) + tokens.get("reserve_in_usd", 0) / 2
+
+        unique_count = len(token_tvl)
+        if unique_count == 0:
+            return {"unique_tokens": 0, "concentration_top3": 100, "has_stablecoin_exposure": False, "score": 10.0}
+
+        # Top 3 concentration
+        sorted_tvl = sorted(token_tvl.values(), reverse=True)
+        total_tvl = sum(sorted_tvl) or 1
+        top3_tvl = sum(sorted_tvl[:3])
+        concentration_top3 = (top3_tvl / total_tvl) * 100
+
+        # Check stablecoin exposure from existing DB data
+        has_stablecoin = False
+        try:
+            row = fetch_one(
+                "SELECT COUNT(*) as cnt FROM protocol_collateral_exposure WHERE protocol_slug = %s AND stablecoin_id IS NOT NULL",
+                (protocol_slug,),
+            )
+            has_stablecoin = row and row.get("cnt", 0) > 0
+        except Exception:
+            pass
+
+        # Normalize: more diverse + lower concentration = higher score
+        diversity_score = min(100, unique_count * 15)  # 7+ tokens = 100
+        concentration_score = max(0, 100 - concentration_top3)  # Lower concentration = higher
+        score = 0.5 * diversity_score + 0.5 * concentration_score
+
+        return {
+            "unique_tokens": unique_count,
+            "concentration_top3": round(concentration_top3, 2),
+            "has_stablecoin_exposure": has_stablecoin,
+            "score": round(score, 2),
+        }
+    except Exception as e:
+        logger.debug(f"compute_collateral_diversity failed for {protocol_slug}: {e}")
+        return {}
 
 
 # =============================================================================
