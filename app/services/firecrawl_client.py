@@ -1,11 +1,16 @@
 """
-Firecrawl client — used specifically for JS-heavy pages that Parallel Extract can't handle.
-Currently: only PYUSD (Paxos). If more JS-only issuers appear, they route here too.
+Firecrawl client — JS rendering, screenshot capture, and PDF discovery.
+
+Used for:
+1. JS-heavy pages that Parallel Extract can't handle (e.g. Paxos/PYUSD)
+2. Static evidence capture: rendered screenshots + clean markdown extraction
+   for the Witness page evidence pipeline.
 
 Paxos serves attestation PDFs via a Framer-based site with no static PDF URLs in the HTML.
 The PDFs are embedded as framerusercontent.com/assets/*.pdf URLs in Framer component JS modules.
 This client fetches those modules, extracts PDF URLs, and identifies the most recent attestation.
 """
+import base64
 import os
 import re
 import logging
@@ -178,3 +183,46 @@ def identify_most_recent_attestation(pdf_urls: list[str]) -> str | None:
         logger.warning("Firecrawl: Could not identify most recent attestation from PDFs")
 
     return best_url
+
+
+def capture_screenshot_and_markdown(url: str, wait_ms: int = 3000) -> dict:
+    """
+    Capture a rendered screenshot and clean markdown extraction in a single
+    Firecrawl API call.
+
+    Returns: {
+        "screenshot_bytes": bytes | None  (PNG),
+        "markdown_content": str | None    (clean page text),
+        "success": bool,
+    }
+    """
+    try:
+        client = get_client()
+        result = client.scrape(
+            url,
+            formats=["screenshot", "markdown"],
+            actions=[{"type": "wait", "milliseconds": wait_ms}],
+        )
+
+        screenshot_b64 = getattr(result, "screenshot", None) or ""
+        markdown = getattr(result, "markdown", None) or ""
+
+        screenshot_bytes = None
+        if screenshot_b64:
+            # Strip data:image/png;base64, prefix if present
+            if "," in screenshot_b64:
+                screenshot_b64 = screenshot_b64.split(",", 1)[1]
+            screenshot_bytes = base64.b64decode(screenshot_b64)
+
+        return {
+            "screenshot_bytes": screenshot_bytes,
+            "markdown_content": markdown or None,
+            "success": screenshot_bytes is not None,
+        }
+    except Exception as e:
+        logger.warning(f"Firecrawl screenshot capture failed for {url}: {e}")
+        return {
+            "screenshot_bytes": None,
+            "markdown_content": None,
+            "success": False,
+        }

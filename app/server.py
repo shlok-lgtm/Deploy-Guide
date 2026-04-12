@@ -3265,6 +3265,104 @@ async def cda_coverage():
 
 
 # =============================================================================
+# Static evidence (Firecrawl screenshots + markdown snapshots)
+# =============================================================================
+
+@app.get("/api/static-evidence/summary")
+async def static_evidence_summary():
+    """Summary stats for the static evidence layer."""
+    try:
+        from app.collectors.static_evidence import get_evidence_summary
+        return get_evidence_summary()
+    except Exception as e:
+        logger.warning(f"static_evidence_summary error: {e}")
+        return {"error": str(e), "total_evidence_rows": 0}
+
+
+@app.get("/api/static-evidence/screenshot/{evidence_id}")
+async def static_evidence_screenshot(evidence_id: int):
+    """Serve raw screenshot PNG for an evidence row."""
+    from app.collectors.static_evidence import get_screenshot
+    data = get_screenshot(evidence_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="Screenshot not found")
+    return Response(
+        content=bytes(data),
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@app.get("/api/static-evidence/{entity_slug}")
+async def static_evidence_for_entity(entity_slug: str):
+    """All evidence rows for an entity (witness page data)."""
+    from app.collectors.static_evidence import get_evidence_for_entity
+    rows = get_evidence_for_entity(entity_slug)
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"No evidence for entity '{entity_slug}'")
+    return {
+        "entity": entity_slug,
+        "evidence": [
+            {
+                "id": r["id"],
+                "source_url": r["source_url"],
+                "component": r["component_slug"],
+                "index_id": r.get("index_id"),
+                "screenshot_url": f"/api/static-evidence/screenshot/{r['id']}",
+                "snapshot_r2_path": r.get("snapshot_r2_path"),
+                "markdown_preview": (r["snapshot_content"][:500] + "...") if r.get("snapshot_content") and len(r["snapshot_content"]) > 500 else r.get("snapshot_content"),
+                "content_hash": r.get("content_hash"),
+                "captured_at": r["captured_at"].isoformat() if r.get("captured_at") else None,
+                "is_stale": r.get("is_stale", False),
+                "content_changed": r.get("previous_content_hash") is not None and r.get("previous_content_hash") != r.get("content_hash"),
+            }
+            for r in rows
+        ],
+    }
+
+
+@app.post("/api/admin/static-evidence/capture")
+async def admin_capture_static_evidence(request: Request, background_tasks: BackgroundTasks):
+    """Admin: trigger static evidence capture for provided components."""
+    _check_admin_key(request)
+
+    body = await request.json()
+    components = body.get("components", [])
+    if not components:
+        raise HTTPException(status_code=400, detail="components list required")
+
+    from app.collectors.static_evidence import capture_static_evidence
+
+    def _run_capture():
+        try:
+            result = capture_static_evidence(components)
+            logger.info(f"Admin static evidence capture: {result}")
+        except Exception as e:
+            logger.error(f"Admin static evidence capture failed: {e}")
+
+    background_tasks.add_task(_run_capture)
+    return {"status": "capture_started", "component_count": len(components)}
+
+
+@app.post("/api/admin/static-evidence/refresh-stale")
+async def admin_refresh_stale_evidence(request: Request, background_tasks: BackgroundTasks):
+    """Admin: re-capture all stale evidence."""
+    _check_admin_key(request)
+
+    from app.collectors.static_evidence import refresh_stale_evidence
+
+    def _run_refresh():
+        try:
+            result = refresh_stale_evidence()
+            logger.info(f"Admin stale evidence refresh: {result}")
+        except Exception as e:
+            logger.error(f"Admin stale evidence refresh failed: {e}")
+
+    background_tasks.add_task(_run_refresh)
+    return {"status": "refresh_started"}
+
+
+# =============================================================================
 # Severity spec + assessment events
 # =============================================================================
 
@@ -5519,6 +5617,109 @@ def _render_witness_html() -> str:
 </body>
 </html>"""
 
+def _render_witness_static_html(entity_slug: str) -> str:
+    """Server-rendered witness page for static evidence of a specific entity."""
+    from app.collectors.static_evidence import get_evidence_for_entity
+
+    rows = get_evidence_for_entity(entity_slug)
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    evidence_html = ""
+    for r in rows:
+        component = r.get("component_slug", "")
+        source_url = r.get("source_url", "")
+        captured = r["captured_at"].strftime("%Y-%m-%d %H:%M UTC") if r.get("captured_at") else "—"
+        is_stale = r.get("is_stale", False)
+        stale_badge = ' <span class="stale">STALE</span>' if is_stale else ' <span class="fresh">FRESH</span>'
+        content_hash = r.get("content_hash", "")[:16] if r.get("content_hash") else "—"
+        changed = r.get("previous_content_hash") is not None and r.get("previous_content_hash") != r.get("content_hash")
+        change_indicator = ' <span class="changed">CHANGED</span>' if changed else ""
+
+        screenshot_cell = ""
+        if r.get("screenshot_r2_path"):
+            screenshot_cell = f'<a href="/api/static-evidence/screenshot/{r["id"]}" target="_blank"><img src="/api/static-evidence/screenshot/{r["id"]}" class="thumb" alt="screenshot" loading="lazy"></a>'
+        else:
+            screenshot_cell = '<span class="sub">no screenshot</span>'
+
+        md_preview = ""
+        if r.get("snapshot_content"):
+            preview = r["snapshot_content"][:300].replace("<", "&lt;").replace(">", "&gt;")
+            md_preview = f'<details><summary>Markdown preview</summary><pre class="md-preview">{preview}...</pre></details>'
+
+        evidence_html += f"""
+        <tr>
+            <td><strong>{component}</strong>{stale_badge}{change_indicator}</td>
+            <td class="thumb-cell">{screenshot_cell}</td>
+            <td><a href="{source_url}" target="_blank" rel="noopener">{source_url[:60]}{'...' if len(source_url) > 60 else ''}</a></td>
+            <td class="num">{captured}</td>
+            <td class="num hash">{content_hash}...</td>
+        </tr>
+        <tr class="detail-row"><td colspan="5">{md_preview}</td></tr>"""
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Witness Static Evidence — {entity_slug} | Basis Protocol</title>
+    <meta name="description" content="Static evidence captures for {entity_slug}. Screenshots and markdown snapshots of source pages.">
+    <link rel="canonical" href="{CANONICAL_BASE_URL}/witness/static/{entity_slug}">
+    <style>
+        body {{ font-family: 'Georgia', serif; max-width: 1100px; margin: 0 auto; padding: 24px; background: #F3F2ED; color: #0B090A; }}
+        h1 {{ font-size: 1.6rem; font-weight: 400; margin-bottom: 4px; }}
+        .meta {{ font-family: monospace; font-size: 0.75rem; color: #6a6a6a; margin-bottom: 24px; }}
+        table {{ width: 100%; border-collapse: collapse; font-size: 0.85rem; }}
+        th {{ text-align: left; padding: 8px; border-bottom: 2px solid #0B090A; font-family: monospace; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1px; color: #6a6a6a; }}
+        td {{ padding: 8px; border-bottom: 1px dotted #ccc; vertical-align: top; }}
+        .num {{ font-family: monospace; }}
+        .hash {{ font-size: 0.7rem; color: #6a6a6a; }}
+        .sub {{ font-size: 0.75rem; color: #6a6a6a; }}
+        .stale {{ background: #f8d7da; color: #721c24; font-family: monospace; font-size: 0.65rem; padding: 2px 6px; border-radius: 3px; }}
+        .fresh {{ background: #d4edda; color: #155724; font-family: monospace; font-size: 0.65rem; padding: 2px 6px; border-radius: 3px; }}
+        .changed {{ background: #fff3cd; color: #856404; font-family: monospace; font-size: 0.65rem; padding: 2px 6px; border-radius: 3px; }}
+        .thumb {{ max-width: 120px; max-height: 80px; border: 1px solid #ccc; border-radius: 4px; cursor: pointer; }}
+        .thumb-cell {{ text-align: center; }}
+        .detail-row td {{ padding: 0 8px 8px; border-bottom: 1px solid #ddd; }}
+        .md-preview {{ font-family: monospace; font-size: 0.7rem; white-space: pre-wrap; background: #fff; padding: 8px; border-radius: 4px; max-height: 200px; overflow-y: auto; }}
+        nav {{ margin-bottom: 24px; font-family: monospace; font-size: 0.8rem; }}
+        nav a {{ color: #0B090A; margin-right: 16px; text-decoration: none; }}
+        footer {{ margin-top: 32px; font-family: monospace; font-size: 0.75rem; color: #6a6a6a; border-top: 1px solid #ccc; padding-top: 12px; }}
+        a {{ color: #0B090A; }}
+        details {{ margin-top: 4px; }}
+        summary {{ cursor: pointer; font-family: monospace; font-size: 0.7rem; color: #6a6a6a; }}
+    </style>
+</head>
+<body>
+    <h1>Witness: {entity_slug}</h1>
+    <p class="meta">Static evidence captures · {len(rows)} components · {ts}</p>
+    <nav>
+        <a href="/">Rankings</a>
+        <a href="/witness">Witness</a>
+        <a href="/developers">API</a>
+    </nav>
+    <p>Rendered screenshots and markdown extractions of source pages for <strong>{entity_slug}</strong>. Each row is a Firecrawl capture of the source URL at capture time.</p>
+    <table>
+        <thead>
+            <tr>
+                <th>Component</th>
+                <th>Screenshot</th>
+                <th>Source URL</th>
+                <th class="num">Captured</th>
+                <th class="num">Hash</th>
+            </tr>
+        </thead>
+        <tbody>
+            {evidence_html if evidence_html else '<tr><td colspan="5" class="sub">No evidence captured yet.</td></tr>'}
+        </tbody>
+    </table>
+    <footer>
+        <p>Basis Protocol · basisprotocol.xyz · Static evidence is captured via Firecrawl (rendered screenshot + markdown).</p>
+        <p>API: <a href="/api/static-evidence/{entity_slug}">/api/static-evidence/{entity_slug}</a> · <a href="/api/static-evidence/summary">/api/static-evidence/summary</a></p>
+    </footer>
+</body>
+</html>"""
+
+
 def _render_proof_html(identifier: str, surface: str) -> str:
     """Server-rendered score proof page — shows every input, weight, and component."""
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -6627,6 +6828,18 @@ def _register_spa_catch_all(app_instance):
             pass  # Fall through to SPA
         except Exception as e:
             logger.warning(f"Report page render failed for /{full_path}: {e}")
+
+        # Witness static evidence pages — server-rendered for all visitors
+        try:
+            if full_path.startswith("witness/static/"):
+                entity = full_path.split("witness/static/")[1].split("/")[0].split("?")[0]
+                if entity:
+                    return HTMLResponse(
+                        content=_render_witness_static_html(entity.lower()),
+                        headers={"Cache-Control": "public, max-age=300", "Basis-URL-Stability": "permanent"}
+                    )
+        except Exception as e:
+            logger.warning(f"Witness static page render failed for /{full_path}: {e}")
 
         # Serve server-rendered HTML for bots/AI on key routes
         if _is_bot(request):
