@@ -938,6 +938,36 @@ async def run_scoring_cycle():
         logger.debug(f"Provenance attestation skipped: {e}")
 
     # -------------------------------------------------------------------------
+    # Static evidence collection — daily gate (24h)
+    # Captures source page snapshots + content hashes for static components.
+    # Runs after CDA collection since both are daily-gated evidence tasks.
+    # -------------------------------------------------------------------------
+    try:
+        last_evidence = fetch_one(
+            "SELECT MAX(captured_at) AS latest FROM static_evidence"
+        )
+        evidence_age_hours = 25  # default: run if no prior record
+        if last_evidence and last_evidence.get("latest"):
+            latest_ev = last_evidence["latest"]
+            if latest_ev.tzinfo is None:
+                latest_ev = latest_ev.replace(tzinfo=timezone.utc)
+            evidence_age_hours = (datetime.now(timezone.utc) - latest_ev).total_seconds() / 3600
+
+        if evidence_age_hours >= 24:
+            logger.info("Running static evidence collection pipeline...")
+            from app.collectors.static_evidence import run_static_evidence_collection
+            result = run_static_evidence_collection()
+            logger.info(
+                f"Static evidence collection complete: "
+                f"captured={result['captured']} skipped={result['skipped']} "
+                f"stale={result['stale_detected']} errors={result['errors']}"
+            )
+        else:
+            logger.info(f"Static evidence collection skipped — last ran {evidence_age_hours:.1f}h ago")
+    except Exception as e:
+        logger.warning(f"Static evidence collection failed: {e}")
+
+    # -------------------------------------------------------------------------
     # Daily digest — send operational summary once per 24h
     # -------------------------------------------------------------------------
     try:

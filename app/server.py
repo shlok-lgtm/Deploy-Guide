@@ -6550,6 +6550,205 @@ async def provenance_attestor_pubkey():
 
 
 # =============================================================================
+# Static Evidence API
+# =============================================================================
+
+@app.get("/api/evidence/static/summary")
+async def static_evidence_summary():
+    """Summary statistics for static component evidence."""
+    try:
+        from app.collectors.static_evidence import get_evidence_summary
+        from app.collectors.static_provenance_registry import count_static_components
+        summary = get_evidence_summary()
+        summary["registered_components"] = count_static_components()
+        return summary
+    except Exception as e:
+        return {"error": str(e), "registered_components": 0}
+
+
+@app.get("/api/evidence/static/{index_id}/{entity_slug}")
+async def static_evidence_for_entity(index_id: str, entity_slug: str):
+    """Get all evidence records for a specific entity."""
+    try:
+        from app.collectors.static_evidence import get_evidence_for_entity
+        rows = get_evidence_for_entity(index_id, entity_slug)
+        result = []
+        for r in rows:
+            entry = dict(r)
+            # Serialize datetimes
+            for k in ("captured_at", "stale_detected_at", "created_at"):
+                if entry.get(k) and hasattr(entry[k], "isoformat"):
+                    entry[k] = entry[k].isoformat()
+            result.append(entry)
+        return {"index_id": index_id, "entity_slug": entity_slug, "evidence": result}
+    except Exception as e:
+        return {"index_id": index_id, "entity_slug": entity_slug, "evidence": [], "error": str(e)}
+
+
+@app.get("/api/evidence/static/stale")
+async def static_evidence_stale():
+    """Get all stale evidence records (source page changed since capture)."""
+    try:
+        from app.collectors.static_evidence import get_stale_evidence
+        rows = get_stale_evidence()
+        result = []
+        for r in rows:
+            entry = dict(r)
+            for k in ("captured_at", "stale_detected_at", "created_at"):
+                if entry.get(k) and hasattr(entry[k], "isoformat"):
+                    entry[k] = entry[k].isoformat()
+            result.append(entry)
+        return {"stale_evidence": result, "count": len(result)}
+    except Exception as e:
+        return {"stale_evidence": [], "count": 0, "error": str(e)}
+
+
+# =============================================================================
+
+def _render_witness_static_html(index_id: str, entity_slug: str) -> str | None:
+    """
+    Server-rendered witness page for static component evidence.
+    Shows every static component for an entity with its provenance chain.
+    Returns None if no evidence found.
+    """
+    try:
+        from app.collectors.static_evidence import get_evidence_for_entity
+        from app.collectors.static_provenance_registry import REGISTRY
+    except Exception:
+        return None
+
+    rows = get_evidence_for_entity(index_id, entity_slug)
+    if not rows:
+        # Check if entity is registered but has no captures yet
+        entity_reg = REGISTRY.get(index_id, {}).get(entity_slug)
+        if not entity_reg:
+            return None
+
+    entity_reg = REGISTRY.get(index_id, {}).get(entity_slug, {})
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    component_rows_html = ""
+    for r in rows:
+        comp = r.get("component_name", "")
+        value = r.get("captured_value", "")
+        url = r.get("source_url", "")
+        section = r.get("source_section", "")
+        cap_at = r["captured_at"].strftime("%Y-%m-%d %H:%M UTC") if r.get("captured_at") and hasattr(r["captured_at"], "strftime") else str(r.get("captured_at", "—"))
+        content_hash = r.get("content_hash", "")[:16]
+        stale = r.get("stale_detected_at")
+        stale_display = f'<span style="color:#c0392b;">stale since {stale.strftime("%Y-%m-%d") if hasattr(stale, "strftime") else stale}</span>' if stale else '<span style="color:#27ae60;">fresh</span>'
+        screenshot = r.get("screenshot_r2_path", "")
+        screenshot_link = f'<a href="{screenshot}">screenshot</a>' if screenshot else "—"
+
+        url_short = url[:60] + "..." if len(url) > 60 else url
+
+        component_rows_html += f"""
+        <tr>
+            <td><strong>{comp}</strong></td>
+            <td class="num">{value}</td>
+            <td><a href="{url}" target="_blank" rel="noopener">{url_short}</a><br><span class="sub">{section}</span></td>
+            <td class="num">{cap_at}</td>
+            <td>{stale_display}</td>
+            <td class="num"><code>{content_hash}…</code></td>
+            <td>{screenshot_link}</td>
+        </tr>"""
+
+    # Also show registered components without evidence yet
+    evidenced_names = {r.get("component_name") for r in rows}
+    for comp_name, entry in entity_reg.items():
+        if comp_name not in evidenced_names and isinstance(entry, dict) and "source_url" in entry:
+            url = entry.get("source_url", "")
+            url_short = url[:60] + "..." if len(url) > 60 else url
+            component_rows_html += f"""
+        <tr style="opacity:0.5;">
+            <td><strong>{comp_name}</strong></td>
+            <td class="num">{entry.get('value', '—')}</td>
+            <td><a href="{url}" target="_blank" rel="noopener">{url_short}</a></td>
+            <td class="num">—</td>
+            <td><span style="color:#e67e22;">awaiting capture</span></td>
+            <td class="num">—</td>
+            <td>—</td>
+        </tr>"""
+
+    total_registered = len(entity_reg)
+    total_captured = len(rows)
+    stale_count = sum(1 for r in rows if r.get("stale_detected_at"))
+
+    json_ld = {
+        "@context": "https://schema.org",
+        "@type": "Dataset",
+        "name": f"Basis Witness — Static Evidence for {entity_slug} ({index_id.upper()})",
+        "description": f"Provenance evidence for {total_captured}/{total_registered} static components. {stale_count} stale.",
+        "url": f"{CANONICAL_BASE_URL}/witness/static/{index_id}/{entity_slug}",
+        "dateModified": datetime.now(timezone.utc).isoformat(),
+        "creator": {"@type": "Organization", "name": "Basis Protocol", "url": CANONICAL_BASE_URL},
+    }
+    json_ld_str = json.dumps(json_ld, cls=_DecimalEncoder)
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Basis Witness — Static Evidence: {entity_slug} ({index_id.upper()}) | Basis Protocol</title>
+    <meta name="description" content="Provenance evidence for {total_captured}/{total_registered} static components of {entity_slug} in the {index_id.upper()} index.">
+    <meta property="og:title" content="Basis Witness — Static Evidence: {entity_slug}">
+    <meta property="og:description" content="{total_captured}/{total_registered} components with captured evidence. {stale_count} flagged stale.">
+    <meta property="og:type" content="website">
+    <link rel="canonical" href="{CANONICAL_BASE_URL}/witness/static/{index_id}/{entity_slug}">
+    <link rel="alternate" type="application/json" href="{CANONICAL_BASE_URL}/api/evidence/static/{index_id}/{entity_slug}">
+    <script type="application/ld+json">{json_ld_str}</script>
+    <style>
+        body {{ font-family: 'Georgia', serif; max-width: 1100px; margin: 0 auto; padding: 24px; background: #F3F2ED; color: #0B090A; }}
+        h1 {{ font-size: 1.6rem; font-weight: 400; margin-bottom: 4px; }}
+        .meta {{ font-family: monospace; font-size: 0.75rem; color: #6a6a6a; margin-bottom: 24px; }}
+        table {{ width: 100%; border-collapse: collapse; font-size: 0.8rem; }}
+        th {{ text-align: left; padding: 8px; border-bottom: 2px solid #0B090A; font-family: monospace; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1px; color: #6a6a6a; }}
+        td {{ padding: 8px; border-bottom: 1px dotted #ccc; vertical-align: top; }}
+        .num {{ font-family: monospace; }}
+        .sub {{ font-size: 0.7rem; color: #6a6a6a; }}
+        code {{ font-size: 0.75rem; background: #e8e8e4; padding: 2px 4px; border-radius: 2px; }}
+        nav {{ margin-bottom: 24px; font-family: monospace; font-size: 0.8rem; }}
+        nav a {{ color: #0B090A; margin-right: 16px; text-decoration: none; }}
+        footer {{ margin-top: 32px; font-family: monospace; font-size: 0.75rem; color: #6a6a6a; border-top: 1px solid #ccc; padding-top: 12px; }}
+        a {{ color: #2d6b45; }}
+    </style>
+</head>
+<body>
+    <h1>Basis Witness — Static Evidence</h1>
+    <p class="meta">{index_id.upper()} / {entity_slug} · {total_captured}/{total_registered} components captured · {stale_count} stale · {ts}</p>
+    <nav>
+        <a href="/">Rankings</a>
+        <a href="/witness">Witness</a>
+        <a href="/witness/static/{index_id}/{entity_slug}">This page</a>
+        <a href="/developers">API</a>
+    </nav>
+    <p>Every static component value used in scoring has a provenance record: where the value came from, when it was captured, and whether the source has changed. Values are <strong>not</strong> auto-updated when sources change — a human reviews every change.</p>
+    <table>
+        <thead>
+            <tr>
+                <th>Component</th>
+                <th>Value</th>
+                <th>Source</th>
+                <th class="num">Captured</th>
+                <th>Status</th>
+                <th class="num">Hash</th>
+                <th>Screenshot</th>
+            </tr>
+        </thead>
+        <tbody>
+            {component_rows_html}
+        </tbody>
+    </table>
+    <footer>
+        <p>Basis Protocol · basisprotocol.xyz · Static component evidence is captured daily with content hashing for change detection.</p>
+        <p>API: <a href="/api/evidence/static/{index_id}/{entity_slug}">/api/evidence/static/{index_id}/{entity_slug}</a> · <a href="/api/evidence/static/summary">/api/evidence/static/summary</a> · <a href="/developers">Developer docs</a></p>
+    </footer>
+</body>
+</html>"""
+
+
+# =============================================================================
 
 def _register_spa_catch_all(app_instance):
     """Register the SPA catch-all AFTER all other routes so it doesn't shadow them."""
@@ -6583,6 +6782,22 @@ def _register_spa_catch_all(app_instance):
                     )
         except Exception as e:
             logger.warning(f"Proof page render failed for /{full_path}: {e}")
+
+        # Witness/static pages are server-rendered for ALL visitors
+        try:
+            if full_path.startswith("witness/static/"):
+                parts = full_path.split("/")
+                if len(parts) >= 4:
+                    w_index = parts[2].split("?")[0]
+                    w_entity = parts[3].split("?")[0]
+                    html = _render_witness_static_html(w_index.lower(), w_entity.lower())
+                    if html:
+                        return HTMLResponse(
+                            content=html,
+                            headers={"Cache-Control": "public, max-age=300", "Basis-URL-Stability": "permanent"}
+                        )
+        except Exception as e:
+            logger.warning(f"Witness static page render failed for /{full_path}: {e}")
 
         # Report pages are server-rendered for ALL visitors
         try:

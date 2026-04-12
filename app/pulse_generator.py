@@ -232,6 +232,7 @@ def run_daily_pulse():
             "wallets", "wallet_profiles", "edges", "actors",
             "psi_discoveries", "smart_contracts", "flows",
             "cqi_compositions", "discovery_signals",
+            "static_evidence",
         ]
 
         state_root_inputs = {}
