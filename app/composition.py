@@ -114,6 +114,218 @@ def compute_cqi(asset_symbol, protocol_slug):
     }
 
 
+# =============================================================================
+# RQS (Reserve Quality Score) — weighted-average SII over protocol holdings
+# =============================================================================
+
+
+def compute_rqs(holdings: list[dict]) -> dict:
+    """
+    Compute Reserve Quality Score from a list of stablecoin holdings.
+
+    Each holding dict must have:
+      - symbol: stablecoin ticker (e.g. "USDC")
+      - weight: proportion of portfolio (0-1, must sum to ~1)
+
+    Fetches current SII score for each stablecoin.
+    Returns weighted-average SII as the RQS, plus component breakdown.
+    """
+    if not holdings:
+        return {"error": "No holdings provided"}
+
+    # Normalise weights to ensure they sum to 1
+    raw_weight_sum = sum(h.get("weight", 0) for h in holdings)
+    if raw_weight_sum <= 0:
+        return {"error": "Holdings weights must be positive"}
+
+    breakdown = []
+    scored_weight = 0.0
+    weighted_sum = 0.0
+    warnings = []
+
+    for h in holdings:
+        symbol = h.get("symbol", "").upper()
+        weight = h.get("weight", 0) / raw_weight_sum  # normalise
+
+        sii_row = fetch_one("""
+            SELECT s.overall_score, s.component_count
+            FROM scores s
+            JOIN stablecoins st ON st.id = s.stablecoin_id
+            WHERE UPPER(st.symbol) = UPPER(%s)
+        """, (symbol,))
+
+        sii_score = None
+        if sii_row and sii_row.get("overall_score") is not None:
+            sii_score = float(sii_row["overall_score"])
+            contribution = round(weight * sii_score, 4)
+            weighted_sum += contribution
+            scored_weight += weight
+            breakdown.append({
+                "symbol": symbol,
+                "weight": round(weight, 4),
+                "sii_score": round(sii_score, 2),
+                "contribution": contribution,
+                "scored": True,
+            })
+        else:
+            warnings.append(f"{symbol} has no SII score — excluded from RQS")
+            breakdown.append({
+                "symbol": symbol,
+                "weight": round(weight, 4),
+                "sii_score": None,
+                "contribution": 0,
+                "scored": False,
+            })
+
+    scored_coverage = round(scored_weight, 4)
+
+    if scored_weight <= 0:
+        return {
+            "error": "None of the provided holdings have SII scores",
+            "breakdown": breakdown,
+            "warnings": warnings,
+        }
+
+    # Re-normalise over scored-only weight so RQS stays on 0-100 scale
+    rqs_score = round(weighted_sum / scored_weight, 2)
+
+    # Confidence based on how much of the portfolio is scored
+    from app.scoring_engine import compute_confidence_tag
+    conf = compute_confidence_tag(0, 0, scored_coverage)
+
+    return {
+        "composite_id": "rqs",
+        "name": "Reserve Quality Score",
+        "rqs_score": rqs_score,
+        "scored_coverage": scored_coverage,
+        "confidence": conf["confidence"],
+        "confidence_tag": conf["tag"],
+        "breakdown": sorted(breakdown, key=lambda x: x["contribution"], reverse=True),
+        "warnings": warnings,
+        "method": "weighted_average",
+        "formula_version": "composition-v1.0.0",
+    }
+
+
+def compute_rqs_for_protocol(protocol_slug: str) -> dict:
+    """
+    Compute RQS for a specific PSI-scored protocol using its treasury holdings.
+
+    Reads from protocol_treasury_holdings table (stablecoin rows with SII scores).
+    Weights are proportional to USD value held.
+    """
+    # Verify protocol exists in PSI
+    psi_row = fetch_one("""
+        SELECT protocol_name, overall_score
+        FROM psi_scores
+        WHERE protocol_slug = %s
+        ORDER BY computed_at DESC LIMIT 1
+    """, (protocol_slug,))
+
+    if not psi_row:
+        return {"error": f"Protocol '{protocol_slug}' not found in PSI scores"}
+
+    # Fetch stablecoin treasury holdings
+    rows = fetch_all("""
+        SELECT token_symbol, usd_value, sii_score, is_stablecoin
+        FROM protocol_treasury_holdings
+        WHERE protocol_slug = %s AND is_stablecoin = TRUE
+          AND snapshot_date = (
+              SELECT MAX(snapshot_date)
+              FROM protocol_treasury_holdings
+              WHERE protocol_slug = %s
+          )
+        ORDER BY usd_value DESC
+    """, (protocol_slug, protocol_slug))
+
+    if not rows:
+        return {
+            "error": f"No stablecoin treasury holdings found for '{protocol_slug}'",
+            "protocol": psi_row.get("protocol_name", protocol_slug),
+            "protocol_slug": protocol_slug,
+        }
+
+    # Aggregate by symbol (may appear on multiple chains)
+    by_symbol: dict[str, float] = {}
+    for r in rows:
+        sym = r["token_symbol"].upper()
+        by_symbol[sym] = by_symbol.get(sym, 0.0) + float(r["usd_value"])
+
+    total_usd = sum(by_symbol.values())
+    if total_usd <= 0:
+        return {"error": f"Zero stablecoin value in treasury for '{protocol_slug}'"}
+
+    # Build holdings list with USD-proportional weights
+    holdings = [
+        {"symbol": sym, "weight": usd / total_usd}
+        for sym, usd in by_symbol.items()
+    ]
+
+    result = compute_rqs(holdings)
+
+    if "error" in result and "breakdown" not in result:
+        result["protocol"] = psi_row.get("protocol_name", protocol_slug)
+        result["protocol_slug"] = protocol_slug
+        return result
+
+    # Enrich with protocol context
+    psi_score = float(psi_row["overall_score"]) if psi_row.get("overall_score") else None
+    result["protocol"] = psi_row.get("protocol_name", protocol_slug)
+    result["protocol_slug"] = protocol_slug
+    result["psi_score"] = round(psi_score, 2) if psi_score else None
+    result["treasury_total_usd"] = round(total_usd, 2)
+
+    # Add USD values to breakdown
+    for item in result.get("breakdown", []):
+        item["usd_value"] = round(by_symbol.get(item["symbol"], 0), 2)
+
+    # Attest state
+    try:
+        from app.state_attestation import attest_state
+        attest_state("rqs_composition", [
+            {"protocol": protocol_slug, "rqs_score": result.get("rqs_score")},
+        ], entity_id=protocol_slug)
+    except Exception:
+        pass  # attestation is non-critical
+
+    return result
+
+
+def compute_rqs_all() -> dict:
+    """Compute RQS for all protocols that have treasury holdings data."""
+    from app.index_definitions.psi_v01 import TARGET_PROTOCOLS
+
+    results = []
+    errors = []
+
+    for slug in TARGET_PROTOCOLS:
+        result = compute_rqs_for_protocol(slug)
+        if "error" in result and "rqs_score" not in result:
+            errors.append({"protocol_slug": slug, "error": result["error"]})
+        else:
+            results.append(result)
+
+    results.sort(key=lambda x: x.get("rqs_score", 0), reverse=True)
+
+    # Attest batch
+    try:
+        from app.state_attestation import attest_state
+        if results:
+            attest_state("rqs_compositions", [
+                {"protocol": r["protocol_slug"], "rqs_score": round(r["rqs_score"], 2)}
+                for r in results if r.get("rqs_score") is not None
+            ])
+    except Exception:
+        pass
+
+    return {
+        "protocols": results,
+        "count": len(results),
+        "skipped": errors,
+        "formula_version": "composition-v1.0.0",
+    }
+
+
 def compute_cqi_matrix():
     """Compute CQI for all stablecoin x protocol combinations."""
     stablecoins = fetch_all("""

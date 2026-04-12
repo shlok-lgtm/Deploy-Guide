@@ -187,6 +187,9 @@ def create_x402_middleware():
         "GET /api/paid/cqi": _route(
             "$0.001", "Composite Quality Index for a stablecoin-protocol pair"
         ),
+        "GET /api/paid/rqs/{slug}": _route(
+            "$0.001", "Reserve Quality Score for a protocol's stablecoin treasury holdings"
+        ),
         "GET /api/paid/pulse/latest": _route(
             "$0.002", "Latest daily system pulse with integrity status"
         ),
@@ -353,6 +356,17 @@ async def paid_cqi(asset: str = Query(...), protocol: str = Query(...)):
     from app.composition import compute_cqi
     result = compute_cqi(asset, protocol)
     if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    result["tier"] = "paid"
+    return result
+
+
+@paid_router.get("/rqs/{slug}")
+async def paid_rqs(slug: str):
+    """Paid: Reserve Quality Score for a protocol's stablecoin treasury."""
+    from app.composition import compute_rqs_for_protocol
+    result = compute_rqs_for_protocol(slug)
+    if "error" in result and "rqs_score" not in result:
         raise HTTPException(status_code=404, detail=result["error"])
     result["tier"] = "paid"
     return result

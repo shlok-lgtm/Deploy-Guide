@@ -4770,6 +4770,27 @@ async def compose_cqi_matrix():
     return compute_cqi_matrix()
 
 
+# =============================================================================
+# RQS (Reserve Quality Score) — Composition API
+# =============================================================================
+
+@app.get("/api/compose/rqs")
+async def compose_rqs_all():
+    """Reserve Quality Score for all PSI-scored protocols."""
+    from app.composition import compute_rqs_all
+    return compute_rqs_all()
+
+
+@app.get("/api/compose/rqs/{slug}")
+async def compose_rqs_protocol(slug: str):
+    """Reserve Quality Score for a single protocol's stablecoin treasury."""
+    from app.composition import compute_rqs_for_protocol
+    result = compute_rqs_for_protocol(slug)
+    if "error" in result and "rqs_score" not in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
 @app.get("/api/specs/composition")
 async def get_composition_spec():
     """Published composition grammar specification."""
