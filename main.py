@@ -698,7 +698,7 @@ def main():
     free_port(port)
     logger.info(f"Starting API on port {port}")
 
-    workers = int(os.environ.get("WEB_WORKERS", "2"))
+    workers = int(os.environ.get("WEB_WORKERS", "1"))
     uvicorn.run(
         "app.server:app",
         host="0.0.0.0",
