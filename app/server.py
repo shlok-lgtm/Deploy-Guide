@@ -4605,26 +4605,170 @@ async def list_indices():
     """List all available index definitions."""
     from app.index_definitions.sii_v1 import SII_V1_DEFINITION
     from app.index_definitions.psi_v01 import PSI_V01_DEFINITION
+    from app.index_definitions.lsti_v01 import LSTI_V01_DEFINITION
+    from app.index_definitions.bri_v01 import BRI_V01_DEFINITION
+    from app.index_definitions.dohi_v01 import DOHI_V01_DEFINITION
+    from app.index_definitions.vsri_v01 import VSRI_V01_DEFINITION
+    from app.index_definitions.cxri_v01 import CXRI_V01_DEFINITION
+    from app.index_definitions.tti_v01 import TTI_V01_DEFINITION
+
+    def _idx_entry(defn, status):
+        return {
+            "id": defn["index_id"],
+            "version": defn["version"],
+            "name": defn["name"],
+            "entity_type": defn["entity_type"],
+            "components": len(defn["components"]),
+            "status": status,
+        }
+
     return {
         "indices": [
-            {
-                "id": SII_V1_DEFINITION["index_id"],
-                "version": SII_V1_DEFINITION["version"],
-                "name": SII_V1_DEFINITION["name"],
-                "entity_type": SII_V1_DEFINITION["entity_type"],
-                "components": len(SII_V1_DEFINITION["components"]),
-                "status": "live",
-            },
-            {
-                "id": PSI_V01_DEFINITION["index_id"],
-                "version": PSI_V01_DEFINITION["version"],
-                "name": PSI_V01_DEFINITION["name"],
-                "entity_type": PSI_V01_DEFINITION["entity_type"],
-                "components": len(PSI_V01_DEFINITION["components"]),
-                "status": "live",
-            },
+            _idx_entry(SII_V1_DEFINITION, "live"),
+            _idx_entry(PSI_V01_DEFINITION, "live"),
+            _idx_entry(LSTI_V01_DEFINITION, "accruing"),
+            _idx_entry(BRI_V01_DEFINITION, "accruing"),
+            _idx_entry(DOHI_V01_DEFINITION, "accruing"),
+            _idx_entry(VSRI_V01_DEFINITION, "accruing"),
+            _idx_entry(CXRI_V01_DEFINITION, "accruing"),
+            _idx_entry(TTI_V01_DEFINITION, "accruing"),
         ]
     }
+
+
+# =============================================================================
+# Circle 7 Index API Endpoints (silent accumulation — internal only)
+# =============================================================================
+
+@app.get("/api/{index_id}/scores")
+async def circle7_scores(index_id: str):
+    """Latest scores for a Circle 7 index (lsti, bri, dohi, vsri, cxri, tti)."""
+    valid_indices = {"lsti", "bri", "dohi", "vsri", "cxri", "tti"}
+    if index_id not in valid_indices:
+        raise HTTPException(status_code=404, detail=f"Unknown index: {index_id}")
+
+    rows = fetch_all("""
+        SELECT DISTINCT ON (entity_slug)
+            entity_slug, entity_name, overall_score,
+            category_scores, confidence, confidence_tag,
+            scored_date, computed_at
+        FROM generic_index_scores
+        WHERE index_id = %s
+        ORDER BY entity_slug, computed_at DESC
+    """, (index_id,))
+
+    return {
+        "index_id": index_id,
+        "count": len(rows),
+        "scores": [
+            {
+                "entity": r["entity_slug"],
+                "name": r["entity_name"],
+                "score": float(r["overall_score"]) if r["overall_score"] else None,
+                "category_scores": r["category_scores"],
+                "confidence": r["confidence"],
+                "confidence_tag": r["confidence_tag"],
+                "scored_date": str(r["scored_date"]),
+            }
+            for r in rows
+        ],
+    }
+
+
+@app.get("/api/{index_id}/scores/{entity_slug}")
+async def circle7_score_detail(index_id: str, entity_slug: str):
+    """Detailed score breakdown for a specific entity in a Circle 7 index."""
+    valid_indices = {"lsti", "bri", "dohi", "vsri", "cxri", "tti"}
+    if index_id not in valid_indices:
+        raise HTTPException(status_code=404, detail=f"Unknown index: {index_id}")
+
+    row = fetch_one("""
+        SELECT entity_slug, entity_name, overall_score,
+               category_scores, component_scores, raw_values,
+               formula_version, inputs_hash, confidence, confidence_tag,
+               scored_date, computed_at
+        FROM generic_index_scores
+        WHERE index_id = %s AND entity_slug = %s
+        ORDER BY computed_at DESC LIMIT 1
+    """, (index_id, entity_slug))
+
+    if not row:
+        raise HTTPException(status_code=404, detail=f"No score found for {entity_slug} in {index_id}")
+
+    return {
+        "index_id": index_id,
+        "entity": row["entity_slug"],
+        "name": row["entity_name"],
+        "score": float(row["overall_score"]) if row["overall_score"] else None,
+        "category_scores": row["category_scores"],
+        "component_scores": row["component_scores"],
+        "raw_values": row["raw_values"],
+        "formula_version": row["formula_version"],
+        "inputs_hash": row["inputs_hash"],
+        "confidence": row["confidence"],
+        "confidence_tag": row["confidence_tag"],
+        "scored_date": str(row["scored_date"]),
+        "computed_at": str(row["computed_at"]),
+    }
+
+
+@app.get("/api/{index_id}/definition")
+async def circle7_definition(index_id: str):
+    """Return the full index definition for a Circle 7 index."""
+    definitions = {}
+    try:
+        from app.index_definitions.lsti_v01 import LSTI_V01_DEFINITION
+        from app.index_definitions.bri_v01 import BRI_V01_DEFINITION
+        from app.index_definitions.dohi_v01 import DOHI_V01_DEFINITION
+        from app.index_definitions.vsri_v01 import VSRI_V01_DEFINITION
+        from app.index_definitions.cxri_v01 import CXRI_V01_DEFINITION
+        from app.index_definitions.tti_v01 import TTI_V01_DEFINITION
+        definitions = {
+            "lsti": LSTI_V01_DEFINITION,
+            "bri": BRI_V01_DEFINITION,
+            "dohi": DOHI_V01_DEFINITION,
+            "vsri": VSRI_V01_DEFINITION,
+            "cxri": CXRI_V01_DEFINITION,
+            "tti": TTI_V01_DEFINITION,
+        }
+    except ImportError:
+        pass
+
+    defn = definitions.get(index_id)
+    if not defn:
+        raise HTTPException(status_code=404, detail=f"Unknown index: {index_id}")
+
+    return {
+        "definition": defn,
+        "component_count": len(defn.get("components", {})),
+        "category_count": len(defn.get("categories", {})),
+    }
+
+
+# =============================================================================
+# Attribution API (Governance Events / RPI Delta)
+# =============================================================================
+
+@app.get("/api/attribution")
+async def attribution_query(
+    protocol: str = None,
+    contributor: str = None,
+    period: int = 90,
+):
+    """
+    Attribution query endpoint.
+    - ?protocol={slug}&period={days} — PSI trajectory + governance events overlay
+    - ?contributor={tag} — cross-protocol contributor impact analysis
+    """
+    if not protocol and not contributor:
+        raise HTTPException(status_code=400, detail="Provide either protocol or contributor parameter")
+
+    if protocol:
+        from app.collectors.governance_events import get_attribution_by_protocol
+        return get_attribution_by_protocol(protocol, period)
+    else:
+        from app.collectors.governance_events import get_attribution_by_contributor
+        return get_attribution_by_contributor(contributor)
 
 
 # =============================================================================

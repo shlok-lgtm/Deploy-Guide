@@ -644,6 +644,80 @@ async def run_scoring_cycle():
         logger.warning(f"PSI expansion pipeline failed: {e}")
 
     # -------------------------------------------------------------------------
+    # Circle 7 Index Scoring — LSTI, BRI, DOHI, VSRI, CXRI, TTI
+    # Runs after PSI, uses DeFiLlama/CoinGecko (no extra explorer budget)
+    # -------------------------------------------------------------------------
+    try:
+        from app.collectors.lst_collector import run_lsti_scoring
+        logger.info("Running LSTI scoring cycle...")
+        lsti_results = run_lsti_scoring()
+        logger.info(f"LSTI scoring complete: {len(lsti_results)} LSTs scored")
+    except Exception as e:
+        logger.warning(f"LSTI scoring failed: {e}")
+
+    try:
+        from app.collectors.bridge_collector import run_bri_scoring
+        logger.info("Running BRI scoring cycle...")
+        bri_results = run_bri_scoring()
+        logger.info(f"BRI scoring complete: {len(bri_results)} bridges scored")
+    except Exception as e:
+        logger.warning(f"BRI scoring failed: {e}")
+
+    try:
+        from app.collectors.vault_collector import run_vsri_scoring
+        logger.info("Running VSRI scoring cycle...")
+        vsri_results = run_vsri_scoring()
+        logger.info(f"VSRI scoring complete: {len(vsri_results)} vaults scored")
+    except Exception as e:
+        logger.warning(f"VSRI scoring failed: {e}")
+
+    try:
+        from app.collectors.cex_collector import run_cxri_scoring
+        logger.info("Running CXRI scoring cycle...")
+        cxri_results = run_cxri_scoring()
+        logger.info(f"CXRI scoring complete: {len(cxri_results)} exchanges scored")
+    except Exception as e:
+        logger.warning(f"CXRI scoring failed: {e}")
+
+    try:
+        from app.collectors.tti_collector import run_tti_scoring
+        logger.info("Running TTI scoring cycle...")
+        tti_results = run_tti_scoring()
+        logger.info(f"TTI scoring complete: {len(tti_results)} treasury products scored")
+    except Exception as e:
+        logger.warning(f"TTI scoring failed: {e}")
+
+    # -------------------------------------------------------------------------
+    # Daily-gated collectors: governance events + DOHI (depend on Snapshot/Tally)
+    # -------------------------------------------------------------------------
+    try:
+        last_gov_row = fetch_one(
+            "SELECT MAX(created_at) AS latest FROM governance_events WHERE created_at > NOW() - INTERVAL '48 hours'"
+        )
+        gov_age_hours = 25
+        if last_gov_row and last_gov_row.get("latest"):
+            latest = last_gov_row["latest"]
+            if latest.tzinfo is None:
+                latest = latest.replace(tzinfo=timezone.utc)
+            gov_age_hours = (datetime.now(timezone.utc) - latest).total_seconds() / 3600
+
+        if gov_age_hours >= 24:
+            from app.collectors.governance_events import run_governance_event_collection
+            logger.info("Running governance event collection...")
+            gov_result = run_governance_event_collection()
+            logger.info(f"Governance events: {gov_result.get('new_events', 0)} new across {gov_result.get('protocols_processed', 0)} protocols")
+
+            # DOHI scoring runs after governance event collection
+            from app.collectors.dao_collector import run_dohi_scoring
+            logger.info("Running DOHI scoring cycle...")
+            dohi_results = run_dohi_scoring()
+            logger.info(f"DOHI scoring complete: {len(dohi_results)} DAOs scored")
+        else:
+            logger.info(f"Governance events/DOHI skipped — last ran {gov_age_hours:.1f}h ago")
+    except Exception as e:
+        logger.warning(f"Governance events/DOHI pipeline failed: {e}")
+
+    # -------------------------------------------------------------------------
     # CDA collection — daily gate via DB timestamp
     # -------------------------------------------------------------------------
     try:
