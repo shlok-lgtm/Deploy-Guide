@@ -142,13 +142,14 @@ def compute_rqs(holdings: list[dict]) -> dict:
     scored_weight = 0.0
     weighted_sum = 0.0
     warnings = []
+    oldest_sii_at = None  # track the oldest SII computed_at
 
     for h in holdings:
         symbol = h.get("symbol", "").upper()
         weight = h.get("weight", 0) / raw_weight_sum  # normalise
 
         sii_row = fetch_one("""
-            SELECT s.overall_score, s.component_count
+            SELECT s.overall_score, s.component_count, s.computed_at
             FROM scores s
             JOIN stablecoins st ON st.id = s.stablecoin_id
             WHERE UPPER(st.symbol) = UPPER(%s)
@@ -160,6 +161,11 @@ def compute_rqs(holdings: list[dict]) -> dict:
             contribution = round(weight * sii_score, 4)
             weighted_sum += contribution
             scored_weight += weight
+
+            sii_at = sii_row.get("computed_at")
+            if sii_at and (oldest_sii_at is None or sii_at < oldest_sii_at):
+                oldest_sii_at = sii_at
+
             breakdown.append({
                 "symbol": symbol,
                 "weight": round(weight, 4),
@@ -193,7 +199,7 @@ def compute_rqs(holdings: list[dict]) -> dict:
     from app.scoring_engine import compute_confidence_tag
     conf = compute_confidence_tag(0, 0, scored_coverage)
 
-    return {
+    result = {
         "composite_id": "rqs",
         "name": "Reserve Quality Score",
         "rqs_score": rqs_score,
@@ -205,6 +211,11 @@ def compute_rqs(holdings: list[dict]) -> dict:
         "method": "weighted_average",
         "formula_version": "composition-v1.0.0",
     }
+
+    if oldest_sii_at:
+        result["sii_scored_at"] = oldest_sii_at.isoformat() if hasattr(oldest_sii_at, "isoformat") else str(oldest_sii_at)
+
+    return result
 
 
 def compute_rqs_for_protocol(protocol_slug: str) -> dict:
@@ -225,9 +236,9 @@ def compute_rqs_for_protocol(protocol_slug: str) -> dict:
     if not psi_row:
         return {"error": f"Protocol '{protocol_slug}' not found in PSI scores"}
 
-    # Fetch stablecoin treasury holdings
+    # Fetch stablecoin treasury holdings + snapshot date
     rows = fetch_all("""
-        SELECT token_symbol, usd_value, sii_score, is_stablecoin
+        SELECT token_symbol, usd_value, sii_score, is_stablecoin, snapshot_date
         FROM protocol_treasury_holdings
         WHERE protocol_slug = %s AND is_stablecoin = TRUE
           AND snapshot_date = (
@@ -244,6 +255,8 @@ def compute_rqs_for_protocol(protocol_slug: str) -> dict:
             "protocol": psi_row.get("protocol_name", protocol_slug),
             "protocol_slug": protocol_slug,
         }
+
+    holdings_snapshot_date = rows[0].get("snapshot_date") if rows else None
 
     # Aggregate by symbol (may appear on multiple chains)
     by_symbol: dict[str, float] = {}
@@ -278,6 +291,22 @@ def compute_rqs_for_protocol(protocol_slug: str) -> dict:
     # Add USD values to breakdown
     for item in result.get("breakdown", []):
         item["usd_value"] = round(by_symbol.get(item["symbol"], 0), 2)
+
+    # Surface staleness: data_as_of = older of holdings snapshot vs SII scores
+    if holdings_snapshot_date:
+        snap_str = holdings_snapshot_date.isoformat() if hasattr(holdings_snapshot_date, "isoformat") else str(holdings_snapshot_date)
+        result["holdings_as_of"] = snap_str
+
+    sii_at_str = result.get("sii_scored_at")
+    if holdings_snapshot_date and sii_at_str:
+        # Compare date portion of both timestamps
+        snap_date_str = str(holdings_snapshot_date)[:10]
+        sii_date_str = sii_at_str[:10]
+        result["data_as_of"] = min(snap_date_str, sii_date_str)
+    elif holdings_snapshot_date:
+        result["data_as_of"] = str(holdings_snapshot_date)[:10]
+    elif sii_at_str:
+        result["data_as_of"] = sii_at_str[:10]
 
     # Attest state
     try:
