@@ -66,6 +66,23 @@ _redact_filter = _RedactApiKeysFilter()
 for _logger_name in ("httpx", "httpcore", "urllib3", "requests"):
     logging.getLogger(_logger_name).addFilter(_redact_filter)
 
+class _ResponseCache:
+    """Simple TTL cache for expensive endpoint responses."""
+    def __init__(self):
+        self._store: dict = {}
+
+    def get(self, key: str, ttl: int = 60):
+        cached = self._store.get(key)
+        if cached and (time.time() - cached[1]) < ttl:
+            return cached[0]
+        return None
+
+    def set(self, key: str, value):
+        self._store[key] = (value, time.time())
+
+_cache = _ResponseCache()
+
+
 app = FastAPI(
     title="Basis Protocol API",
     description="Standardized risk surfaces for on-chain finance",
@@ -622,6 +639,10 @@ def check_methodology_version(requested_version, current_version="v1.0.0"):
 @app.get("/api/health")
 async def get_health():
     """System health check — powered by the integrity layer."""
+    cached = _cache.get("health", ttl=60)
+    if cached:
+        return cached
+
     db_status = db_health_check()
     db_ok = db_status.get("status") == "healthy"
 
@@ -629,7 +650,6 @@ async def get_health():
         from app.integrity import check_all
         result = check_all()
     except Exception:
-        # DB down or integrity module failed — return structured unhealthy
         return {
             "status": "unhealthy",
             "database": db_status,
@@ -638,10 +658,9 @@ async def get_health():
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
-    # If DB itself is unhealthy, override to unhealthy regardless of domain checks
     overall = result["status"] if db_ok else "unhealthy"
 
-    return {
+    response_data = {
         "status": overall,
         "database": db_status,
         "domains": result["domains"],
@@ -649,13 +668,20 @@ async def get_health():
         "formula_version": FORMULA_VERSION,
         "timestamp": result["checked_at"],
     }
+    _cache.set("health", response_data)
+    return response_data
 
 
 @app.get("/api/integrity")
 async def get_integrity():
     """Full data integrity status across all domains."""
+    cached = _cache.get("integrity", ttl=60)
+    if cached:
+        return cached
     from app.integrity import check_all
-    return check_all()
+    result = check_all()
+    _cache.set("integrity", result)
+    return result
 
 
 @app.get("/api/integrity/{domain}")
@@ -675,7 +701,12 @@ async def get_integrity_domain(domain: str):
 @app.get("/api/scores")
 async def get_scores(response: Response, methodology_version: Optional[str] = Query(default=None)):
     """Get current SII scores for all stablecoins."""
-    response.headers["Cache-Control"] = "no-store, max-age=0"
+    cache_key = f"scores:{methodology_version or 'latest'}"
+    cached = _cache.get(cache_key, ttl=30)
+    if cached:
+        response.headers["Cache-Control"] = "public, max-age=30"
+        response.headers["X-Cache"] = "HIT"
+        return cached
     pinned = check_methodology_version(methodology_version)
     rows = fetch_all("""
         SELECT s.*, st.name, st.symbol, st.issuer, st.contract AS token_contract
@@ -747,7 +778,7 @@ async def get_scores(response: Response, methodology_version: Optional[str] = Qu
     except Exception:
         pass
 
-    return {
+    scores_result = {
         "stablecoins": results,
         "count": len(results),
         "formula_version": FORMULA_VERSION,
@@ -757,6 +788,10 @@ async def get_scores(response: Response, methodology_version: Optional[str] = Qu
         "data_source_count": len(data_sources),
         "sii_component_count": len(COMPONENT_NORMALIZATIONS),
     }
+    _cache.set(cache_key, scores_result)
+    response.headers["Cache-Control"] = "public, max-age=30"
+    response.headers["X-Cache"] = "MISS"
+    return scores_result
 
 
 # =============================================================================
@@ -3607,6 +3642,9 @@ _SOLANA_PROTOCOL_SLUGS = {"drift", "jupiter-perpetual-exchange", "raydium"}
 @app.get("/api/psi/scores")
 async def psi_scores():
     """All scored protocols — latest score per protocol."""
+    cached = _cache.get("psi_scores", ttl=30)
+    if cached:
+        return cached
     rows = fetch_all("""
         SELECT DISTINCT ON (protocol_slug)
             id, protocol_slug, protocol_name, overall_score, grade,
@@ -3645,13 +3683,15 @@ async def psi_scores():
             "formula_version": row.get("formula_version"),
             "computed_at": row["computed_at"].isoformat() if row.get("computed_at") else None,
         })
-    return {
+    psi_result = {
         "protocols": results,
         "count": len(results),
         "index": "psi",
         "version": PSI_V01_DEFINITION["version"],
         "methodology_version": f"psi-{PSI_V01_DEFINITION['version']}",
     }
+    _cache.set("psi_scores", psi_result)
+    return psi_result
 
 
 @app.get("/api/psi/definition")
@@ -6243,6 +6283,13 @@ def _register_spa_catch_all(app_instance):
     async def serve_spa(request: Request, full_path: str):
         if full_path.startswith("api/") or full_path.startswith("docs") or full_path.startswith("openapi") or full_path.startswith("admin") or full_path.startswith("developers"):
             raise HTTPException(status_code=404, detail="Not found")
+
+        # Fast path: static assets — skip all SSR attempts
+        if full_path.startswith("assets/") or full_path == "favicon.ico":
+            index_path = os.path.join(FRONTEND_DIR, "index.html")
+            if os.path.exists(index_path):
+                return FileResponse(index_path, headers={"Cache-Control": "no-cache"})
+            return Response(status_code=404)
 
         # Proof pages are server-rendered for ALL visitors (not just bots)
         try:

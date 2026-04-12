@@ -41,19 +41,37 @@ def hash_api_key(key_string: str) -> str:
     return hashlib.sha256(key_string.encode()).hexdigest()
 
 
+import time as _time
+
+# In-memory cache for API key validation — avoids DB round-trip on every request
+_key_cache: dict[str, tuple] = {}  # key_string -> (key_id, timestamp)
+_KEY_CACHE_TTL = 300  # 5 minutes
+
+
 def validate_api_key(key_string: str) -> Optional[int]:
-    """Returns the api_keys.id if the key exists and is active, else None."""
+    """Returns the api_keys.id if the key exists and is active, else None.
+    Results cached for 5 minutes to avoid DB query on every request."""
+    if not key_string:
+        return None
+
+    now = _time.time()
+    cached = _key_cache.get(key_string)
+    if cached is not None and (now - cached[1]) < _KEY_CACHE_TTL:
+        return cached[0]
+
     try:
         from app.database import fetch_one
         row = fetch_one(
             "SELECT id FROM api_keys WHERE key = %s AND is_active = TRUE",
             (key_string,)
         )
-        if row:
-            return row["id"]
+        result = row["id"] if row else None
     except Exception as e:
         logger.debug(f"validate_api_key error: {e}")
-    return None
+        result = None
+
+    _key_cache[key_string] = (result, now)
+    return result
 
 
 def create_api_key(name: str) -> str:
