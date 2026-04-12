@@ -651,7 +651,7 @@ async def run_scoring_cycle():
             latest = last_cda["latest"]
             if latest.tzinfo is None:
                 latest = latest.replace(tzinfo=timezone)
-            cda_age_hours = (datetime.now(timezone) - latest).total_seconds() / 3600
+            cda_age_hours = (datetime.now(timezone.utc) - latest).total_seconds() / 3600
 
         if cda_age_hours >= cda_interval_hours:
             logger.info("Running CDA collection pipeline...")
@@ -691,7 +691,7 @@ async def run_scoring_cycle():
             latest = last_expansion_row["latest"]
             if latest.tzinfo is None:
                 latest = latest.replace(tzinfo=timezone)
-            wallet_expansion_age = (datetime.now(timezone) - latest).total_seconds() / 3600
+            wallet_expansion_age = (datetime.now(timezone.utc) - latest).total_seconds() / 3600
 
         if wallet_expansion_age >= 24:
             # Wallet expansion — seed new addresses from under-covered stablecoins
