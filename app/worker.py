@@ -541,16 +541,20 @@ async def score_stablecoin(client: httpx.AsyncClient, stablecoin_id: str) -> dic
 
 
 # =============================================================================
-# Orchestrator: Score all stablecoins
+# Orchestrator: Fast cycle — critical scoring + lightweight tasks (<15 min)
 # =============================================================================
 
-async def run_scoring_cycle():
-    """Score all stablecoins enabled in the database (falls back to registry)."""
-    start = time.time()
+async def run_fast_cycle():
+    """Critical scoring + lightweight tasks. Must complete in <15 min."""
+    fast_start = time.time()
+    logger.info("=== Fast cycle start ===")
+
+    # -------------------------------------------------------------------------
+    # SII scoring — score all stablecoins
+    # -------------------------------------------------------------------------
     stablecoins = get_scoring_ids_from_db()
-    
     logger.info(f"Starting scoring cycle for {len(stablecoins)} stablecoins")
-    
+
     results = []
     async with httpx.AsyncClient(timeout=30) as client:
         for sid in stablecoins:
@@ -578,14 +582,16 @@ async def run_scoring_cycle():
             except Exception as e:
                 logger.error(f"Failed to score {sid}: {e}")
                 results.append({"stablecoin": sid, "error": str(e)})
-    
-    elapsed = time.time() - start
+
+    sii_elapsed = time.time() - fast_start
     successes = sum(1 for r in results if "score" in r)
     logger.info(
-        f"Scoring cycle complete: {successes}/{len(stablecoins)} scored in {elapsed:.0f}s"
+        f"Scoring cycle complete: {successes}/{len(stablecoins)} scored in {sii_elapsed:.0f}s"
     )
 
+    # -------------------------------------------------------------------------
     # PSI scoring — runs after SII, uses DeFiLlama (no explorer budget)
+    # -------------------------------------------------------------------------
     try:
         from app.collectors.psi_collector import run_psi_scoring
         logger.info("Running PSI scoring cycle...")
@@ -601,47 +607,133 @@ async def run_scoring_cycle():
     except Exception as e:
         logger.warning(f"PSI scoring failed: {e}")
 
-    # PSI expansion pipeline — daily gate (discover → enrich → promote)
+    # -------------------------------------------------------------------------
+    # Verification agent cycle — every cycle
+    # -------------------------------------------------------------------------
     try:
-        from app.collectors.psi_collector import (
-            collect_collateral_exposure,
-            sync_collateral_to_backlog,
-            discover_protocols,
-            enrich_protocol_backlog,
-            promote_eligible_protocols,
-        )
-        # Only run expansion once per day — check last run from DB
-        last_expansion = fetch_one(
-            "SELECT MAX(snapshot_date) AS latest FROM protocol_collateral_exposure"
-        )
-        last_date = last_expansion["latest"] if last_expansion else None
-        hours_since = 25  # default: run if no prior record
-        if last_date:
-            from datetime import date
-            days_diff = (date.today() - last_date).days if isinstance(last_date, date) else 1
-            hours_since = days_diff * 24
-
-        if hours_since >= 24:
-            logger.info("Running PSI expansion pipeline...")
-            collect_collateral_exposure()
-            synced = sync_collateral_to_backlog()
-            discovered = discover_protocols()
-            enriched = enrich_protocol_backlog()
-            promoted = promote_eligible_protocols()
-            logger.info(
-                f"PSI expansion: {synced} stablecoins synced, {discovered} discovered, "
-                f"{enriched} enriched, {promoted} promoted"
-            )
-            try:
-                from app.state_attestation import attest_state
-                if discovered or promoted:
-                    attest_state("psi_discoveries", [{"synced": synced, "discovered": discovered, "enriched": enriched, "promoted": promoted}])
-            except Exception as ae:
-                logger.debug(f"PSI discovery attestation skipped: {ae}")
-        else:
-            logger.info(f"PSI expansion skipped — last ran {hours_since:.0f}h ago")
+        from app.agent.watcher import run_agent_cycle
+        result = run_agent_cycle()
+        if result:
+            logger.info(f"Agent cycle: {result.get('assessments', 0)} assessments")
     except Exception as e:
-        logger.warning(f"PSI expansion pipeline failed: {e}")
+        logger.warning(f"Agent cycle error: {e}")
+
+    # -------------------------------------------------------------------------
+    # Health sweep + alerting — every cycle
+    # -------------------------------------------------------------------------
+    try:
+        from app.ops.tools.health_checker import run_all_checks
+        logger.info("Running health sweep...")
+        health_results = run_all_checks()
+        healthy_count = sum(1 for r in health_results if r.get("status") == "healthy")
+        total_count = len(health_results)
+        logger.info(f"Health sweep: {healthy_count}/{total_count} healthy")
+
+        failures = [r for r in health_results if r.get("status") in ("degraded", "down")]
+        if failures:
+            try:
+                from app.ops.tools.alerter import check_and_alert_health
+                await check_and_alert_health(health_results)
+                logger.info(f"Health alerts dispatched for {len(failures)} failing system(s)")
+            except Exception as alert_err:
+                logger.warning(f"Health alert dispatch failed: {alert_err}")
+    except Exception as e:
+        logger.warning(f"Health sweep failed: {e}")
+
+    # -------------------------------------------------------------------------
+    # Generate daily pulse after scoring
+    # -------------------------------------------------------------------------
+    try:
+        from app.pulse_generator import run_daily_pulse
+        run_daily_pulse()
+    except Exception as e:
+        logger.warning(f"Daily pulse generation failed: {e}")
+
+    # -------------------------------------------------------------------------
+    # Daily digest — send operational summary once per 24h
+    # -------------------------------------------------------------------------
+    try:
+        last_digest = fetch_one(
+            "SELECT MAX(sent_at) AS latest FROM ops_alert_log WHERE alert_type = 'daily_digest'"
+        )
+        digest_age_hours = 25
+        if last_digest and last_digest.get("latest"):
+            latest = last_digest["latest"]
+            if latest.tzinfo is None:
+                latest = latest.replace(tzinfo=timezone.utc)
+            digest_age_hours = (datetime.now(timezone.utc) - latest).total_seconds() / 3600
+
+        if digest_age_hours >= 24:
+            logger.info("Assembling daily digest...")
+            from app.ops.tools.health_checker import get_latest_health
+            health = get_latest_health()
+            healthy_cnt = sum(1 for r in health if r.get("status") == "healthy")
+            total_cnt = len(health)
+            failing = [r for r in health if r.get("status") in ("degraded", "down")]
+
+            sii_row = fetch_one("SELECT COUNT(*) as cnt, MAX(calculated_at) as latest FROM scores")
+            sii_count = sii_row["cnt"] if sii_row else 0
+            sii_age = "?"
+            if sii_row and sii_row.get("latest"):
+                _sii_ts = sii_row["latest"]
+                if _sii_ts.tzinfo is None:
+                    _sii_ts = _sii_ts.replace(tzinfo=timezone.utc)
+                sii_age = f"{(datetime.now(timezone.utc) - _sii_ts).total_seconds() / 3600:.1f}"
+
+            psi_row = fetch_one("SELECT COUNT(*) as cnt, MAX(scored_at) as latest FROM psi_scores")
+            psi_count = psi_row["cnt"] if psi_row else 0
+            psi_age = "?"
+            if psi_row and psi_row.get("latest"):
+                _psi_ts = psi_row["latest"]
+                if _psi_ts.tzinfo is None:
+                    _psi_ts = _psi_ts.replace(tzinfo=timezone.utc)
+                psi_age = f"{(datetime.now(timezone.utc) - _psi_ts).total_seconds() / 3600:.1f}"
+
+            db_conns = fetch_one("SELECT count(*) as cnt FROM pg_stat_activity WHERE datname = current_database()")
+            conn_count = db_conns["cnt"] if db_conns else "?"
+
+            failures_summary = ""
+            if failing:
+                failures_summary = "\nFailing systems:\n" + "\n".join(
+                    f"  - {f['system']}: {f.get('status', '?')}" for f in failing
+                )
+
+            msg = (
+                f"Basis Daily Digest\n\n"
+                f"Systems: {healthy_cnt}/{total_cnt} healthy\n"
+                f"SII: {sii_count} coins scored, last: {sii_age}h ago\n"
+                f"PSI: {psi_count} protocols scored, last: {psi_age}h ago\n"
+                f"DB: {conn_count} active connections\n"
+                f"{failures_summary if failing else 'All systems operational.'}"
+            )
+
+            from app.ops.tools.alerter import send_alert as _send_digest
+            await _send_digest("daily_digest", msg)
+            logger.info("Daily digest sent")
+        else:
+            logger.debug(f"Daily digest skipped — last sent {digest_age_hours:.1f}h ago")
+    except Exception as e:
+        logger.warning(f"Daily digest failed: {e}")
+
+    elapsed = time.time() - fast_start
+    logger.info(f"=== Fast cycle complete in {elapsed:.0f}s ===")
+
+    return {
+        "results": results,
+        "successes": successes,
+        "total": len(stablecoins),
+        "elapsed": round(elapsed, 1),
+    }
+
+
+# =============================================================================
+# Orchestrator: Slow cycle — data enrichment tasks (up to 60 min)
+# =============================================================================
+
+async def run_slow_cycle():
+    """Data enrichment tasks. Can take up to 60 min. Doesn't block scoring."""
+    start = time.time()
+    logger.info("=== Slow cycle start ===")
 
     # -------------------------------------------------------------------------
     # RPI scoring — daily gate (governance data changes slowly)
@@ -815,17 +907,6 @@ async def run_scoring_cycle():
         logger.warning(f"Wallet expansion gate check failed: {e}")
 
     # -------------------------------------------------------------------------
-    # Verification agent cycle — every cycle
-    # -------------------------------------------------------------------------
-    try:
-        from app.agent.watcher import run_agent_cycle
-        result = run_agent_cycle()
-        if result:
-            logger.info(f"Agent cycle: {result.get('assessments', 0)} assessments")
-    except Exception as e:
-        logger.warning(f"Agent cycle error: {e}")
-
-    # -------------------------------------------------------------------------
     # Treasury flow detection — every cycle, minimal API budget
     # -------------------------------------------------------------------------
     try:
@@ -879,37 +960,8 @@ async def run_scoring_cycle():
         logger.warning(f"Edge build gate check failed: {e}")
 
     # -------------------------------------------------------------------------
-    # Health sweep + alerting — every cycle
+    # Actor classification
     # -------------------------------------------------------------------------
-    try:
-        from app.ops.tools.health_checker import run_all_checks
-        logger.info("Running health sweep...")
-        health_results = run_all_checks()
-        healthy_count = sum(1 for r in health_results if r.get("status") == "healthy")
-        total_count = len(health_results)
-        logger.info(f"Health sweep: {healthy_count}/{total_count} healthy")
-
-        failures = [r for r in health_results if r.get("status") in ("degraded", "down")]
-        if failures:
-            try:
-                from app.ops.tools.alerter import check_and_alert_health
-                await check_and_alert_health(health_results)
-                logger.info(f"Health alerts dispatched for {len(failures)} failing system(s)")
-            except Exception as alert_err:
-                logger.warning(f"Health alert dispatch failed: {alert_err}")
-    except Exception as e:
-        logger.warning(f"Health sweep failed: {e}")
-
-    # -------------------------------------------------------------------------
-    # Generate daily pulse after all scoring + indexing
-    # -------------------------------------------------------------------------
-    try:
-        from app.pulse_generator import run_daily_pulse
-        run_daily_pulse()
-    except Exception as e:
-        logger.warning(f"Daily pulse generation failed: {e}")
-
-    # Run actor classification after pulse, before discovery
     try:
         from app.actor_classification import classify_all_active
         actor_result = classify_all_active()
@@ -938,77 +990,62 @@ async def run_scoring_cycle():
         logger.debug(f"Provenance attestation skipped: {e}")
 
     # -------------------------------------------------------------------------
-    # Daily digest — send operational summary once per 24h
+    # PSI expansion pipeline — daily gate (discover → enrich → promote)
     # -------------------------------------------------------------------------
     try:
-        last_digest = fetch_one(
-            "SELECT MAX(sent_at) AS latest FROM ops_alert_log WHERE alert_type = 'daily_digest'"
+        from app.collectors.psi_collector import (
+            collect_collateral_exposure,
+            sync_collateral_to_backlog,
+            discover_protocols,
+            enrich_protocol_backlog,
+            promote_eligible_protocols,
         )
-        digest_age_hours = 25
-        if last_digest and last_digest.get("latest"):
-            latest = last_digest["latest"]
-            if latest.tzinfo is None:
-                latest = latest.replace(tzinfo=timezone.utc)
-            digest_age_hours = (datetime.now(timezone.utc) - latest).total_seconds() / 3600
+        # Only run expansion once per day — check last run from DB
+        last_expansion = fetch_one(
+            "SELECT MAX(snapshot_date) AS latest FROM protocol_collateral_exposure"
+        )
+        last_date = last_expansion["latest"] if last_expansion else None
+        hours_since = 25  # default: run if no prior record
+        if last_date:
+            from datetime import date
+            days_diff = (date.today() - last_date).days if isinstance(last_date, date) else 1
+            hours_since = days_diff * 24
 
-        if digest_age_hours >= 24:
-            logger.info("Assembling daily digest...")
-            from app.ops.tools.health_checker import get_latest_health
-            health = get_latest_health()
-            healthy_cnt = sum(1 for r in health if r.get("status") == "healthy")
-            total_cnt = len(health)
-            failing = [r for r in health if r.get("status") in ("degraded", "down")]
-
-            sii_row = fetch_one("SELECT COUNT(*) as cnt, MAX(calculated_at) as latest FROM scores")
-            sii_count = sii_row["cnt"] if sii_row else 0
-            sii_age = "?"
-            if sii_row and sii_row.get("latest"):
-                _sii_ts = sii_row["latest"]
-                if _sii_ts.tzinfo is None:
-                    _sii_ts = _sii_ts.replace(tzinfo=timezone.utc)
-                sii_age = f"{(datetime.now(timezone.utc) - _sii_ts).total_seconds() / 3600:.1f}"
-
-            psi_row = fetch_one("SELECT COUNT(*) as cnt, MAX(scored_at) as latest FROM psi_scores")
-            psi_count = psi_row["cnt"] if psi_row else 0
-            psi_age = "?"
-            if psi_row and psi_row.get("latest"):
-                _psi_ts = psi_row["latest"]
-                if _psi_ts.tzinfo is None:
-                    _psi_ts = _psi_ts.replace(tzinfo=timezone.utc)
-                psi_age = f"{(datetime.now(timezone.utc) - _psi_ts).total_seconds() / 3600:.1f}"
-
-            db_conns = fetch_one("SELECT count(*) as cnt FROM pg_stat_activity WHERE datname = current_database()")
-            conn_count = db_conns["cnt"] if db_conns else "?"
-
-            failures_summary = ""
-            if failing:
-                failures_summary = "\nFailing systems:\n" + "\n".join(
-                    f"  - {f['system']}: {f.get('status', '?')}" for f in failing
-                )
-
-            msg = (
-                f"Basis Daily Digest\n\n"
-                f"Systems: {healthy_cnt}/{total_cnt} healthy\n"
-                f"SII: {sii_count} coins scored, last: {sii_age}h ago\n"
-                f"PSI: {psi_count} protocols scored, last: {psi_age}h ago\n"
-                f"DB: {conn_count} active connections\n"
-                f"{failures_summary if failing else 'All systems operational.'}"
+        if hours_since >= 24:
+            logger.info("Running PSI expansion pipeline...")
+            collect_collateral_exposure()
+            synced = sync_collateral_to_backlog()
+            discovered = discover_protocols()
+            enriched = enrich_protocol_backlog()
+            promoted = promote_eligible_protocols()
+            logger.info(
+                f"PSI expansion: {synced} stablecoins synced, {discovered} discovered, "
+                f"{enriched} enriched, {promoted} promoted"
             )
-
-            from app.ops.tools.alerter import send_alert as _send_digest
-            await _send_digest("daily_digest", msg)
-            logger.info("Daily digest sent")
+            try:
+                from app.state_attestation import attest_state
+                if discovered or promoted:
+                    attest_state("psi_discoveries", [{"synced": synced, "discovered": discovered, "enriched": enriched, "promoted": promoted}])
+            except Exception as ae:
+                logger.debug(f"PSI discovery attestation skipped: {ae}")
         else:
-            logger.debug(f"Daily digest skipped — last sent {digest_age_hours:.1f}h ago")
+            logger.info(f"PSI expansion skipped — last ran {hours_since:.0f}h ago")
     except Exception as e:
-        logger.warning(f"Daily digest failed: {e}")
+        logger.warning(f"PSI expansion pipeline failed: {e}")
 
-    return {
-        "results": results,
-        "successes": successes,
-        "total": len(stablecoins),
-        "elapsed": round(elapsed, 1),
-    }
+    elapsed = time.time() - start
+    logger.info(f"=== Slow cycle complete in {elapsed:.0f}s ===")
+
+
+# =============================================================================
+# Orchestrator: Full cycle wrapper (backward compat)
+# =============================================================================
+
+async def run_scoring_cycle():
+    """Full cycle — used for single-run mode and backward compat."""
+    result = await run_fast_cycle()
+    await run_slow_cycle()
+    return result
 
 
 # =============================================================================
@@ -1050,7 +1087,8 @@ async def main():
     except Exception as e:
         logger.warning(f"Worker startup alert failed: {e}")
 
-    CYCLE_TIMEOUT = 45 * 60  # 45 minutes max per scoring cycle
+    FAST_CYCLE_TIMEOUT = 15 * 60   # 15 minutes max for fast cycle
+    SLOW_CYCLE_TIMEOUT = 60 * 60   # 60 minutes max for slow cycle
 
     try:
         if args.coin:
@@ -1059,26 +1097,36 @@ async def main():
                 print(result)
         elif args.loop:
             logger.info(f"Starting worker loop (interval: {args.interval} min)")
-            gov_cycle_counter = 0
+            cycle_counter = 0
             while True:
+                # Fast cycle — ALWAYS runs, must stay under 15 min
                 try:
-                    await asyncio.wait_for(run_scoring_cycle(), timeout=CYCLE_TIMEOUT)
+                    await asyncio.wait_for(run_fast_cycle(), timeout=FAST_CYCLE_TIMEOUT)
                 except asyncio.TimeoutError:
-                    logger.error(f"Scoring cycle exceeded {CYCLE_TIMEOUT}s timeout — aborting cycle")
-                
-                # Run governance crawl every 6 SII cycles (~6 hours)
-                gov_cycle_counter += 1
-                if gov_cycle_counter % 6 == 0:
+                    logger.error("Fast cycle exceeded 15-minute timeout")
+
+                # Slow cycle — runs every 3rd cycle (every ~3 hours)
+                # This prevents slow tasks from delaying scoring
+                cycle_counter += 1
+                if cycle_counter % 3 == 0:
+                    try:
+                        await asyncio.wait_for(run_slow_cycle(), timeout=SLOW_CYCLE_TIMEOUT)
+                    except asyncio.TimeoutError:
+                        logger.error("Slow cycle exceeded 60-minute timeout")
+
+                # Governance crawl — every 6th cycle (~6 hours)
+                if cycle_counter % 6 == 0:
                     try:
                         from app.governance import run_crawl as gov_crawl
                         logger.info("Running governance crawl...")
                         gov_crawl(since_days=7)
                     except Exception as e:
                         logger.warning(f"Governance crawl failed: {e}")
-                
+
                 logger.info(f"Sleeping {args.interval} minutes...")
                 await asyncio.sleep(args.interval * 60)
         else:
+            # Single-run mode: run both cycles (backward compat)
             await run_scoring_cycle()
     finally:
         close_pool()
