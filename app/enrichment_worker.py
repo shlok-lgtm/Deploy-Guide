@@ -750,7 +750,7 @@ async def run_enrichment_pipeline() -> dict:
 
     async def _run_wallet_graph_expansion():
         from app.data_layer.wallet_expansion import run_wallet_graph_expansion
-        return await run_wallet_graph_expansion(target_new_wallets=10_000, max_etherscan_calls=250_000)
+        return await run_wallet_graph_expansion(target_new_wallets=10_000, max_etherscan_calls=190_000)
 
     pipeline.add(EnrichmentTask(
         name="wallet_graph_expansion", func=_run_wallet_graph_expansion,

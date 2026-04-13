@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS api_provider_limits (
 INSERT INTO api_provider_limits (provider, calls_per_second, calls_per_minute, calls_per_day, calls_per_month, plan_tier, notes)
 VALUES
     ('coingecko', 8.3, 500, 16600, 500000, 'analyst', 'CoinGecko Analyst plan. Overage: $250 per extra 500K.'),
-    ('etherscan', 5, 300, 432000, NULL, 'pro', 'Etherscan Pro. 5 req/s. V2 multi-chain (ETH+Base+Arb on one key). No monthly cap.'),
+    ('etherscan', 10, 600, 200000, NULL, 'standard', 'Etherscan Standard. 10 req/s. 200K/day hard cap. V2 multi-chain (ETH+Base+Arb on one key).'),
     ('blockscout', 4.5, 270, 388800, NULL, 'free', 'Blockscout Free. ~4.5 req/s. No monthly cap.'),
     ('defillama', NULL, NULL, NULL, NULL, 'free', 'DeFiLlama Free. No key required. Generous limits.'),
     ('snapshot', NULL, NULL, NULL, NULL, 'free', 'Snapshot GraphQL. No key required.'),

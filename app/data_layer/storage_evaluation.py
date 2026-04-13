@@ -169,6 +169,14 @@ def get_storage_evaluation() -> dict:
         estimated_cost = 69 + overage_gb * 0.50
         recommended_tier = f"Scale ($69/month + ${overage_gb * 0.50:.0f}/month overage)"
 
+    # API budget reference (for cross-check)
+    api_budgets = {
+        "coingecko": {"daily": 16_600, "monthly": 500_000, "plan": "Analyst"},
+        "etherscan": {"daily": 200_000, "monthly": None, "plan": "Standard (10 req/s, 200K/day cap)"},
+        "blockscout": {"daily": None, "monthly": None, "plan": "Free"},
+        "defillama": {"daily": None, "monthly": None, "plan": "Free"},
+    }
+
     return {
         "summary": {
             "total_current_rows": total_current_rows,
