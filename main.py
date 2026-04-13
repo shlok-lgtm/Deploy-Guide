@@ -171,9 +171,10 @@ def run_worker_loop():
 
         try:
             asyncio.run(run_scoring_cycle())
-            # SII attestation happens inside worker.py per-stablecoin
         except Exception as e:
             logger.error(f"Worker cycle error: {e}")
+
+        logger.error("=== SCORING CYCLE COMPLETE ===")
 
         # Wallet batch re-indexing — rescan stale wallets every cycle
         # Uses addresstokenbalance (Etherscan V2) or Blockscout per-address API
@@ -300,11 +301,8 @@ def run_worker_loop():
 
         # =====================================================================
         # Universal Data Layer collectors — guaranteed to run every cycle
-        # These also run inside run_enrichment_pipeline() but this is the
-        # belt-and-suspenders path: if the enrichment pipeline fails, these
-        # still execute.
         # =====================================================================
-        logger.info("Running universal data layer collectors...")
+        logger.error("=== DATA LAYER SECTION REACHED ===")
 
         async def _run_data_layer_collectors():
             """Run all data layer collectors in one async context."""
@@ -319,9 +317,9 @@ def run_worker_loop():
                 try:
                     r = await coro_fn()
                     results[name] = r
-                    logger.info(f"  {name}: {r}")
+                    logger.error(f"=== {name} COMPLETE: {r} ===")
                 except Exception as e:
-                    logger.error(f"  {name} FAILED: {type(e).__name__}: {e}")
+                    logger.error(f"=== {name} FAILED: {type(e).__name__}: {e} ===")
                     results[name] = {"error": str(e)}
 
             # --- Daily-gated collectors ---
@@ -399,9 +397,11 @@ def run_worker_loop():
 
         try:
             dl_results = asyncio.run(_run_data_layer_collectors())
-            logger.info(f"Universal data layer complete: {len(dl_results)} collectors ran")
+            logger.error(f"=== DATA LAYER COMPLETE: {len(dl_results)} collectors ran: {dl_results} ===")
         except Exception as e:
-            logger.error(f"Universal data layer collectors FAILED: {type(e).__name__}: {e}")
+            logger.error(f"=== DATA LAYER ASYNCIO.RUN FAILED: {type(e).__name__}: {e} ===")
+            import traceback
+            logger.error(traceback.format_exc())
             import traceback
             logger.error(traceback.format_exc())
 
