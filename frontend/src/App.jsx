@@ -225,7 +225,10 @@ function useScores() {
     let mounted = true;
     const load = async () => {
       try {
-        const r = await apiFetch(`${API}/api/scores`);
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const r = await apiFetch(`${API}/api/scores`, { signal: controller.signal });
+        clearTimeout(timeout);
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const d = await r.json();
         if (mounted) {
@@ -235,7 +238,7 @@ function useScores() {
           setLoading(false);
         }
       } catch (e) {
-        if (mounted) { setError(e.message); setLoading(false); }
+        if (mounted) { setError(e.name === 'AbortError' ? 'Request timed out — server may be slow' : e.message); setLoading(false); }
       }
     };
     load();
@@ -338,19 +341,31 @@ function useWalletDetail(address) {
 
 function useAllHistory(coinIds) {
   const [histMap, setHistMap] = useState({});
-
   useEffect(() => {
     if (!coinIds || coinIds.length === 0) return;
-    coinIds.forEach((id) => {
-      apiFetch(`${API}/api/scores/${id}/history?days=21`)
-        .then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); })
-        .then((d) => {
-          setHistMap((prev) => ({ ...prev, [id]: d.history || [] }));
-        })
-        .catch(() => {});
-    });
+    let cancelled = false;
+    const BATCH = 3;
+    (async () => {
+      for (let i = 0; i < coinIds.length; i += BATCH) {
+        if (cancelled) return;
+        const batch = coinIds.slice(i, i + BATCH);
+        const results = await Promise.allSettled(
+          batch.map(id =>
+            apiFetch(`${API}/api/scores/${id}/history?days=21`)
+              .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+              .then(d => ({ id, history: d.history || [] }))
+          )
+        );
+        if (cancelled) return;
+        setHistMap(prev => {
+          const next = { ...prev };
+          results.forEach(r => { if (r.status === 'fulfilled') next[r.value.id] = r.value.history; });
+          return next;
+        });
+      }
+    })();
+    return () => { cancelled = true; };
   }, [coinIds?.join(",")]);
-
   return histMap;
 }
 
