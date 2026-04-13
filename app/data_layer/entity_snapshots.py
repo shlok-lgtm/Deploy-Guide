@@ -77,12 +77,20 @@ async def _fetch_coin_data(
 def _store_snapshots(snapshots: list[dict]):
     """Store entity snapshots to database."""
     if not snapshots:
-        logger.warning("_store_snapshots called with empty list")
+        logger.error("_store_snapshots: called with EMPTY list — nothing to store")
         return
 
     from app.database import get_cursor
 
-    logger.info(f"_store_snapshots: attempting to store {len(snapshots)} snapshots")
+    # Log first row data for debugging
+    first = snapshots[0]
+    logger.error(
+        f"_store_snapshots: {len(snapshots)} snapshots to store. "
+        f"First row: entity_id={first.get('entity_id')}, "
+        f"entity_type={first.get('entity_type')}, "
+        f"price_usd={first.get('price_usd')}, "
+        f"market_cap={first.get('market_cap')}"
+    )
 
     stored = 0
     try:
@@ -113,9 +121,9 @@ def _store_snapshots(snapshots: list[dict]):
                 )
                 stored += 1
 
-        logger.info(f"_store_snapshots: COMMITTED {stored} rows to entity_snapshots_hourly")
+        logger.error(f"_store_snapshots: COMMITTED {stored} rows to entity_snapshots_hourly")
     except Exception as e:
-        logger.error(f"_store_snapshots FAILED after {stored} rows: {type(e).__name__}: {e}")
+        logger.error(f"_store_snapshots FAILED after {stored}/{len(snapshots)} rows: {type(e).__name__}: {e}")
         import traceback
         logger.error(traceback.format_exc())
 
@@ -261,9 +269,12 @@ async def run_entity_snapshots() -> dict:
             except Exception as e:
                 logger.warning(f"Entity snapshot failed for {entity['entity_id']}: {e}")
 
+    logger.error(f"=== run_entity_snapshots: {len(snapshots)} snapshots built, calling _store_snapshots ===")
     if snapshots:
         _store_snapshots(snapshots)
         total_snapshots = len(snapshots)
+    else:
+        logger.error("=== run_entity_snapshots: NO SNAPSHOTS to store (fetch returned empty) ===")
 
     # Provenance
     try:
