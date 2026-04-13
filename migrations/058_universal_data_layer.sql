@@ -55,7 +55,7 @@ INSERT INTO api_provider_limits (provider, calls_per_second, calls_per_minute, c
 VALUES
     ('coingecko', 8.3, 500, 16600, 500000, 'analyst', 'CoinGecko Analyst plan. Overage: $250 per extra 500K.'),
     ('etherscan', 10, 600, 200000, NULL, 'standard', 'Etherscan Standard. 10 req/s. 200K/day hard cap. V2 multi-chain (ETH+Base+Arb on one key).'),
-    ('blockscout', 5, 300, 100000, NULL, 'free', 'Blockscout Free. 5 req/s. 100K credits/day per chain instance (ETH/Base/Arb = 300K total).'),
+    ('blockscout', 5, 300, 100000, NULL, 'free', 'Blockscout Free. 5 req/s. 100K credits/day shared across all chains.'),
     ('defillama', NULL, NULL, NULL, NULL, 'free', 'DeFiLlama Free. No key required. Generous limits.'),
     ('snapshot', NULL, NULL, NULL, NULL, 'free', 'Snapshot GraphQL. No key required.'),
     ('tally', NULL, NULL, NULL, NULL, 'free', 'Tally GraphQL. No key required.'),

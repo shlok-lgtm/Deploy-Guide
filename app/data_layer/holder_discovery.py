@@ -35,15 +35,15 @@ logger = logging.getLogger(__name__)
 BLOCKSCOUT_CHAINS = {
     "ethereum": {
         "base_url": "https://eth.blockscout.com/api",
-        "budget": 70_000,  # 70K of 100K per-chain cap (30% headroom)
+        "budget": 25_000,  # 100K shared across all chains. 25K each + 25K headroom
     },
     "base": {
         "base_url": "https://base.blockscout.com/api",
-        "budget": 70_000,
+        "budget": 25_000,
     },
     "arbitrum": {
         "base_url": "https://arbitrum.blockscout.com/api",
-        "budget": 70_000,
+        "budget": 25_000,
     },
 }
 
