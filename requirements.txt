@@ -1,4 +1,5 @@
 # Basis Protocol - Backend Dependencies
+# build: 2026-04-13T15:30Z — cache bust for data layer collectors
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
 psycopg2-binary==2.9.10
