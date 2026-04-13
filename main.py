@@ -12,6 +12,7 @@ import os
 import logging
 import signal
 import sys
+from datetime import datetime, timezone
 
 import subprocess
 
@@ -296,6 +297,190 @@ def run_worker_loop():
                     logger.debug(f"Actor attestation skipped: {ae}")
         except Exception as e:
             logger.error(f"Agent cycle error: {e}")
+
+        # =====================================================================
+        # Universal Data Layer collectors — guaranteed to run every cycle
+        # These also run inside run_enrichment_pipeline() but this is the
+        # belt-and-suspenders path: if the enrichment pipeline fails, these
+        # still execute.
+        # =====================================================================
+        logger.info("Running universal data layer collectors...")
+
+        # Liquidity depth (CoinGecko CEX tickers + GeckoTerminal DEX pools)
+        try:
+            from app.data_layer.liquidity_collector import run_liquidity_collection
+            liq_result = asyncio.run(run_liquidity_collection())
+            logger.info(f"Liquidity depth: {liq_result.get('total_records', 0)} records")
+        except Exception as e:
+            logger.warning(f"Liquidity depth collection failed: {e}")
+
+        # Exchange snapshots (CoinGecko top 50 exchanges)
+        try:
+            from app.data_layer.exchange_collector import run_exchange_collection
+            exch_result = asyncio.run(run_exchange_collection())
+            logger.info(f"Exchange snapshots: {exch_result.get('exchanges_processed', 0)} exchanges")
+        except Exception as e:
+            logger.warning(f"Exchange collection failed: {e}")
+
+        # Entity snapshots (CoinGecko full coin data for all scored entities)
+        try:
+            from app.data_layer.entity_snapshots import run_entity_snapshots
+            snap_result = asyncio.run(run_entity_snapshots())
+            logger.info(f"Entity snapshots: {snap_result.get('snapshots_stored', 0)} stored")
+        except Exception as e:
+            logger.warning(f"Entity snapshots failed: {e}")
+
+        # Yield data (DeFiLlama pools) — daily gate
+        try:
+            from app.database import fetch_one as _yf
+            _last_yield = _yf("SELECT MAX(snapshot_at) AS latest FROM yield_snapshots")
+            _yield_age = 25
+            if _last_yield and _last_yield.get("latest"):
+                _yt = _last_yield["latest"]
+                if _yt.tzinfo is None:
+                    _yt = _yt.replace(tzinfo=timezone.utc)
+                _yield_age = (datetime.now(timezone.utc) - _yt).total_seconds() / 3600
+            if _yield_age >= 24:
+                from app.data_layer.yield_collector import run_yield_collection
+                yield_result = asyncio.run(run_yield_collection())
+                logger.info(f"Yield data: {yield_result.get('snapshots_stored', 0)} snapshots")
+        except Exception as e:
+            logger.warning(f"Yield collection failed: {e}")
+
+        # Bridge flows (DeFiLlama bridges) — daily gate
+        try:
+            from app.database import fetch_one as _bf
+            _last_bridge = _bf("SELECT MAX(snapshot_at) AS latest FROM bridge_flows")
+            _bridge_age = 25
+            if _last_bridge and _last_bridge.get("latest"):
+                _bt = _last_bridge["latest"]
+                if _bt.tzinfo is None:
+                    _bt = _bt.replace(tzinfo=timezone.utc)
+                _bridge_age = (datetime.now(timezone.utc) - _bt).total_seconds() / 3600
+            if _bridge_age >= 24:
+                from app.data_layer.bridge_flow_collector import run_bridge_flow_collection
+                bridge_result = asyncio.run(run_bridge_flow_collection())
+                logger.info(f"Bridge flows: {bridge_result.get('flow_records', 0)} records")
+        except Exception as e:
+            logger.warning(f"Bridge flow collection failed: {e}")
+
+        # 5-minute peg monitoring + volatility surfaces — daily gate
+        try:
+            from app.database import fetch_one as _pf
+            _last_peg = _pf("SELECT MAX(timestamp) AS latest FROM peg_snapshots_5m")
+            _peg_age = 25
+            if _last_peg and _last_peg.get("latest"):
+                _pt = _last_peg["latest"]
+                if _pt.tzinfo is None:
+                    _pt = _pt.replace(tzinfo=timezone.utc)
+                _peg_age = (datetime.now(timezone.utc) - _pt).total_seconds() / 3600
+            if _peg_age >= 20:
+                from app.data_layer.peg_monitor import run_peg_monitoring
+                peg_result = asyncio.run(run_peg_monitoring())
+                logger.info(f"Peg monitor: {peg_result.get('total_5m_snapshots', 0)} snapshots")
+        except Exception as e:
+            logger.warning(f"Peg monitoring failed: {e}")
+
+        # Market chart backfill — daily gate
+        try:
+            from app.database import fetch_one as _mcf
+            _last_mc = _mcf("SELECT MAX(timestamp) AS latest FROM market_chart_history")
+            _mc_age = 25
+            if _last_mc and _last_mc.get("latest"):
+                _mct = _last_mc["latest"]
+                if _mct.tzinfo is None:
+                    _mct = _mct.replace(tzinfo=timezone.utc)
+                _mc_age = (datetime.now(timezone.utc) - _mct).total_seconds() / 3600
+            if _mc_age >= 20:
+                from app.data_layer.market_chart_backfill import run_market_chart_backfill
+                mc_result = asyncio.run(run_market_chart_backfill(backfill_days=90))
+                logger.info(f"Market chart: {mc_result.get('records_stored', 0)} records")
+        except Exception as e:
+            logger.warning(f"Market chart backfill failed: {e}")
+
+        # Governance activity (Snapshot + Tally) — daily gate
+        try:
+            from app.database import fetch_one as _gf
+            _last_gov = _gf("SELECT MAX(collected_at) AS latest FROM governance_proposals")
+            _gov_age = 25
+            if _last_gov and _last_gov.get("latest"):
+                _gt = _last_gov["latest"]
+                if _gt.tzinfo is None:
+                    _gt = _gt.replace(tzinfo=timezone.utc)
+                _gov_age = (datetime.now(timezone.utc) - _gt).total_seconds() / 3600
+            if _gov_age >= 24:
+                from app.data_layer.governance_collector import run_governance_collection
+                gov_result = asyncio.run(run_governance_collection())
+                logger.info(f"Governance: {gov_result.get('total_proposals', 0)} proposals")
+        except Exception as e:
+            logger.warning(f"Governance collection failed: {e}")
+
+        # Mint/burn events (Etherscan) — daily gate
+        try:
+            from app.database import fetch_one as _mbf
+            _last_mb = _mbf("SELECT MAX(collected_at) AS latest FROM mint_burn_events")
+            _mb_age = 25
+            if _last_mb and _last_mb.get("latest"):
+                _mbt = _last_mb["latest"]
+                if _mbt.tzinfo is None:
+                    _mbt = _mbt.replace(tzinfo=timezone.utc)
+                _mb_age = (datetime.now(timezone.utc) - _mbt).total_seconds() / 3600
+            if _mb_age >= 24:
+                from app.data_layer.mint_burn_collector import run_mint_burn_collection
+                mb_result = asyncio.run(run_mint_burn_collection())
+                logger.info(f"Mint/burn: {mb_result.get('total_mints', 0)} mints, {mb_result.get('total_burns', 0)} burns")
+        except Exception as e:
+            logger.warning(f"Mint/burn collection failed: {e}")
+
+        # Holder discovery (Blockscout) — daily gate
+        try:
+            from app.database import fetch_one as _hdf
+            _last_hd = _hdf("SELECT MAX(created_at) AS latest FROM wallet_graph.wallets WHERE source = 'holder_discovery'")
+            _hd_age = 25
+            if _last_hd and _last_hd.get("latest"):
+                _hdt = _last_hd["latest"]
+                if _hdt.tzinfo is None:
+                    _hdt = _hdt.replace(tzinfo=timezone.utc)
+                _hd_age = (datetime.now(timezone.utc) - _hdt).total_seconds() / 3600
+            if _hd_age >= 24:
+                from app.data_layer.holder_discovery import run_holder_discovery
+                hd_result = asyncio.run(run_holder_discovery())
+                logger.info(f"Holder discovery: {hd_result.get('total_discovered', 0)} new wallets")
+        except Exception as e:
+            logger.warning(f"Holder discovery failed: {e}")
+
+        # Correlation matrices (computed, no API calls) — daily gate
+        try:
+            from app.database import fetch_one as _cf
+            _last_corr = _cf("SELECT MAX(computed_at) AS latest FROM correlation_matrices")
+            _corr_age = 25
+            if _last_corr and _last_corr.get("latest"):
+                _ct = _last_corr["latest"]
+                if _ct.tzinfo is None:
+                    _ct = _ct.replace(tzinfo=timezone.utc)
+                _corr_age = (datetime.now(timezone.utc) - _ct).total_seconds() / 3600
+            if _corr_age >= 24:
+                from app.data_layer.correlation_engine import run_correlation_computation
+                corr_result = run_correlation_computation()
+                logger.info(f"Correlation matrices computed: {corr_result}")
+        except Exception as e:
+            logger.warning(f"Correlation computation failed: {e}")
+
+        # Data catalog update
+        try:
+            from app.data_layer.catalog import update_catalog
+            update_catalog()
+        except Exception as e:
+            logger.debug(f"Data catalog update failed: {e}")
+
+        # Flush API usage tracker
+        try:
+            from app.api_usage_tracker import flush
+            flush()
+        except Exception:
+            pass
+
+        logger.info("Universal data layer collectors complete")
 
         # Treasury flow detection — runs every cycle, minimal API budget
         try:
