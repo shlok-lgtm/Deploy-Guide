@@ -238,7 +238,7 @@ function useScores() {
           setLoading(false);
         }
       } catch (e) {
-        if (mounted) { setError(e.name === 'AbortError' ? 'Request timed out — server may be slow' : e.message); setLoading(false); }
+        if (mounted) { setError(e.name === 'AbortError' ? 'Request timed out' : e.message); setLoading(false); }
       }
     };
     load();
@@ -408,10 +408,13 @@ function usePulse() {
 function useIntegrity() {
   const [data, setData] = useState(null);
   useEffect(() => {
-    apiFetch(`${API}/api/integrity`)
-      .then(r => r.ok ? r.json() : null)
-      .then(d => setData(d))
-      .catch(() => {});
+    const timer = setTimeout(() => {
+      apiFetch(`${API}/api/integrity`)
+        .then(r => r.ok ? r.json() : null)
+        .then(d => setData(d))
+        .catch(() => {});
+    }, 3000);
+    return () => clearTimeout(timer);
   }, []);
   return data;
 }
