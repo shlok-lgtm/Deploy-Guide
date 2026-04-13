@@ -603,84 +603,25 @@ async def run_fast_cycle():
     # -------------------------------------------------------------------------
     logger.error("=== DATA LAYER COLLECTORS START (worker.py fast cycle) ===")
 
-    # --- DIAGNOSTIC: test raw write path before running collectors ---
+    # --- HARDCODED INSERT: 3 test rows, no fetch, no collector logic ---
     try:
-        from app.database import get_cursor as _diag_gc, fetch_one as _diag_fo
-        # 1. Check schema
-        schema_rows = _diag_fo(
-            "SELECT string_agg(column_name, ', ' ORDER BY ordinal_position) as cols "
-            "FROM information_schema.columns WHERE table_name = 'entity_snapshots_hourly'"
-        )
-        logger.error(f"=== DIAG entity_snapshots_hourly SCHEMA: {schema_rows} ===")
+        from app.database import get_cursor as _hc_gc, fetch_one as _hc_fo
+        with _hc_gc() as _hc_cur:
+            _hc_cur.execute("INSERT INTO entity_snapshots_hourly (entity_id, entity_type, market_cap, price_usd, snapshot_at) VALUES ('__hc_usdc__', 'test', 32000000000, 1.0001, NOW())")
+            _hc_cur.execute("INSERT INTO entity_snapshots_hourly (entity_id, entity_type, market_cap, price_usd, snapshot_at) VALUES ('__hc_usdt__', 'test', 83000000000, 0.9999, NOW())")
+            _hc_cur.execute("INSERT INTO entity_snapshots_hourly (entity_id, entity_type, market_cap, price_usd, snapshot_at) VALUES ('__hc_dai__', 'test', 5300000000, 1.0000, NOW())")
+        count = _hc_fo("SELECT COUNT(*) as cnt FROM entity_snapshots_hourly")
+        logger.error(f"=== HARDCODED INSERT DONE: table has {count} rows ===")
+    except Exception as _hc_e:
+        logger.error(f"=== HARDCODED INSERT FAILED: {type(_hc_e).__name__}: {_hc_e} ===")
 
-        # 2. Test write
-        with _diag_gc() as _dc:
-            _dc.execute(
-                "INSERT INTO entity_snapshots_hourly "
-                "(entity_id, entity_type, price_usd, snapshot_at) "
-                "VALUES ('__diag__', 'diag', 1.0, NOW())"
-            )
-        count = _diag_fo("SELECT COUNT(*) as cnt FROM entity_snapshots_hourly")
-        logger.error(f"=== DIAG WRITE TEST: rows after insert = {count} ===")
-        # cleanup
-        with _diag_gc() as _dc:
-            _dc.execute("DELETE FROM entity_snapshots_hourly WHERE entity_id = '__diag__'")
-        logger.error("=== DIAG WRITE TEST: SUCCESS — table is writable ===")
-    except Exception as _diag_e:
-        logger.error(f"=== DIAG WRITE TEST FAILED: {type(_diag_e).__name__}: {_diag_e} ===")
-        import traceback as _diag_tb
-        logger.error(_diag_tb.format_exc())
-    # --- END DIAGNOSTIC ---
-
+    # --- Now run the actual collector ---
     try:
         from app.data_layer.entity_snapshots import run_entity_snapshots
         snap_result = await run_entity_snapshots()
-        logger.error(f"=== entity_snapshots COMPLETE: type={type(snap_result)}, val={snap_result} ===")
+        logger.error(f"=== entity_snapshots COMPLETE: {snap_result} ===")
     except Exception as e:
         logger.error(f"=== entity_snapshots FAILED: {type(e).__name__}: {e} ===")
-        snap_result = None
-
-    # --- BYPASS: direct INSERT using the same pattern as the DIAG test ---
-    try:
-        import json as _bj
-        raw = snap_result.get("_raw_snapshots", []) if isinstance(snap_result, dict) else []
-        logger.error(f"=== BYPASS: got {len(raw)} raw snapshots to force-insert ===")
-        if raw:
-            from app.database import get_cursor as _bp_gc, fetch_one as _bp_fo
-            first = raw[0]
-            logger.error(f"=== BYPASS first row: id={first.get('entity_id')}, type={first.get('entity_type')}, price={first.get('price_usd')} ===")
-            inserted = 0
-            with _bp_gc() as _bp_cur:
-                for snap in raw[:3]:
-                    _bp_cur.execute(
-                        """INSERT INTO entity_snapshots_hourly
-                           (entity_id, entity_type, market_cap, total_volume,
-                            price_usd, price_change_24h, circulating_supply,
-                            total_supply, exchange_tickers_count,
-                            developer_data, community_data, raw_data, snapshot_at)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())""",
-                        (
-                            snap.get("entity_id"), snap.get("entity_type"),
-                            snap.get("market_cap"), snap.get("total_volume"),
-                            snap.get("price_usd"), snap.get("price_change_24h"),
-                            snap.get("circulating_supply"), snap.get("total_supply"),
-                            snap.get("exchange_tickers_count"),
-                            _bj.dumps(snap.get("developer_data")) if snap.get("developer_data") else None,
-                            _bj.dumps(snap.get("community_data")) if snap.get("community_data") else None,
-                            _bj.dumps(snap.get("raw_data")) if snap.get("raw_data") else None,
-                        ),
-                    )
-                    inserted += 1
-            # get_cursor context manager commits on exit via get_conn
-            count = _bp_fo("SELECT COUNT(*) as cnt FROM entity_snapshots_hourly")
-            logger.error(f"=== BYPASS INSERT: {inserted} rows inserted, table now has {count} rows ===")
-        else:
-            logger.error("=== BYPASS: no raw snapshots returned — collector stores internally and returned empty ===")
-    except Exception as _bp_e:
-        logger.error(f"=== BYPASS INSERT FAILED: {type(_bp_e).__name__}: {_bp_e} ===")
-        import traceback as _bp_tb
-        logger.error(_bp_tb.format_exc())
-    # --- END BYPASS ---
 
     try:
         from app.data_layer.exchange_collector import run_exchange_collection
@@ -698,7 +639,6 @@ async def run_fast_cycle():
 
     logger.error("=== DATA LAYER COLLECTORS END ===")
 
-    # Flush API usage tracker after data layer calls
     try:
         from app.api_usage_tracker import flush
         flush()
