@@ -201,27 +201,57 @@ def _classify_wallet(metrics: dict) -> list[dict]:
     return tags
 
 
+def _sanitize_float(val):
+    """Return None if val is NaN or Infinity, else return val."""
+    if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
+        return None
+    return val
+
+
 def _store_behavior_tags(address: str, tags: list[dict]):
-    """Store wallet behavior tags to database."""
+    """Store wallet behavior tags to database (per-row transactions)."""
     if not tags:
         return
 
-    with get_cursor() as cur:
-        for tag in tags:
-            cur.execute(
-                """INSERT INTO wallet_behavior_tags
-                   (wallet_address, behavior_type, confidence, metrics, computed_at)
-                   VALUES (%s, %s, %s, %s, NOW())
-                   ON CONFLICT (wallet_address, behavior_type, computed_at)
-                   DO UPDATE SET confidence = EXCLUDED.confidence,
-                                 metrics = EXCLUDED.metrics""",
-                (
-                    address,
-                    tag["behavior_type"],
-                    tag["confidence"],
-                    json.dumps(tag["metrics"]),
-                ),
-            )
+    stored = 0
+    errors = 0
+
+    for tag in tags:
+        try:
+            # Sanitize numeric fields in metrics
+            sanitized_metrics = {
+                k: _sanitize_float(v) if isinstance(v, float) else v
+                for k, v in tag.get("metrics", {}).items()
+            }
+            with get_cursor() as cur:
+                cur.execute(
+                    """INSERT INTO wallet_behavior_tags
+                       (wallet_address, behavior_type, confidence, metrics, computed_at)
+                       VALUES (%s, %s, %s, %s, NOW())
+                       ON CONFLICT (wallet_address, behavior_type, computed_at)
+                       DO UPDATE SET confidence = EXCLUDED.confidence,
+                                     metrics = EXCLUDED.metrics""",
+                    (
+                        address,
+                        tag["behavior_type"],
+                        _sanitize_float(tag["confidence"]),
+                        json.dumps(sanitized_metrics),
+                    ),
+                )
+            stored += 1
+        except Exception as e:
+            errors += 1
+            if errors <= 3:
+                logger.error(
+                    "Failed to store behavior tag %s for %s: %s",
+                    tag.get("behavior_type"), address, e,
+                )
+
+    if errors:
+        logger.error(
+            "Behavior tags store complete: %d stored, %d errors for %s",
+            stored, errors, address,
+        )
 
 
 def run_behavioral_classification(batch_size: int = 2000) -> dict:

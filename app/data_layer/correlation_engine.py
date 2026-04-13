@@ -140,23 +140,45 @@ def compute_cross_index_correlation(window_days: int = 30) -> dict:
     }
 
 
+def _sanitize_matrix(matrix_data: list) -> list:
+    """Replace NaN/Infinity with None in a nested correlation matrix."""
+    sanitized = []
+    for row in matrix_data:
+        sanitized_row = []
+        for val in row:
+            if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
+                sanitized_row.append(None)
+            else:
+                sanitized_row.append(val)
+        sanitized.append(sanitized_row)
+    return sanitized
+
+
 def _store_matrix(matrix_type: str, window_days: int, entity_ids: list, matrix_data: list):
-    """Store correlation matrix to database."""
+    """Store correlation matrix to database (per-row transaction)."""
     from app.database import get_cursor
 
-    with get_cursor() as cur:
-        cur.execute(
-            """INSERT INTO correlation_matrices
-               (matrix_type, window_days, entity_ids, matrix_data, computed_at)
-               VALUES (%s, %s, %s::jsonb, %s::jsonb, NOW())
-               ON CONFLICT (matrix_type, window_days, computed_at) DO UPDATE SET
-                   entity_ids = EXCLUDED.entity_ids,
-                   matrix_data = EXCLUDED.matrix_data""",
-            (
-                matrix_type, window_days,
-                json.dumps(entity_ids),
-                json.dumps(matrix_data),
-            ),
+    sanitized_data = _sanitize_matrix(matrix_data)
+
+    try:
+        with get_cursor() as cur:
+            cur.execute(
+                """INSERT INTO correlation_matrices
+                   (matrix_type, window_days, entity_ids, matrix_data, computed_at)
+                   VALUES (%s, %s, %s::jsonb, %s::jsonb, NOW())
+                   ON CONFLICT (matrix_type, window_days, computed_at) DO UPDATE SET
+                       entity_ids = EXCLUDED.entity_ids,
+                       matrix_data = EXCLUDED.matrix_data""",
+                (
+                    matrix_type, window_days,
+                    json.dumps(entity_ids),
+                    json.dumps(sanitized_data),
+                ),
+            )
+    except Exception as e:
+        logger.error(
+            "Failed to store correlation matrix %s (window=%d): %s",
+            matrix_type, window_days, e,
         )
 
 

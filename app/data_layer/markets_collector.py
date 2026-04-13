@@ -18,6 +18,7 @@ Schedule:
 
 import json
 import logging
+import math
 import os
 import time
 from datetime import datetime, timezone
@@ -104,51 +105,78 @@ async def _fetch_markets_bulk(
         return []
 
 
+def _sanitize_float(val):
+    """Return None if val is NaN or Infinity, else return val."""
+    if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
+        return None
+    return val
+
+
 def _store_markets_data(markets: list[dict]):
-    """Store bulk markets data into entity_snapshots_hourly."""
+    """Store bulk markets data into entity_snapshots_hourly (per-row transactions)."""
     if not markets:
         return
 
     from app.database import get_cursor
 
-    with get_cursor() as cur:
-        for m in markets:
+    stored = 0
+    errors = 0
+
+    for m in markets:
+        try:
             coin_id = m.get("id", "")
             raw_data = {
-                "price_change_1h": m.get("price_change_percentage_1h_in_currency"),
-                "price_change_24h": m.get("price_change_percentage_24h_in_currency"),
-                "price_change_7d": m.get("price_change_percentage_7d_in_currency"),
-                "price_change_30d": m.get("price_change_percentage_30d_in_currency"),
-                "ath": m.get("ath"),
+                "price_change_1h": _sanitize_float(m.get("price_change_percentage_1h_in_currency")),
+                "price_change_24h": _sanitize_float(m.get("price_change_percentage_24h_in_currency")),
+                "price_change_7d": _sanitize_float(m.get("price_change_percentage_7d_in_currency")),
+                "price_change_30d": _sanitize_float(m.get("price_change_percentage_30d_in_currency")),
+                "ath": _sanitize_float(m.get("ath")),
                 "ath_date": m.get("ath_date"),
-                "ath_change_pct": m.get("ath_change_percentage"),
-                "atl": m.get("atl"),
+                "ath_change_pct": _sanitize_float(m.get("ath_change_percentage")),
+                "atl": _sanitize_float(m.get("atl")),
                 "atl_date": m.get("atl_date"),
-                "high_24h": m.get("high_24h"),
-                "low_24h": m.get("low_24h"),
-                "fully_diluted_valuation": m.get("fully_diluted_valuation"),
+                "high_24h": _sanitize_float(m.get("high_24h")),
+                "low_24h": _sanitize_float(m.get("low_24h")),
+                "fully_diluted_valuation": _sanitize_float(m.get("fully_diluted_valuation")),
                 "sparkline_7d": m.get("sparkline_in_7d", {}).get("price", [])[-24:] if m.get("sparkline_in_7d") else None,
             }
 
-            cur.execute(
-                """INSERT INTO entity_snapshots_hourly
-                   (entity_id, entity_type, market_cap, total_volume,
-                    price_usd, price_change_24h, circulating_supply,
-                    total_supply, raw_data, snapshot_at)
-                   VALUES (%s, 'markets_bulk', %s, %s, %s, %s, %s, %s, %s, NOW())
-                   ON CONFLICT (entity_id, entity_type, snapshot_at) DO UPDATE SET
-                       market_cap = EXCLUDED.market_cap,
-                       total_volume = EXCLUDED.total_volume,
-                       price_usd = EXCLUDED.price_usd,
-                       raw_data = EXCLUDED.raw_data""",
-                (
-                    coin_id,
-                    m.get("market_cap"), m.get("total_volume"),
-                    m.get("current_price"), m.get("price_change_percentage_24h"),
-                    m.get("circulating_supply"), m.get("total_supply"),
-                    json.dumps(raw_data),
-                ),
-            )
+            with get_cursor() as cur:
+                cur.execute(
+                    """INSERT INTO entity_snapshots_hourly
+                       (entity_id, entity_type, market_cap, total_volume,
+                        price_usd, price_change_24h, circulating_supply,
+                        total_supply, raw_data, snapshot_at)
+                       VALUES (%s, 'markets_bulk', %s, %s, %s, %s, %s, %s, %s, NOW())
+                       ON CONFLICT (entity_id, entity_type, snapshot_at) DO UPDATE SET
+                           market_cap = EXCLUDED.market_cap,
+                           total_volume = EXCLUDED.total_volume,
+                           price_usd = EXCLUDED.price_usd,
+                           raw_data = EXCLUDED.raw_data""",
+                    (
+                        coin_id,
+                        _sanitize_float(m.get("market_cap")),
+                        _sanitize_float(m.get("total_volume")),
+                        _sanitize_float(m.get("current_price")),
+                        _sanitize_float(m.get("price_change_percentage_24h")),
+                        _sanitize_float(m.get("circulating_supply")),
+                        _sanitize_float(m.get("total_supply")),
+                        json.dumps(raw_data),
+                    ),
+                )
+            stored += 1
+        except Exception as e:
+            errors += 1
+            if errors <= 3:
+                logger.error(
+                    "Failed to store markets data for %s: %s",
+                    m.get("id", "unknown"), e,
+                )
+
+    if errors:
+        logger.error(
+            "Markets data store: %d stored, %d errors", stored, errors,
+        )
 
 
 async def run_bulk_markets() -> dict:

@@ -12,6 +12,7 @@ Schedule: Daily
 
 import json
 import logging
+import math
 import time
 from datetime import datetime, timezone
 
@@ -78,7 +79,7 @@ async def _fetch_bridge_detail(
 
 
 def _store_bridge_flows(flows: list[dict]):
-    """Store bridge flow records to database."""
+    """Store bridge flow records to database. Per-row error handling — one bad row doesn't kill the batch."""
     if not flows:
         return
 
@@ -87,33 +88,52 @@ def _store_bridge_flows(flows: list[dict]):
 
     guard = DataCoherenceGuard("bridge_flows")
 
-    with get_cursor() as cur:
-        for flow in flows:
+    def _safe_num(v):
+        if v is None:
+            return None
+        try:
+            f = float(v)
+            if math.isnan(f) or math.isinf(f):
+                return None
+            return f
+        except (TypeError, ValueError):
+            return None
+
+    stored = 0
+    errors = 0
+    for flow in flows:
+        try:
             violations = guard.validate_bridge_flow(
                 flow["bridge_id"], flow["source_chain"], flow["dest_chain"], flow,
             )
             for v in violations:
                 store_violation(v)
 
-            cur.execute(
-                """INSERT INTO bridge_flows
-                   (bridge_id, bridge_name, source_chain, dest_chain,
-                    volume_usd, txn_count, tvl_usd, period, raw_data, snapshot_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
-                   ON CONFLICT (bridge_id, source_chain, dest_chain, period, snapshot_at)
-                   DO UPDATE SET
-                       volume_usd = EXCLUDED.volume_usd,
-                       tvl_usd = EXCLUDED.tvl_usd""",
-                (
-                    flow["bridge_id"], flow.get("bridge_name"),
-                    flow["source_chain"], flow["dest_chain"],
-                    flow.get("volume_usd"), flow.get("txn_count"),
-                    flow.get("tvl_usd"), flow.get("period", "24h"),
-                    json.dumps(flow.get("raw_data")) if flow.get("raw_data") else None,
-                ),
-            )
+            with get_cursor() as cur:
+                cur.execute(
+                    """INSERT INTO bridge_flows
+                       (bridge_id, bridge_name, source_chain, dest_chain,
+                        volume_usd, txn_count, tvl_usd, period, raw_data, snapshot_at)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                       ON CONFLICT (bridge_id, source_chain, dest_chain, period, snapshot_at)
+                       DO UPDATE SET
+                           volume_usd = EXCLUDED.volume_usd,
+                           tvl_usd = EXCLUDED.tvl_usd""",
+                    (
+                        flow["bridge_id"], flow.get("bridge_name"),
+                        flow["source_chain"], flow["dest_chain"],
+                        _safe_num(flow.get("volume_usd")), flow.get("txn_count"),
+                        _safe_num(flow.get("tvl_usd")), flow.get("period", "24h"),
+                        json.dumps(flow.get("raw_data")) if flow.get("raw_data") else None,
+                    ),
+                )
+            stored += 1
+        except Exception as e:
+            errors += 1
+            if errors <= 3:
+                logger.error(f"bridge_flows row FAILED: bridge_id={flow.get('bridge_id')}: {type(e).__name__}: {e}")
 
-    logger.info(f"Stored {len(flows)} bridge flow records")
+    logger.error(f"bridge_flows: {stored} stored, {errors} errors out of {len(flows)}")
 
 
 async def run_bridge_flow_collection() -> dict:

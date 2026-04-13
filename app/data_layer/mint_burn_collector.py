@@ -16,6 +16,7 @@ Schedule: Daily (with lookback to last collected block)
 
 import json
 import logging
+import math
 import os
 import time
 from datetime import datetime, timezone
@@ -111,32 +112,58 @@ def _parse_amount(tx: dict) -> float:
         return 0
 
 
+def _safe_float(val):
+    """Return None if val is NaN or Infinity, otherwise float."""
+    if val is None:
+        return None
+    try:
+        f = float(val)
+        if math.isnan(f) or math.isinf(f):
+            return None
+        return f
+    except (TypeError, ValueError):
+        return None
+
+
 def _store_mint_burn_events(events: list[dict]):
-    """Store mint/burn events to database."""
+    """Store mint/burn events to database (per-row transactions)."""
     if not events:
         return
 
     from app.database import get_cursor
 
-    with get_cursor() as cur:
-        for evt in events:
-            cur.execute(
-                """INSERT INTO mint_burn_events
-                   (stablecoin_id, chain, event_type, amount, tx_hash,
-                    block_number, from_address, to_address, timestamp,
-                    raw_data, collected_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
-                   ON CONFLICT (chain, tx_hash, event_type) DO NOTHING""",
-                (
-                    evt["stablecoin_id"], evt["chain"], evt["event_type"],
-                    evt["amount"], evt["tx_hash"], evt.get("block_number"),
-                    evt.get("from_address"), evt.get("to_address"),
-                    evt.get("timestamp"),
-                    json.dumps(evt.get("raw_data")) if evt.get("raw_data") else None,
-                ),
-            )
+    stored = 0
+    errors = 0
 
-    logger.info(f"Stored {len(events)} mint/burn events")
+    for evt in events:
+        try:
+            with get_cursor() as cur:
+                cur.execute(
+                    """INSERT INTO mint_burn_events
+                       (stablecoin_id, chain, event_type, amount, tx_hash,
+                        block_number, from_address, to_address, timestamp,
+                        raw_data, collected_at)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                       ON CONFLICT (chain, tx_hash, event_type) DO NOTHING""",
+                    (
+                        evt["stablecoin_id"], evt["chain"], evt["event_type"],
+                        _safe_float(evt["amount"]), evt["tx_hash"],
+                        evt.get("block_number"),
+                        evt.get("from_address"), evt.get("to_address"),
+                        evt.get("timestamp"),
+                        json.dumps(evt.get("raw_data")) if evt.get("raw_data") else None,
+                    ),
+                )
+            stored += 1
+        except Exception as e:
+            errors += 1
+            if errors <= 3:
+                logger.error(f"Failed to store mint_burn event tx_hash={evt.get('tx_hash')}: {e}")
+
+    if errors:
+        logger.error(f"mint_burn_events: stored={stored}, errors={errors} out of {len(events)}")
+    else:
+        logger.info(f"Stored {stored} mint/burn events")
 
 
 def _get_last_block(stablecoin_id: str, chain: str) -> int:

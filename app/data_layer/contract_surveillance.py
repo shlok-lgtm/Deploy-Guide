@@ -156,30 +156,45 @@ def _hash_source(source_code: str) -> str:
     return hashlib.sha256(source_code.encode("utf-8")).hexdigest()
 
 
+def _sanitize_float(val):
+    """Return None if val is NaN or Infinity, else return val."""
+    import math
+    if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
+        return None
+    return val
+
+
 def _store_surveillance_result(result: dict):
-    """Store contract surveillance result."""
+    """Store contract surveillance result (per-row transaction)."""
     from app.database import get_cursor
 
-    with get_cursor() as cur:
-        cur.execute(
-            """INSERT INTO contract_surveillance
-               (entity_id, chain, contract_address,
-                has_admin_keys, is_upgradeable, has_pause_function,
-                has_blacklist, timelock_hours, multisig_threshold,
-                source_code_hash, analysis, scanned_at)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
-               ON CONFLICT (entity_id, chain, contract_address, scanned_at)
-               DO UPDATE SET
-                   source_code_hash = EXCLUDED.source_code_hash,
-                   analysis = EXCLUDED.analysis""",
-            (
-                result["entity_id"], result["chain"], result["contract_address"],
-                result.get("has_admin_keys"), result.get("is_upgradeable"),
-                result.get("has_pause_function"), result.get("has_blacklist"),
-                result.get("timelock_hours"), result.get("multisig_threshold"),
-                result.get("source_code_hash"),
-                json.dumps(result.get("analysis")) if result.get("analysis") else None,
-            ),
+    try:
+        with get_cursor() as cur:
+            cur.execute(
+                """INSERT INTO contract_surveillance
+                   (entity_id, chain, contract_address,
+                    has_admin_keys, is_upgradeable, has_pause_function,
+                    has_blacklist, timelock_hours, multisig_threshold,
+                    source_code_hash, analysis, scanned_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                   ON CONFLICT (entity_id, chain, contract_address, scanned_at)
+                   DO UPDATE SET
+                       source_code_hash = EXCLUDED.source_code_hash,
+                       analysis = EXCLUDED.analysis""",
+                (
+                    result["entity_id"], result["chain"], result["contract_address"],
+                    result.get("has_admin_keys"), result.get("is_upgradeable"),
+                    result.get("has_pause_function"), result.get("has_blacklist"),
+                    _sanitize_float(result.get("timelock_hours")),
+                    _sanitize_float(result.get("multisig_threshold")),
+                    result.get("source_code_hash"),
+                    json.dumps(result.get("analysis")) if result.get("analysis") else None,
+                ),
+            )
+    except Exception as e:
+        logger.error(
+            "Failed to store surveillance result for %s on %s: %s",
+            result.get("entity_id"), result.get("chain"), e,
         )
 
 

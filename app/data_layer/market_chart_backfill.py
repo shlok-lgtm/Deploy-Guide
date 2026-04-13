@@ -77,31 +77,59 @@ async def _fetch_market_chart_range(
         return {}
 
 
+def _safe_float(val):
+    """Return None if val is NaN or Infinity, otherwise float."""
+    if val is None:
+        return None
+    try:
+        f = float(val)
+        if math.isnan(f) or math.isinf(f):
+            return None
+        return f
+    except (TypeError, ValueError):
+        return None
+
+
 def _store_market_chart_records(records: list[dict]):
-    """Store market chart history records."""
+    """Store market chart history records (per-row transactions)."""
     if not records:
         return
 
     from app.database import get_cursor
 
-    with get_cursor() as cur:
-        for rec in records:
-            cur.execute(
-                """INSERT INTO market_chart_history
-                   (coin_id, stablecoin_id, timestamp, price, market_cap,
-                    total_volume, granularity)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)
-                   ON CONFLICT (coin_id, timestamp, granularity) DO UPDATE SET
-                       price = EXCLUDED.price,
-                       market_cap = EXCLUDED.market_cap,
-                       total_volume = EXCLUDED.total_volume""",
-                (
-                    rec["coin_id"], rec.get("stablecoin_id"),
-                    rec["timestamp"], rec.get("price"),
-                    rec.get("market_cap"), rec.get("total_volume"),
-                    rec["granularity"],
-                ),
-            )
+    stored = 0
+    errors = 0
+
+    for rec in records:
+        try:
+            with get_cursor() as cur:
+                cur.execute(
+                    """INSERT INTO market_chart_history
+                       (coin_id, stablecoin_id, timestamp, price, market_cap,
+                        total_volume, granularity)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s)
+                       ON CONFLICT (coin_id, timestamp, granularity) DO UPDATE SET
+                           price = EXCLUDED.price,
+                           market_cap = EXCLUDED.market_cap,
+                           total_volume = EXCLUDED.total_volume""",
+                    (
+                        rec["coin_id"], rec.get("stablecoin_id"),
+                        rec["timestamp"], _safe_float(rec.get("price")),
+                        _safe_float(rec.get("market_cap")),
+                        _safe_float(rec.get("total_volume")),
+                        rec["granularity"],
+                    ),
+                )
+            stored += 1
+        except Exception as e:
+            errors += 1
+            if errors <= 3:
+                logger.error(f"Failed to store market_chart record coin={rec.get('coin_id')}: {e}")
+
+    if errors:
+        logger.error(f"market_chart_history: stored={stored}, errors={errors} out of {len(records)}")
+    else:
+        logger.info(f"Stored {stored} market chart records")
 
 
 def _compute_volatility_from_prices(
@@ -167,33 +195,36 @@ def _compute_volatility_from_prices(
 
 
 def _store_volatility_surface(stablecoin_id: str, vol_data: dict):
-    """Store computed volatility surface."""
+    """Store computed volatility surface (per-row transaction)."""
     from app.database import get_cursor
 
-    with get_cursor() as cur:
-        cur.execute(
-            """INSERT INTO volatility_surfaces
-               (asset_id, realized_vol_1d, realized_vol_7d, realized_vol_30d,
-                realized_vol_90d, max_drawdown_7d, max_drawdown_30d,
-                max_drawdown_90d, recovery_time_hours, computed_at)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
-               ON CONFLICT (asset_id, computed_at) DO UPDATE SET
-                   realized_vol_1d = EXCLUDED.realized_vol_1d,
-                   realized_vol_7d = EXCLUDED.realized_vol_7d,
-                   realized_vol_30d = EXCLUDED.realized_vol_30d,
-                   realized_vol_90d = EXCLUDED.realized_vol_90d""",
-            (
-                stablecoin_id,
-                vol_data.get("realized_vol_1d"),
-                vol_data.get("realized_vol_7d"),
-                vol_data.get("realized_vol_30d"),
-                vol_data.get("realized_vol_90d"),
-                vol_data.get("max_drawdown_7d"),
-                vol_data.get("max_drawdown_30d"),
-                vol_data.get("max_drawdown_90d"),
-                vol_data.get("recovery_time_hours"),
-            ),
-        )
+    try:
+        with get_cursor() as cur:
+            cur.execute(
+                """INSERT INTO volatility_surfaces
+                   (asset_id, realized_vol_1d, realized_vol_7d, realized_vol_30d,
+                    realized_vol_90d, max_drawdown_7d, max_drawdown_30d,
+                    max_drawdown_90d, recovery_time_hours, computed_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                   ON CONFLICT (asset_id, computed_at) DO UPDATE SET
+                       realized_vol_1d = EXCLUDED.realized_vol_1d,
+                       realized_vol_7d = EXCLUDED.realized_vol_7d,
+                       realized_vol_30d = EXCLUDED.realized_vol_30d,
+                       realized_vol_90d = EXCLUDED.realized_vol_90d""",
+                (
+                    stablecoin_id,
+                    _safe_float(vol_data.get("realized_vol_1d")),
+                    _safe_float(vol_data.get("realized_vol_7d")),
+                    _safe_float(vol_data.get("realized_vol_30d")),
+                    _safe_float(vol_data.get("realized_vol_90d")),
+                    _safe_float(vol_data.get("max_drawdown_7d")),
+                    _safe_float(vol_data.get("max_drawdown_30d")),
+                    _safe_float(vol_data.get("max_drawdown_90d")),
+                    _safe_float(vol_data.get("recovery_time_hours")),
+                ),
+            )
+    except Exception as e:
+        logger.error(f"Failed to store volatility surface for asset={stablecoin_id}: {e}")
 
 
 async def run_market_chart_backfill(backfill_days: int = 90) -> dict:

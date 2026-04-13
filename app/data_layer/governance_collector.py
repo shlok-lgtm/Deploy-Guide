@@ -13,6 +13,7 @@ Schedule: Daily
 
 import json
 import logging
+import math
 import time
 from datetime import datetime, timezone
 
@@ -207,65 +208,108 @@ async def collect_tally_proposals_full(
 
 
 def _store_proposals(proposals: list[dict]):
-    """Store governance proposals to DB."""
+    """Store governance proposals to DB. Per-row error handling — one bad row doesn't kill the batch."""
     if not proposals:
         return
 
     from app.database import get_cursor
 
-    with get_cursor() as cur:
-        for p in proposals:
+    def _safe_num(v):
+        if v is None:
+            return None
+        try:
+            f = float(v)
+            if math.isnan(f) or math.isinf(f):
+                return None
+            return f
+        except (TypeError, ValueError):
+            return None
+
+    stored = 0
+    errors = 0
+    for p in proposals:
+        try:
             scores_json = json.dumps(p.get("scores")) if p.get("scores") else None
             raw_json = json.dumps(p.get("raw_data")) if p.get("raw_data") else None
 
-            cur.execute(
-                """INSERT INTO governance_proposals
-                   (protocol, source, proposal_id, title, state, author,
-                    created_at, start_at, end_at,
-                    votes_for, votes_against, votes_abstain,
-                    voter_count, quorum_reached, scores, raw_data,
-                    collected_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, NOW())
-                   ON CONFLICT (protocol, source, proposal_id) DO UPDATE SET
-                       state = EXCLUDED.state,
-                       votes_for = EXCLUDED.votes_for,
-                       votes_against = EXCLUDED.votes_against,
-                       voter_count = EXCLUDED.voter_count,
-                       quorum_reached = EXCLUDED.quorum_reached,
-                       scores = EXCLUDED.scores,
-                       collected_at = NOW()""",
-                (
-                    p["protocol"], p["source"], p["proposal_id"],
-                    p.get("title"), p.get("state"), p.get("author"),
-                    p.get("created_at"), p.get("start_at"), p.get("end_at"),
-                    p.get("votes_for"), p.get("votes_against"), p.get("votes_abstain"),
-                    p.get("voter_count"), p.get("quorum_reached"),
-                    scores_json, raw_json,
-                ),
-            )
+            with get_cursor() as cur:
+                cur.execute(
+                    """INSERT INTO governance_proposals
+                       (protocol, source, proposal_id, title, state, author,
+                        created_at, start_at, end_at,
+                        votes_for, votes_against, votes_abstain,
+                        voter_count, quorum_reached, scores, raw_data,
+                        collected_at)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, NOW())
+                       ON CONFLICT (protocol, source, proposal_id) DO UPDATE SET
+                           state = EXCLUDED.state,
+                           votes_for = EXCLUDED.votes_for,
+                           votes_against = EXCLUDED.votes_against,
+                           voter_count = EXCLUDED.voter_count,
+                           quorum_reached = EXCLUDED.quorum_reached,
+                           scores = EXCLUDED.scores,
+                           collected_at = NOW()""",
+                    (
+                        p["protocol"], p["source"], p["proposal_id"],
+                        p.get("title"), p.get("state"), p.get("author"),
+                        p.get("created_at"), p.get("start_at"), p.get("end_at"),
+                        _safe_num(p.get("votes_for")), _safe_num(p.get("votes_against")),
+                        _safe_num(p.get("votes_abstain")),
+                        p.get("voter_count"), p.get("quorum_reached"),
+                        scores_json, raw_json,
+                    ),
+                )
+            stored += 1
+        except Exception as e:
+            errors += 1
+            if errors <= 3:
+                logger.error(f"governance_proposals row FAILED: proposal_id={p.get('proposal_id')}: {type(e).__name__}: {e}")
+
+    logger.error(f"governance_proposals: {stored} stored, {errors} errors out of {len(proposals)}")
 
 
 def _store_voters(voters: list[dict]):
-    """Store governance voters to DB."""
+    """Store governance voters to DB. Per-row error handling — one bad row doesn't kill the batch."""
     if not voters:
         return
 
     from app.database import get_cursor
 
-    with get_cursor() as cur:
-        for v in voters:
-            cur.execute(
-                """INSERT INTO governance_voters
-                   (protocol, proposal_id, voter_address, voting_power, choice, created_at, collected_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, NOW())
-                   ON CONFLICT (protocol, proposal_id, voter_address) DO UPDATE SET
-                       voting_power = EXCLUDED.voting_power,
-                       collected_at = NOW()""",
-                (
-                    v["protocol"], v["proposal_id"], v["voter_address"],
-                    v.get("voting_power"), v.get("choice"), v.get("created_at"),
-                ),
-            )
+    def _safe_num(v):
+        if v is None:
+            return None
+        try:
+            f = float(v)
+            if math.isnan(f) or math.isinf(f):
+                return None
+            return f
+        except (TypeError, ValueError):
+            return None
+
+    stored = 0
+    errors = 0
+    for v in voters:
+        try:
+            with get_cursor() as cur:
+                cur.execute(
+                    """INSERT INTO governance_voters
+                       (protocol, proposal_id, voter_address, voting_power, choice, created_at, collected_at)
+                       VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                       ON CONFLICT (protocol, proposal_id, voter_address) DO UPDATE SET
+                           voting_power = EXCLUDED.voting_power,
+                           collected_at = NOW()""",
+                    (
+                        v["protocol"], v["proposal_id"], v["voter_address"],
+                        _safe_num(v.get("voting_power")), v.get("choice"), v.get("created_at"),
+                    ),
+                )
+            stored += 1
+        except Exception as e:
+            errors += 1
+            if errors <= 3:
+                logger.error(f"governance_voters row FAILED: voter={v.get('voter_address')}: {type(e).__name__}: {e}")
+
+    logger.error(f"governance_voters: {stored} stored, {errors} errors out of {len(voters)}")
 
 
 async def run_governance_collection() -> dict:

@@ -20,6 +20,7 @@ Schedule: Every slow cycle (3h)
 
 import json
 import logging
+import math
 import os
 import time
 from datetime import datetime, timezone
@@ -95,31 +96,58 @@ async def _fetch_pool_ohlcv(
         return []
 
 
+def _safe_float(val):
+    """Return None if val is NaN or Infinity, otherwise float."""
+    if val is None:
+        return None
+    try:
+        f = float(val)
+        if math.isnan(f) or math.isinf(f):
+            return None
+        return f
+    except (TypeError, ValueError):
+        return None
+
+
 def _store_ohlcv_records(records: list[dict]):
-    """Store OHLCV records to database."""
+    """Store OHLCV records to database (per-row transactions)."""
     if not records:
         return
 
     from app.database import get_cursor
 
-    with get_cursor() as cur:
-        for rec in records:
-            cur.execute(
-                """INSERT INTO dex_pool_ohlcv
-                   (pool_address, chain, dex, asset_id, timestamp,
-                    open, high, low, close, volume, trades_count)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                   ON CONFLICT (pool_address, chain, timestamp) DO UPDATE SET
-                       volume = EXCLUDED.volume,
-                       close = EXCLUDED.close""",
-                (
-                    rec["pool_address"], rec["chain"], rec.get("dex"),
-                    rec.get("asset_id"), rec["timestamp"],
-                    rec.get("open"), rec.get("high"),
-                    rec.get("low"), rec.get("close"),
-                    rec.get("volume"), rec.get("trades_count"),
-                ),
-            )
+    stored = 0
+    errors = 0
+
+    for rec in records:
+        try:
+            with get_cursor() as cur:
+                cur.execute(
+                    """INSERT INTO dex_pool_ohlcv
+                       (pool_address, chain, dex, asset_id, timestamp,
+                        open, high, low, close, volume, trades_count)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                       ON CONFLICT (pool_address, chain, timestamp) DO UPDATE SET
+                           volume = EXCLUDED.volume,
+                           close = EXCLUDED.close""",
+                    (
+                        rec["pool_address"], rec["chain"], rec.get("dex"),
+                        rec.get("asset_id"), rec["timestamp"],
+                        _safe_float(rec.get("open")), _safe_float(rec.get("high")),
+                        _safe_float(rec.get("low")), _safe_float(rec.get("close")),
+                        _safe_float(rec.get("volume")), rec.get("trades_count"),
+                    ),
+                )
+            stored += 1
+        except Exception as e:
+            errors += 1
+            if errors <= 3:
+                logger.error(f"Failed to store ohlcv record pool={rec.get('pool_address')}: {e}")
+
+    if errors:
+        logger.error(f"dex_pool_ohlcv: stored={stored}, errors={errors} out of {len(records)}")
+    else:
+        logger.info(f"Stored {stored} OHLCV records")
 
 
 def _get_tracked_pools_tiered() -> tuple[list[dict], list[dict]]:

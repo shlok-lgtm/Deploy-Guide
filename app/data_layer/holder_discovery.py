@@ -204,10 +204,11 @@ async def run_holder_discovery() -> dict:
                     if new_addrs:
                         chain_discovered += len(new_addrs)
 
-                        # Batch insert
-                        try:
-                            with get_cursor() as cur:
-                                for addr in new_addrs:
+                        # Per-row insert
+                        row_errors = 0
+                        for addr in new_addrs:
+                            try:
+                                with get_cursor() as cur:
                                     cur.execute(
                                         """INSERT INTO wallet_graph.wallets
                                            (address, source, label, created_at, updated_at)
@@ -215,9 +216,19 @@ async def run_holder_discovery() -> dict:
                                            ON CONFLICT (address) DO NOTHING""",
                                         (addr, f"holder:{symbol}:{chain}"),
                                     )
-                            chain_seeded += len(new_addrs)
-                        except Exception as e:
-                            logger.debug(f"Holder insert failed: {e}")
+                                chain_seeded += 1
+                            except Exception as e:
+                                row_errors += 1
+                                if row_errors <= 3:
+                                    logger.error(
+                                        "Holder insert failed for %s on %s:%s: %s",
+                                        addr, chain, symbol, e,
+                                    )
+                        if row_errors:
+                            logger.error(
+                                "Holder discovery insert: %d seeded, %d errors for %s:%s",
+                                len(new_addrs) - row_errors, row_errors, chain, symbol,
+                            )
 
                 logger.info(
                     f"Holder discovery [{chain}:{symbol}]: {page_count} pages, "

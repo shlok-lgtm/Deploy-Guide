@@ -13,6 +13,7 @@ Schedule: Daily
 
 import json
 import logging
+import math
 import time
 from datetime import datetime, timezone
 from typing import Optional
@@ -117,7 +118,7 @@ def _is_relevant_pool(pool: dict) -> bool:
 
 
 def _store_yield_snapshots(snapshots: list[dict]):
-    """Store yield snapshots to database."""
+    """Store yield snapshots to database. Per-row error handling — one bad row doesn't kill the batch."""
     if not snapshots:
         return
 
@@ -126,34 +127,53 @@ def _store_yield_snapshots(snapshots: list[dict]):
 
     guard = DataCoherenceGuard("yield_snapshots")
 
-    with get_cursor() as cur:
-        for snap in snapshots:
+    def _safe_num(v):
+        if v is None:
+            return None
+        try:
+            f = float(v)
+            if math.isnan(f) or math.isinf(f):
+                return None
+            return f
+        except (TypeError, ValueError):
+            return None
+
+    stored = 0
+    errors = 0
+    for snap in snapshots:
+        try:
             # Validate
             violations = guard.validate_yield(snap["pool_id"], snap)
             for v in violations:
                 store_violation(v)
 
-            cur.execute(
-                """INSERT INTO yield_snapshots
-                   (pool_id, protocol, chain, asset, apy, apy_base, apy_reward,
-                    tvl_usd, utilization, il_risk, exposure, stable_pool,
-                    pool_meta, snapshot_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
-                   ON CONFLICT (pool_id, snapshot_at) DO UPDATE SET
-                       apy = EXCLUDED.apy,
-                       tvl_usd = EXCLUDED.tvl_usd,
-                       utilization = EXCLUDED.utilization""",
-                (
-                    snap["pool_id"], snap["protocol"], snap["chain"],
-                    snap["asset"], snap.get("apy"), snap.get("apy_base"),
-                    snap.get("apy_reward"), snap.get("tvl_usd"),
-                    snap.get("utilization"), snap.get("il_risk"),
-                    snap.get("exposure"), snap.get("stable_pool"),
-                    json.dumps(snap.get("pool_meta")) if snap.get("pool_meta") else None,
-                ),
-            )
+            with get_cursor() as cur:
+                cur.execute(
+                    """INSERT INTO yield_snapshots
+                       (pool_id, protocol, chain, asset, apy, apy_base, apy_reward,
+                        tvl_usd, utilization, il_risk, exposure, stable_pool,
+                        pool_meta, snapshot_at)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                       ON CONFLICT (pool_id, snapshot_at) DO UPDATE SET
+                           apy = EXCLUDED.apy,
+                           tvl_usd = EXCLUDED.tvl_usd,
+                           utilization = EXCLUDED.utilization""",
+                    (
+                        snap["pool_id"], snap["protocol"], snap["chain"],
+                        snap["asset"], _safe_num(snap.get("apy")), _safe_num(snap.get("apy_base")),
+                        _safe_num(snap.get("apy_reward")), _safe_num(snap.get("tvl_usd")),
+                        _safe_num(snap.get("utilization")), snap.get("il_risk"),
+                        snap.get("exposure"), snap.get("stable_pool"),
+                        json.dumps(snap.get("pool_meta")) if snap.get("pool_meta") else None,
+                    ),
+                )
+            stored += 1
+        except Exception as e:
+            errors += 1
+            if errors <= 3:
+                logger.error(f"yield_snapshots row FAILED: pool_id={snap.get('pool_id')}: {type(e).__name__}: {e}")
 
-    logger.info(f"Stored {len(snapshots)} yield snapshots")
+    logger.error(f"yield_snapshots: {stored} stored, {errors} errors out of {len(snapshots)}")
 
 
 async def run_yield_collection() -> dict:

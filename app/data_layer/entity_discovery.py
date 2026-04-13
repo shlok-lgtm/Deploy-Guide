@@ -92,36 +92,60 @@ def _get_existing_entities() -> set:
     return existing
 
 
+def _sanitize_float(val):
+    """Return None if val is NaN or Infinity, else return val."""
+    import math
+    if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
+        return None
+    return val
+
+
 def _store_discovered_entities(entities: list[dict]):
-    """Store discovered entities to a discovery backlog."""
+    """Store discovered entities to a discovery backlog (per-row transactions)."""
     if not entities:
         return
 
     from app.database import get_cursor
 
-    with get_cursor() as cur:
-        for entity in entities:
-            cur.execute(
-                """INSERT INTO discovery_signals
-                   (signal_type, domain, entity_id, severity, title, details, created_at)
-                   VALUES ('entity_discovery', %s, %s, 'notable', %s, %s, NOW())
-                   ON CONFLICT DO NOTHING""",
-                (
-                    entity["target_index"],
-                    entity["slug"],
-                    f"New {entity['target_index'].upper()} candidate: {entity['name']}",
-                    json.dumps({
-                        "name": entity["name"],
-                        "slug": entity["slug"],
-                        "category": entity["category"],
-                        "tvl_usd": entity["tvl"],
-                        "target_index": entity["target_index"],
-                        "chains": entity.get("chains", []),
-                    }),
-                ),
-            )
+    stored = 0
+    errors = 0
 
-    logger.info(f"Stored {len(entities)} entity discovery signals")
+    for entity in entities:
+        try:
+            with get_cursor() as cur:
+                cur.execute(
+                    """INSERT INTO discovery_signals
+                       (signal_type, domain, entity_id, severity, title, details, created_at)
+                       VALUES ('entity_discovery', %s, %s, 'notable', %s, %s, NOW())
+                       ON CONFLICT DO NOTHING""",
+                    (
+                        entity["target_index"],
+                        entity["slug"],
+                        f"New {entity['target_index'].upper()} candidate: {entity['name']}",
+                        json.dumps({
+                            "name": entity["name"],
+                            "slug": entity["slug"],
+                            "category": entity["category"],
+                            "tvl_usd": _sanitize_float(entity["tvl"]),
+                            "target_index": entity["target_index"],
+                            "chains": entity.get("chains", []),
+                        }),
+                    ),
+                )
+            stored += 1
+        except Exception as e:
+            errors += 1
+            if errors <= 3:
+                logger.error(
+                    "Failed to store entity discovery for %s: %s",
+                    entity.get("slug", "unknown"), e,
+                )
+
+    if errors:
+        logger.error(
+            "Entity discovery store: %d stored, %d errors", stored, errors,
+        )
+    logger.info(f"Stored {stored} entity discovery signals")
 
 
 async def run_entity_discovery() -> dict:

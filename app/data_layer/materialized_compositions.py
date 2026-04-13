@@ -13,6 +13,7 @@ Schedule: After each scoring cycle
 
 import json
 import logging
+import math
 import time
 from datetime import datetime, timezone
 
@@ -93,30 +94,62 @@ def _compute_cqi_scores() -> list[dict]:
     return results
 
 
+def _sanitize_float(val):
+    """Return None if val is NaN or Infinity, else return val."""
+    if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
+        return None
+    return val
+
+
 def _store_materialized_scores(scores: list[dict]):
-    """Store materialized composition scores."""
+    """Store materialized composition scores (per-row transactions)."""
     if not scores:
         return
 
-    with get_cursor() as cur:
-        for score in scores:
-            cur.execute(
-                """INSERT INTO generic_index_scores
-                   (index_id, entity_id, overall_score, component_scores,
-                    methodology_version, computed_at)
-                   VALUES (%s, %s, %s, %s, 'materialized_v1', NOW())
-                   ON CONFLICT (index_id, entity_id, immutable_date(computed_at))
-                   DO UPDATE SET
-                       overall_score = EXCLUDED.overall_score,
-                       component_scores = EXCLUDED.component_scores,
-                       computed_at = NOW()""",
-                (
-                    score["index_id"],
-                    score["entity_id"],
-                    score["overall_score"],
-                    json.dumps(score.get("components")),
-                ),
-            )
+    stored = 0
+    errors = 0
+
+    for score in scores:
+        try:
+            # Sanitize numeric fields in components
+            components = score.get("components")
+            if isinstance(components, dict):
+                components = {
+                    k: _sanitize_float(v) if isinstance(v, float) else v
+                    for k, v in components.items()
+                }
+
+            with get_cursor() as cur:
+                cur.execute(
+                    """INSERT INTO generic_index_scores
+                       (index_id, entity_id, overall_score, component_scores,
+                        methodology_version, computed_at)
+                       VALUES (%s, %s, %s, %s, 'materialized_v1', NOW())
+                       ON CONFLICT (index_id, entity_id, immutable_date(computed_at))
+                       DO UPDATE SET
+                           overall_score = EXCLUDED.overall_score,
+                           component_scores = EXCLUDED.component_scores,
+                           computed_at = NOW()""",
+                    (
+                        score["index_id"],
+                        score["entity_id"],
+                        _sanitize_float(score["overall_score"]),
+                        json.dumps(components),
+                    ),
+                )
+            stored += 1
+        except Exception as e:
+            errors += 1
+            if errors <= 3:
+                logger.error(
+                    "Failed to store materialized score for %s/%s: %s",
+                    score.get("index_id"), score.get("entity_id"), e,
+                )
+
+    if errors:
+        logger.error(
+            "Materialized scores store: %d stored, %d errors", stored, errors,
+        )
 
 
 def run_materialized_compositions() -> dict:
