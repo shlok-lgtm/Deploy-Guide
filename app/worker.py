@@ -1435,69 +1435,91 @@ async def run_slow_cycle_parallel():
         await run_slow_cycle()
         return
 
-    # Post-pipeline tasks that depend on enrichment results
-    # These run sequentially after the parallel pipeline
+    # Post-pipeline tasks that depend on enrichment results.
+    # Each is wrapped in asyncio.wait_for(to_thread(...)) so a blocking
+    # DB query cannot hang the entire slow cycle.
+    POST_TASK_TIMEOUT = 300  # 5 min per task
 
     # Health sweep + alerting
     try:
-        from app.ops.tools.health_checker import run_all_checks
-        logger.info("Running health sweep...")
-        health_results = run_all_checks()
-        healthy_count = sum(1 for r in health_results if r.get("status") == "healthy")
-        logger.info(f"Health sweep: {healthy_count}/{len(health_results)} healthy")
-
-        failures = [r for r in health_results if r.get("status") in ("degraded", "down")]
-        if failures:
-            try:
-                from app.ops.tools.alerter import check_and_alert_health
-                await check_and_alert_health(health_results)
-            except Exception as alert_err:
-                logger.warning(f"Health alert dispatch failed: {alert_err}")
+        async def _health_sweep():
+            from app.ops.tools.health_checker import run_all_checks
+            logger.info("Running health sweep...")
+            health_results = await asyncio.to_thread(run_all_checks)
+            healthy_count = sum(1 for r in health_results if r.get("status") == "healthy")
+            logger.info(f"Health sweep: {healthy_count}/{len(health_results)} healthy")
+            failures = [r for r in health_results if r.get("status") in ("degraded", "down")]
+            if failures:
+                try:
+                    from app.ops.tools.alerter import check_and_alert_health
+                    await check_and_alert_health(health_results)
+                except Exception as alert_err:
+                    logger.warning(f"Health alert dispatch failed: {alert_err}")
+        await asyncio.wait_for(_health_sweep(), timeout=POST_TASK_TIMEOUT)
+    except asyncio.TimeoutError:
+        logger.warning("Health sweep timed out after %ds", POST_TASK_TIMEOUT)
     except Exception as e:
         logger.warning(f"Health sweep failed: {e}")
 
     # Integrity checks
     try:
-        from app.integrity import check_all_and_store
-        integrity_result = check_all_and_store()
-        logger.info(f"Integrity: {integrity_result['status']} across {len(integrity_result['domains'])} domains")
+        async def _integrity():
+            from app.integrity import check_all_and_store
+            result = await asyncio.to_thread(check_all_and_store)
+            logger.info(f"Integrity: {result['status']} across {len(result['domains'])} domains")
+        await asyncio.wait_for(_integrity(), timeout=POST_TASK_TIMEOUT)
+    except asyncio.TimeoutError:
+        logger.warning("Integrity check timed out after %ds", POST_TASK_TIMEOUT)
     except Exception as e:
         logger.warning(f"Integrity check failed: {e}")
 
     # Actor classification
     try:
-        from app.actor_classification import classify_all_active
-        actor_result = classify_all_active()
-        logger.info(f"Actor classification: {actor_result.get('classified', 0)} classified")
+        async def _actors():
+            from app.actor_classification import classify_all_active
+            result = await asyncio.to_thread(classify_all_active)
+            logger.info(f"Actor classification: {result.get('classified', 0)} classified")
+        await asyncio.wait_for(_actors(), timeout=POST_TASK_TIMEOUT)
+    except asyncio.TimeoutError:
+        logger.warning("Actor classification timed out after %ds", POST_TASK_TIMEOUT)
     except Exception as e:
         logger.warning(f"Actor classification failed: {e}")
 
     # Discovery cycle
     try:
-        from app.discovery import run_discovery_cycle
-        run_discovery_cycle()
+        async def _discovery():
+            from app.discovery import run_discovery_cycle
+            await asyncio.to_thread(run_discovery_cycle)
+        await asyncio.wait_for(_discovery(), timeout=POST_TASK_TIMEOUT)
+    except asyncio.TimeoutError:
+        logger.warning("Discovery cycle timed out after %ds", POST_TASK_TIMEOUT)
     except Exception as e:
         logger.warning(f"Discovery cycle failed: {e}")
 
     # Coherence sweep
     try:
-        last_coherence = fetch_one(
-            "SELECT MAX(created_at) AS latest FROM coherence_reports"
-        )
-        coherence_age_hours = 25
-        if last_coherence and last_coherence.get("latest"):
-            _coh_ts = last_coherence["latest"]
-            if _coh_ts.tzinfo is None:
-                _coh_ts = _coh_ts.replace(tzinfo=timezone.utc)
-            coherence_age_hours = (datetime.now(timezone.utc) - _coh_ts).total_seconds() / 3600
-
-        if coherence_age_hours >= 24:
-            from app.coherence import run_coherence_sweep
-            coh_report = run_coherence_sweep()
-            logger.info(
-                f"Coherence sweep: {coh_report['domains_checked']} domains, "
-                f"{coh_report['issues_found']} issues"
+        async def _coherence():
+            last_coherence = await asyncio.to_thread(
+                fetch_one, "SELECT MAX(created_at) AS latest FROM coherence_reports"
             )
+            coherence_age_hours = 25
+            if last_coherence and last_coherence.get("latest"):
+                _coh_ts = last_coherence["latest"]
+                if _coh_ts.tzinfo is None:
+                    _coh_ts = _coh_ts.replace(tzinfo=timezone.utc)
+                coherence_age_hours = (datetime.now(timezone.utc) - _coh_ts).total_seconds() / 3600
+            if coherence_age_hours >= 24:
+                from app.coherence import run_coherence_sweep
+                coh_report = await asyncio.to_thread(run_coherence_sweep)
+                logger.info(
+                    f"Coherence sweep: {coh_report['domains_checked']} domains, "
+                    f"{coh_report['issues_found']} issues"
+                )
+            else:
+                logger.info(f"Coherence sweep skipped -- last ran {coherence_age_hours:.1f}h ago")
+        await asyncio.wait_for(_coherence(), timeout=POST_TASK_TIMEOUT)
+    except asyncio.TimeoutError:
+        logger.warning("Coherence sweep timed out after %ds", POST_TASK_TIMEOUT)
     except Exception as e:
         logger.warning(f"Coherence sweep failed: {e}")
 

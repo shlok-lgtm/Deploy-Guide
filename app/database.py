@@ -36,6 +36,7 @@ def init_pool(database_url: Optional[str] = None, min_conn: int = 2, max_conn: i
             keepalives_idle=30,     # start probing after 30 s idle
             keepalives_interval=10, # retry probe every 10 s
             keepalives_count=5,     # drop after 5 failed probes
+            options="-c statement_timeout=120000",  # 120 s query timeout
         )
         logger.info(f"Database pool initialized (min={min_conn}, max={max_conn}, keepalives=on)")
     except Exception as e:

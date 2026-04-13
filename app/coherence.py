@@ -82,18 +82,22 @@ DOMAIN_FREQUENCIES = {
 def _check_freshness() -> list[dict]:
     """Flag domains whose latest attestation is older than their expected cadence."""
     issues = []
+    # Single query instead of N+1: get latest timestamp per domain in one pass
+    rows = fetch_all(
+        """
+        SELECT DISTINCT ON (domain) domain, cycle_timestamp
+        FROM state_attestations
+        WHERE domain = ANY(%s)
+        ORDER BY domain, cycle_timestamp DESC
+        """,
+        (ALL_DOMAINS,),
+    )
+    latest_by_domain = {r["domain"]: r["cycle_timestamp"] for r in (rows or [])}
+    now = datetime.now(timezone.utc)
     for domain in ALL_DOMAINS:
         expected_hours = DOMAIN_FREQUENCIES.get(domain, 24)
-        row = fetch_one(
-            """
-            SELECT cycle_timestamp
-            FROM state_attestations
-            WHERE domain = %s
-            ORDER BY cycle_timestamp DESC LIMIT 1
-            """,
-            (domain,),
-        )
-        if not row or not row.get("cycle_timestamp"):
+        ts = latest_by_domain.get(domain)
+        if not ts:
             issues.append({
                 "check": "freshness",
                 "domain": domain,
@@ -101,10 +105,9 @@ def _check_freshness() -> list[dict]:
                 "detail": "No attestation found",
             })
             continue
-        ts = row["cycle_timestamp"]
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
-        age_hours = (datetime.now(timezone.utc) - ts).total_seconds() / 3600
+        age_hours = (now - ts).total_seconds() / 3600
         if age_hours > expected_hours * 2:
             issues.append({
                 "check": "freshness",
@@ -118,20 +121,28 @@ def _check_freshness() -> list[dict]:
 def _check_record_count_drift() -> list[dict]:
     """Flag domains whose record count changed by >50 % day-over-day."""
     issues = []
-    for domain in ALL_DOMAINS:
-        rows = fetch_all(
-            """
-            SELECT record_count, cycle_timestamp
+    # Single query: get latest 2 record counts per domain using window function
+    rows = fetch_all(
+        """
+        SELECT domain, record_count, rn FROM (
+            SELECT domain, record_count,
+                   ROW_NUMBER() OVER (PARTITION BY domain ORDER BY cycle_timestamp DESC) AS rn
             FROM state_attestations
-            WHERE domain = %s AND entity_id IS NULL
-            ORDER BY cycle_timestamp DESC LIMIT 2
-            """,
-            (domain,),
-        )
-        if len(rows) < 2:
+            WHERE domain = ANY(%s) AND entity_id IS NULL
+        ) sub
+        WHERE rn <= 2
+        ORDER BY domain, rn
+        """,
+        (ALL_DOMAINS,),
+    )
+    # Group by domain
+    by_domain: dict[str, list] = {}
+    for r in (rows or []):
+        by_domain.setdefault(r["domain"], []).append(r["record_count"] or 0)
+    for domain, counts in by_domain.items():
+        if len(counts) < 2:
             continue
-        current = rows[0]["record_count"] or 0
-        previous = rows[1]["record_count"] or 0
+        current, previous = counts[0], counts[1]
         if previous == 0:
             continue
         drift_pct = abs(current - previous) / previous * 100
