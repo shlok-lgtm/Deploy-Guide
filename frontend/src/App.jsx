@@ -168,6 +168,7 @@ const gradeColor = (g) => {
   return T.accent;
 };
 
+const scoreColor = subScoreColor;
 const fmt = (n, d = 1) => (n != null ? Number(n).toFixed(d) : "—");
 const truncAddr = (addr) => addr ? `${addr.slice(0, 8)}…${addr.slice(-6)}` : "—";
 const fmtHHI = (hhi) => hhi != null ? Number(hhi).toFixed(0) : "—";
