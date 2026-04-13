@@ -1495,6 +1495,246 @@ function MetricsExpansionPanels() {
   );
 }
 
+// ─── Index Score Table ──────────────────────────────────────────────
+
+const INDEX_CONFIGS = [
+  { id: "sii", label: "SII", full: "Stablecoin Integrity Index", endpoint: "/api/scores", color: "#2563eb" },
+  { id: "psi", label: "PSI", full: "Protocol Safety Index", endpoint: "/api/psi/scores", color: "#7c3aed" },
+  { id: "rpi", label: "RPI", full: "Revenue Protocol Index", endpoint: "/api/rpi/scores", color: "#0891b2" },
+  { id: "lsti", label: "LSTI", full: "Liquid Staking Token Index", endpoint: "/api/lsti/scores", color: "#059669" },
+  { id: "bri", label: "BRI", full: "Bridge Risk Index", endpoint: "/api/bri/scores", color: "#d97706" },
+  { id: "dohi", label: "DOHI", full: "DAO Health Index", endpoint: "/api/dohi/scores", color: "#dc2626" },
+  { id: "vsri", label: "VSRI", full: "Vault Strategy Risk Index", endpoint: "/api/vsri/scores", color: "#4f46e5" },
+  { id: "cxri", label: "CXRI", full: "CEX Risk Index", endpoint: "/api/cxri/scores", color: "#be185d" },
+  { id: "tti", label: "TTI", full: "Tokenized Treasury Index", endpoint: "/api/tti/scores", color: "#65a30d" },
+];
+
+function normalizeScores(indexId, data) {
+  if (indexId === "sii") {
+    return (data.stablecoins || []).map((s) => ({
+      name: s.name || s.symbol,
+      slug: s.symbol,
+      score: s.score,
+      confidence_tag: s.confidence_tag,
+      components_populated: s.components_populated,
+      components_total: s.components_total,
+      computed_at: s.computed_at,
+    }));
+  }
+  if (indexId === "psi") {
+    return (data.protocols || []).map((p) => ({
+      name: p.protocol_name,
+      slug: p.protocol_slug,
+      score: p.score,
+      confidence_tag: p.confidence_tag,
+      components_populated: p.components_populated,
+      components_total: p.components_total,
+      computed_at: p.computed_at,
+    }));
+  }
+  if (indexId === "rpi") {
+    return (data.protocols || []).map((p) => ({
+      name: p.protocol_name,
+      slug: p.protocol_slug,
+      score: p.score,
+      confidence_tag: null,
+      components_populated: null,
+      components_total: null,
+      computed_at: p.computed_at,
+    }));
+  }
+  // Circle 7 indices
+  return (data.scores || []).map((s) => ({
+    name: s.name,
+    slug: s.entity,
+    score: s.score,
+    confidence_tag: s.confidence_tag,
+    components_populated: null,
+    components_total: null,
+    computed_at: s.scored_date,
+  }));
+}
+
+function gradeFromScore(score) {
+  if (score == null) return "—";
+  if (score >= 95) return "A+";
+  if (score >= 90) return "A";
+  if (score >= 85) return "A-";
+  if (score >= 80) return "B+";
+  if (score >= 75) return "B";
+  if (score >= 70) return "B-";
+  if (score >= 65) return "C+";
+  if (score >= 60) return "C";
+  if (score >= 55) return "C-";
+  if (score >= 50) return "D+";
+  if (score >= 45) return "D";
+  if (score >= 40) return "D-";
+  return "F";
+}
+
+function gradeColor(score) {
+  if (score == null) return T.inkFaint;
+  if (score >= 80) return "#22c55e";
+  if (score >= 60) return "#eab308";
+  if (score >= 40) return "#f97316";
+  return "#ef4444";
+}
+
+function IndexTable({ config, data, loading, error }) {
+  const sorted = data ? [...data].sort((a, b) => (b.score || 0) - (a.score || 0)) : [];
+  const latestScored = sorted.length > 0
+    ? sorted.reduce((latest, s) => {
+        if (!s.computed_at) return latest;
+        return !latest || s.computed_at > latest ? s.computed_at : latest;
+      }, null)
+    : null;
+
+  return (
+    <div style={{ marginBottom: 24 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{
+            fontFamily: T.mono, fontSize: 11, fontWeight: 700, color: "#fff",
+            background: config.color, padding: "2px 8px", borderRadius: 2, letterSpacing: 0.5,
+          }}>{config.label}</span>
+          <span style={{ fontFamily: T.sans, fontSize: 13, color: T.inkMid }}>{config.full}</span>
+        </div>
+        <div style={{ fontFamily: T.mono, fontSize: 10, color: T.inkFaint }}>
+          {sorted.length} entities
+          {latestScored && ` · scored ${new Date(latestScored).toLocaleDateString()}`}
+        </div>
+      </div>
+
+      {loading && <div style={{ fontFamily: T.mono, fontSize: 11, color: T.inkFaint, padding: "8px 0" }}>Loading...</div>}
+      {error && <div style={{ fontFamily: T.mono, fontSize: 11, color: T.accent, padding: "8px 0" }}>Failed to load: {error}</div>}
+
+      {!loading && !error && sorted.length > 0 && (
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, fontFamily: T.mono }}>
+          <thead>
+            <tr style={{ borderBottom: `1px solid ${T.ruleMid}` }}>
+              <th style={{ textAlign: "left", padding: "4px 6px", fontWeight: 600, color: T.inkLight, fontSize: 10, width: 30 }}>#</th>
+              <th style={{ textAlign: "left", padding: "4px 6px", fontWeight: 600, color: T.inkLight, fontSize: 10 }}>ENTITY</th>
+              <th style={{ textAlign: "right", padding: "4px 6px", fontWeight: 600, color: T.inkLight, fontSize: 10, width: 60 }}>SCORE</th>
+              <th style={{ textAlign: "center", padding: "4px 6px", fontWeight: 600, color: T.inkLight, fontSize: 10, width: 50 }}>GRADE</th>
+              <th style={{ textAlign: "center", padding: "4px 6px", fontWeight: 600, color: T.inkLight, fontSize: 10, width: 80 }}>CONFIDENCE</th>
+              <th style={{ textAlign: "right", padding: "4px 6px", fontWeight: 600, color: T.inkLight, fontSize: 10, width: 80 }}>COVERAGE</th>
+              <th style={{ textAlign: "right", padding: "4px 6px", fontWeight: 600, color: T.inkLight, fontSize: 10, width: 90 }}>SCORED</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((s, i) => (
+              <tr key={s.slug} style={{ borderBottom: `1px solid ${T.ruleLight}` }}>
+                <td style={{ padding: "4px 6px", color: T.inkFaint }}>{i + 1}</td>
+                <td style={{ padding: "4px 6px", color: T.ink }}>{s.name}</td>
+                <td style={{ padding: "4px 6px", textAlign: "right", fontWeight: 600, color: gradeColor(s.score) }}>
+                  {s.score != null ? s.score.toFixed(1) : "—"}
+                </td>
+                <td style={{ padding: "4px 6px", textAlign: "center", fontWeight: 600, color: gradeColor(s.score) }}>
+                  {gradeFromScore(s.score)}
+                </td>
+                <td style={{ padding: "4px 6px", textAlign: "center" }}>
+                  {s.confidence_tag ? (
+                    <span style={{
+                      fontSize: 9, padding: "1px 5px", borderRadius: 2,
+                      background: s.confidence_tag === "high" ? "#22c55e18" : s.confidence_tag === "standard" ? "#eab30818" : "#ef444418",
+                      color: s.confidence_tag === "high" ? "#22c55e" : s.confidence_tag === "standard" ? "#eab308" : "#ef4444",
+                      border: `1px solid ${s.confidence_tag === "high" ? "#22c55e33" : s.confidence_tag === "standard" ? "#eab30833" : "#ef444433"}`,
+                    }}>{s.confidence_tag}</span>
+                  ) : <span style={{ color: T.inkFaint }}>—</span>}
+                </td>
+                <td style={{ padding: "4px 6px", textAlign: "right", color: T.inkMid }}>
+                  {s.components_populated != null && s.components_total != null
+                    ? `${s.components_populated}/${s.components_total}`
+                    : "—"}
+                </td>
+                <td style={{ padding: "4px 6px", textAlign: "right", color: T.inkFaint, fontSize: 10 }}>
+                  {s.computed_at ? new Date(s.computed_at).toLocaleDateString() : "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {!loading && !error && sorted.length === 0 && (
+        <div style={{ fontFamily: T.mono, fontSize: 11, color: T.inkFaint, padding: "8px 0" }}>No scores available.</div>
+      )}
+    </div>
+  );
+}
+
+function IndicesPanel() {
+  const [indices, setIndices] = useState({});
+  const [loading, setLoading] = useState({});
+  const [errors, setErrors] = useState({});
+  const [lastRefresh, setLastRefresh] = useState(null);
+
+  const loadAll = useCallback(async () => {
+    const newLoading = {};
+    INDEX_CONFIGS.forEach((c) => { newLoading[c.id] = true; });
+    setLoading(newLoading);
+    setErrors({});
+
+    const results = {};
+    const errs = {};
+
+    await Promise.all(INDEX_CONFIGS.map(async (config) => {
+      try {
+        const data = await opsFetch(config.endpoint);
+        results[config.id] = normalizeScores(config.id, data);
+      } catch (e) {
+        errs[config.id] = e.message;
+        results[config.id] = [];
+      }
+    }));
+
+    setIndices(results);
+    setErrors(errs);
+    setLoading({});
+    setLastRefresh(new Date());
+  }, []);
+
+  useEffect(() => { loadAll(); }, [loadAll]);
+
+  const totalEntities = Object.values(indices).reduce((sum, arr) => sum + (arr?.length || 0), 0);
+  const indicesLoaded = Object.keys(indices).length;
+  const anyLoading = Object.values(loading).some(Boolean);
+
+  return (
+    <div style={{ animation: "fadeIn 0.3s ease" }}>
+      <TabHeader
+        title={<><span style={{ fontWeight: 700 }}>Index</span> Overview</>}
+        formId="FORM IDX-001 · BASIS PROTOCOL"
+        stats={[
+          `${indicesLoaded > 0 ? INDEX_CONFIGS.length : "—"} indices`,
+          `${totalEntities} entities`,
+          "scored hourly",
+          lastRefresh ? `refreshed ${lastRefresh.toLocaleTimeString()}` : "loading...",
+        ]}
+        accent="#2563eb"
+        mobile={false}
+      />
+
+      <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end" }}>
+        <button onClick={loadAll} disabled={anyLoading} style={btn({ opacity: anyLoading ? 0.5 : 1 })}>
+          {anyLoading ? "Loading..." : "Refresh All"}
+        </button>
+      </div>
+
+      {INDEX_CONFIGS.map((config) => (
+        <IndexTable
+          key={config.id}
+          config={config}
+          data={indices[config.id] || []}
+          loading={!!loading[config.id]}
+          error={errors[config.id]}
+        />
+      ))}
+    </div>
+  );
+}
+
+
 function ProtocolDeepDive({ slug }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -3373,7 +3613,7 @@ export default function OpsDashboard() {
   const [targets, setTargets] = useState([]);
   const [feed, setFeed] = useState([]);
   const [contentItems, setContentItems] = useState([]);
-  const [tab, setTab] = useState("overview");
+  const [tab, setTab] = useState("indices");
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(null); // tracks header button in-flight
@@ -3463,6 +3703,9 @@ export default function OpsDashboard() {
   const warnings = health.filter((h) => h.status !== "healthy");
 
   const TAB_ITEMS = [
+    { id: "indices", label: "Indices" },
+    { id: "data", label: "Data Layer" },
+    { id: "health", label: "Health" },
     { id: "overview", label: "Overview" },
     { id: "pipeline", label: "Pipeline" },
     { id: "metrics", label: "Metrics" },
@@ -3514,6 +3757,48 @@ export default function OpsDashboard() {
             )}
             <Flash flash={flash} />
 
+            {/* ═══ INDICES TAB ═══ */}
+            {tab === "indices" && <IndicesPanel />}
+
+            {/* ═══ DATA LAYER TAB ═══ */}
+            {tab === "data" && (
+              <div style={{ animation: "fadeIn 0.3s ease" }}>
+                <TabHeader
+                  title={<><span style={{ fontWeight: 700 }}>Data</span> Layer</>}
+                  formId="FORM DL-001 · BASIS PROTOCOL"
+                  stats={["component coverage", "collector status", "data freshness"]}
+                  accent="#0891b2"
+                  mobile={false}
+                />
+                <StateGrowthPanel />
+              </div>
+            )}
+
+            {/* ═══ HEALTH TAB ═══ */}
+            {tab === "health" && (
+              <div style={{ animation: "fadeIn 0.3s ease" }}>
+                <TabHeader
+                  title={<><span style={{ fontWeight: 700 }}>System</span> Health</>}
+                  formId="FORM HL-001 · BASIS PROTOCOL"
+                  stats={[healthSummary, loading ? "loading..." : new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })]}
+                  accent={warnings.length > 0 ? "#f39c12" : "#27ae60"}
+                  mobile={false}
+                />
+
+                <Section title="SYSTEM HEALTH" actions={
+                  <button onClick={handleRunHealthCheck} disabled={busy === "health"} style={btn({ opacity: busy === "health" ? 0.5 : 1 })}>
+                    {busy === "health" ? "Checking..." : "Run Check"}
+                  </button>
+                }>
+                  <div style={{ fontSize: 11, fontFamily: T.mono, color: T.inkMid, marginBottom: 8 }}>
+                    {healthSummary}
+                    {warnings.length > 0 && <span style={{ color: "#f39c12" }}> · {warnings.length} warning(s): {warnings.map((w) => w.system).join(", ")}</span>}
+                  </div>
+                  <HealthPanel health={health} />
+                </Section>
+              </div>
+            )}
+
             {/* ═══ OVERVIEW TAB ═══ */}
             {tab === "overview" && (
               <div style={{ animation: "fadeIn 0.3s ease" }}>
@@ -3526,23 +3811,9 @@ export default function OpsDashboard() {
                   showOnChain={false}
                 />
 
-                <Section title="PIPELINE HEALTH" actions={
-                  <button onClick={handleRunHealthCheck} disabled={busy === "health"} style={btn({ opacity: busy === "health" ? 0.5 : 1 })}>
-                    {busy === "health" ? "Checking..." : "Run Check"}
-                  </button>
-                }>
-                  <div style={{ fontSize: 11, fontFamily: T.mono, color: T.inkMid, marginBottom: 8 }}>
-                    {healthSummary}
-                    {warnings.length > 0 && <span style={{ color: "#f39c12" }}> · {warnings.length} warning(s): {warnings.map((w) => w.system).join(", ")}</span>}
-                  </div>
-                  <HealthPanel health={health} />
-                </Section>
-
                 <Section title={`ACTION QUEUE (${queue.length} items)`}>
                   <ActionQueue queue={queue} onDecide={handleDecide} decidingId={decidingId} />
                 </Section>
-
-                <StateGrowthPanel />
               </div>
             )}
 
