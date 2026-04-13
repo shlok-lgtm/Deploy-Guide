@@ -106,19 +106,23 @@ def track_api_call(
         if status and status >= 400:
             c["errors_today"] += count
 
-    # Check daily hard cap alerts for Etherscan
-    if provider == "etherscan":
+    # Check daily hard cap alerts
+    DAILY_CAPS = {
+        "etherscan": 200_000,    # Standard plan hard cap
+        "blockscout": 100_000,   # Free tier per-chain (conservative — per instance is separate)
+    }
+    cap = DAILY_CAPS.get(provider)
+    if cap:
         with _counters_lock:
-            etherscan_today = _counters["etherscan"]["calls_today"]
-        ETHERSCAN_DAILY_CAP = 200_000
-        if etherscan_today >= int(ETHERSCAN_DAILY_CAP * 0.95):
+            today_count = _counters[provider]["calls_today"]
+        if today_count >= int(cap * 0.95):
             logger.error(
-                f"ETHERSCAN 95% CAP ALERT: {etherscan_today:,}/{ETHERSCAN_DAILY_CAP:,} calls today. "
-                f"Stop non-critical Etherscan calls to avoid hitting hard cap."
+                f"{provider.upper()} 95% CAP ALERT: {today_count:,}/{cap:,} calls today. "
+                f"Stop non-critical {provider} calls to avoid hitting hard cap."
             )
-        elif etherscan_today >= int(ETHERSCAN_DAILY_CAP * 0.80):
+        elif today_count >= int(cap * 0.80):
             logger.warning(
-                f"Etherscan 80% cap warning: {etherscan_today:,}/{ETHERSCAN_DAILY_CAP:,} calls today."
+                f"{provider} 80% cap warning: {today_count:,}/{cap:,} calls today."
             )
 
     # Buffer for DB write

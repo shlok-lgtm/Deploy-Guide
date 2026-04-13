@@ -28,7 +28,14 @@ logger = logging.getLogger(__name__)
 # Zero address — skip mints/burns
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 
-# Etherscan V2 chain IDs for multi-chain support
+# Per-chain Blockscout native API bases — each has its own 100K/day budget
+BLOCKSCOUT_CHAINS = {
+    "ethereum": "https://eth.blockscout.com/api",
+    "base": "https://base.blockscout.com/api",
+    "arbitrum": "https://arbitrum.blockscout.com/api",
+}
+
+# Etherscan V2 chain IDs (fallback if Blockscout fails)
 CHAIN_IDS = {"ethereum": 1, "base": 8453, "arbitrum": 42161}
 
 
@@ -41,15 +48,63 @@ async def _fetch_top_holders_multichain(
     offset: int = 100,
 ) -> list[str]:
     """
-    Fetch top token holders via Etherscan V2 with multi-chain support.
-    Falls back to the default fetch_top_holders for Ethereum.
+    Fetch top token holders — prefers Blockscout per-chain native API
+    (saves Etherscan budget). Falls back to Etherscan V2 if Blockscout fails.
+
+    Blockscout per-chain instances each have their own 100K/day budget,
+    so using them for holder queries is essentially free relative to
+    the shared Etherscan budget.
     """
+    from app.shared_rate_limiter import rate_limiter
+    from app.api_usage_tracker import track_api_call
+
+    blockscout_base = BLOCKSCOUT_CHAINS.get(chain)
+
+    if blockscout_base:
+        # Try Blockscout first
+        try:
+            await rate_limiter.acquire("blockscout")
+            import time
+            start = time.time()
+
+            resp = await client.get(
+                blockscout_base,
+                params={
+                    "module": "token",
+                    "action": "getTokenHolders",
+                    "contractaddress": contract,
+                    "page": page,
+                    "offset": offset,
+                },
+                timeout=15.0,
+            )
+            latency = int((time.time() - start) * 1000)
+            track_api_call("blockscout", f"/getTokenHolders/{chain}",
+                           caller="pool_wallet_collector", status=resp.status_code,
+                           latency_ms=latency)
+
+            data = resp.json()
+            if data.get("status") == "1" and isinstance(data.get("result"), list):
+                rate_limiter.report_success("blockscout")
+                return [
+                    (h.get("address") or h.get("TokenHolderAddress", "")).lower()
+                    for h in data["result"]
+                    if h.get("address") or h.get("TokenHolderAddress")
+                ]
+
+            # Status != 1 — try Etherscan fallback
+        except Exception as e:
+            logger.debug(f"Blockscout holder fetch failed for {contract[:10]}… on {chain}: {e}")
+
+    # Fallback: Etherscan V2 (uses shared Etherscan budget)
     if chain == "ethereum":
         return await fetch_top_holders(client, contract, api_key, page=page, offset=offset)
 
-    # Multi-chain: use Etherscan V2 with chainid parameter
     chain_id = CHAIN_IDS.get(chain, 1)
     try:
+        from app.shared_rate_limiter import rate_limiter as _rl
+        await _rl.acquire("etherscan")
+
         resp = await client.get(
             "https://api.etherscan.io/v2/api",
             params={
@@ -72,11 +127,11 @@ async def _fetch_top_holders_multichain(
             ]
         return []
     except Exception as e:
-        logger.debug(f"Multi-chain holder fetch error for {contract[:10]}… on {chain}: {e}")
+        logger.debug(f"Etherscan holder fetch fallback failed for {contract[:10]}… on {chain}: {e}")
         return []
 
 
-async def run_pool_wallet_collection(max_pages_per_pool: int = 5) -> dict:
+async def run_pool_wallet_collection(max_pages_per_pool: int = 30) -> dict:
     """
     Discover wallets holding receipt tokens for all protocol adapters.
 

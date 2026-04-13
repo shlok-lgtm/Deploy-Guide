@@ -697,6 +697,21 @@ async def run_enrichment_pipeline() -> dict:
         ),
     ))
 
+    # ---- Blockscout holder discovery (deep pagination, 90K calls/day) ----
+
+    async def _run_holder_discovery():
+        from app.data_layer.holder_discovery import run_holder_discovery
+        return await run_holder_discovery()
+
+    pipeline.add(EnrichmentTask(
+        name="holder_discovery", func=_run_holder_discovery,
+        timeout_seconds=3600, group="growth", priority=3,
+        gate_check=make_db_gate(
+            "SELECT MAX(created_at) AS latest FROM wallet_graph.wallets WHERE source = 'holder_discovery'",
+            min_hours=24,
+        ),
+    ))
+
     # ---- Contract surveillance (weekly) ----
 
     async def _run_contract_surveillance():
