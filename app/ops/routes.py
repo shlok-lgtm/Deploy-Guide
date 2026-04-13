@@ -1568,6 +1568,24 @@ async def state_growth(request: Request, days: int = Query(default=14, ge=1, le=
         except Exception as e:
             treasury_status = {"error": str(e)}
 
+        # Merge live data layer stats into the response
+        data_layer_live = {}
+        try:
+            from app.data_layer.state_growth import get_state_growth
+            live = get_state_growth()
+            data_layer_live = {
+                "tables": live.get("tables", {}),
+                "by_category": live.get("by_category", {}),
+                "wallet_graph": live.get("wallet_graph", {}),
+                "entity_coverage": live.get("entity_coverage", {}),
+                "api_utilization": live.get("api_utilization", {}),
+                "provenance": live.get("provenance", {}),
+                "data_quality": live.get("data_quality", {}),
+                "storage": live.get("storage", {}),
+            }
+        except Exception as dlx:
+            data_layer_live = {"error": str(dlx)}
+
         return {
             "days": day_entries,
             "summary": {
@@ -1578,6 +1596,7 @@ async def state_growth(request: Request, days: int = Query(default=14, ge=1, le=
                 "stalled": stalled,
             },
             "treasury": treasury_status,
+            "data_layer": data_layer_live,
         }
     except HTTPException:
         raise
@@ -2821,15 +2840,15 @@ async def enrichment_status(request: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-@router.get("/state-growth")
-async def state_growth(request: Request):
-    """Comprehensive state accumulation dashboard: tables, wallets, entities, API usage, provenance, quality."""
+@router.get("/state-growth-live")
+async def state_growth_live(request: Request):
+    """Live state growth — queries all tables directly for real-time row counts, growth, coverage."""
     _check_admin_key(request)
     try:
         from app.data_layer.state_growth import get_state_growth
         return get_state_growth()
     except Exception as e:
-        logger.warning(f"State growth dashboard failed: {e}")
+        logger.warning(f"State growth live dashboard failed: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
