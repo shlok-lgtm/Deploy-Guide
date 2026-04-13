@@ -25,12 +25,20 @@ logger = logging.getLogger(__name__)
 API_KEY = os.environ.get("COINGECKO_API_KEY", "")
 CG_BASE = "https://pro-api.coingecko.com/api/v3" if API_KEY else "https://api.coingecko.com/api/v3"
 
-# Top exchanges to track (by volume)
+# Top 50 exchanges by volume (CoinGecko IDs)
 TOP_EXCHANGES = [
     "binance", "coinbase-exchange", "okx", "bybit_spot",
     "kraken", "kucoin", "gate", "bitget",
     "htx", "crypto_com", "mexc", "bitfinex",
     "bitstamp", "gemini", "lbank",
+    # Extended to 50
+    "upbit", "bithumb", "whitebit", "bitrue", "poloniex",
+    "hashkey-exchange", "bitmart", "phemex", "deribit", "bitflyer",
+    "indodax", "korbit", "exmo", "btcturk", "tidex",
+    "coinone", "probit-exchange", "bitbank", "zaif", "coincheck",
+    "okcoin", "gopax", "liquid", "btcbox", "bkex",
+    "latoken", "hotbit", "coinex", "bigone", "digifinex",
+    "xt", "deepcoin", "toobit", "bingx", "bitvenus",
 ]
 
 
@@ -71,6 +79,38 @@ async def _fetch_exchange_data(
                        caller="exchange_collector", status=500, latency_ms=latency)
         logger.warning(f"Exchange data fetch failed for {exchange_id}: {e}")
         return {}
+
+
+async def _fetch_exchange_volume_history(
+    client: httpx.AsyncClient, exchange_id: str, days: int = 30
+) -> list:
+    """Fetch historical volume chart from CoinGecko."""
+    from app.shared_rate_limiter import rate_limiter
+    from app.api_usage_tracker import track_api_call
+
+    await rate_limiter.acquire("coingecko")
+
+    url = f"{CG_BASE}/exchanges/{exchange_id}/volume_chart/{days}"
+    start = time.time()
+    try:
+        resp = await client.get(url, headers=_headers(), timeout=15)
+        latency = int((time.time() - start) * 1000)
+        track_api_call("coingecko", f"/exchanges/{exchange_id}/volume_chart",
+                       caller="exchange_collector", status=resp.status_code, latency_ms=latency)
+
+        if resp.status_code == 429:
+            rate_limiter.report_429("coingecko")
+            return []
+
+        resp.raise_for_status()
+        rate_limiter.report_success("coingecko")
+        return resp.json()
+    except Exception as e:
+        latency = int((time.time() - start) * 1000)
+        track_api_call("coingecko", f"/exchanges/{exchange_id}/volume_chart",
+                       caller="exchange_collector", status=500, latency_ms=latency)
+        logger.debug(f"Exchange volume history failed for {exchange_id}: {e}")
+        return []
 
 
 def _extract_stablecoin_pairs(tickers: list[dict]) -> list[dict]:
@@ -189,6 +229,14 @@ async def run_exchange_collection() -> dict:
 
                 snapshots.append(snapshot)
                 total_stablecoin_pairs += len(stablecoin_pairs) if stablecoin_pairs else 0
+
+                # Fetch volume history (30-day backfill)
+                try:
+                    vol_history = await _fetch_exchange_volume_history(client, exchange_id, days=30)
+                    if vol_history:
+                        snapshot["raw_data"]["volume_history_points"] = len(vol_history)
+                except Exception:
+                    pass
 
             except Exception as e:
                 logger.warning(f"Exchange collection failed for {exchange_id}: {e}")

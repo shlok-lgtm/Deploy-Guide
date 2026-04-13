@@ -46,7 +46,7 @@ async def _fetch_coin_data(
     url = f"{CG_BASE}/coins/{coingecko_id}"
     params = {
         "localization": "false",
-        "tickers": "false",
+        "tickers": "true",
         "market_data": "true",
         "community_data": "true",
         "developer_data": "true",
@@ -133,7 +133,18 @@ async def run_entity_snapshots() -> dict:
                     "coingecko_id": sc["coingecko_id"],
                 })
 
-    # PSI protocol tokens (from config)
+    # PSI protocol tokens
+    PSI_CG_MAP = {
+        "aave": "aave", "compound-finance": "compound-governance-token",
+        "morpho": "morpho", "spark": "spark",
+        "lido": "lido-dao", "rocket-pool": "rocket-pool",
+        "uniswap": "uniswap", "curve-finance": "curve-dao-token",
+        "convex-finance": "convex-finance", "eigenlayer": "eigenlayer",
+        "pendle": "pendle", "ethena": "ethena",
+        "sky": "maker", "drift": "drift-protocol",
+        "jupiter-perpetual-exchange": "jupiter-exchange-solana",
+        "raydium": "raydium",
+    }
     try:
         psi_rows = fetch_all(
             "SELECT DISTINCT protocol_slug FROM psi_scores ORDER BY protocol_slug"
@@ -141,17 +152,7 @@ async def run_entity_snapshots() -> dict:
         if psi_rows:
             for row in psi_rows:
                 slug = row["protocol_slug"]
-                # Map PSI slugs to CoinGecko IDs where known
-                cg_map = {
-                    "aave": "aave", "compound": "compound-governance-token",
-                    "morpho": "morpho", "spark": "spark",
-                    "lido": "lido-dao", "rocket-pool": "rocket-pool",
-                    "uniswap": "uniswap", "curve-dao": "curve-dao-token",
-                    "convex": "convex-finance", "eigenlayer": "eigenlayer",
-                    "pendle": "pendle", "ethena": "ethena",
-                    "maker": "maker",
-                }
-                cg_id = cg_map.get(slug)
+                cg_id = PSI_CG_MAP.get(slug)
                 if cg_id:
                     entities.append({
                         "entity_id": slug,
@@ -160,6 +161,38 @@ async def run_entity_snapshots() -> dict:
                     })
     except Exception as e:
         logger.debug(f"PSI entity lookup failed: {e}")
+
+    # Circle 7 entities — LSTs, bridges, vaults, exchanges, DAOs, TTIs
+    CIRCLE7_CG_MAP = {
+        # LSTs
+        "lido-staked-ether": "staked-ether",
+        "rocket-pool-eth": "rocket-pool-eth",
+        "coinbase-wrapped-staked-eth": "coinbase-wrapped-staked-eth",
+        "frax-ether": "frax-ether",
+        "mantle-staked-ether": "mantle-staked-ether",
+        "swell-staked-eth": "sweth",
+        # Bridges (governance tokens)
+        "wormhole": "wormhole", "axelar": "axelar",
+        "layerzero": "layerzero", "stargate-finance": "stargate-finance",
+        "across-protocol": "across-protocol",
+        # Exchanges (governance tokens)
+        "binancecoin": "binancecoin", "okb": "okb", "kucoin-shares": "kucoin-shares",
+        "crypto-com-chain": "crypto-com-chain", "mx-token": "mx-token",
+        # Vaults
+        "yearn-finance": "yearn-finance",
+        # TTIs
+        "ondo-finance": "ondo-finance", "hashnote-usyc": "hashnote-usyc",
+        "mountain-protocol": "mountain-protocol",
+    }
+    try:
+        for entity_id, cg_id in CIRCLE7_CG_MAP.items():
+            entities.append({
+                "entity_id": entity_id,
+                "entity_type": "circle7",
+                "coingecko_id": cg_id,
+            })
+    except Exception as e:
+        logger.debug(f"Circle 7 entity mapping failed: {e}")
 
     if not entities:
         return {"error": "no entities to snapshot"}

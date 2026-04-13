@@ -178,7 +178,7 @@ async def run_mint_burn_collection() -> dict:
             if not contract or not contract.startswith("0x"):
                 continue
 
-            for chain in ["ethereum"]:  # Start with Ethereum, expand later
+            for chain in ["ethereum", "base", "arbitrum"]:
                 try:
                     last_block = _get_last_block(stablecoin_id, chain)
                     transfers = await _fetch_token_transfers(

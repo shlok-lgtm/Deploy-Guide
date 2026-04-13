@@ -231,11 +231,37 @@ async def run_peg_monitoring() -> dict:
                         consecutive_depeg = 0
                         max_deviation = 0
 
-                # Compute volatility surface
+                # Compute volatility surface from 1-day data
                 vol = _compute_volatility_surface(prices, stablecoin_id)
                 if vol:
                     _store_volatility_surface(vol)
                     vol_surfaces += 1
+
+                # Also fetch 90-day data for deep volatility surfaces
+                try:
+                    data_90d = await _fetch_market_chart(client, cg_id, days=90)
+                    prices_90d = [p[1] for p in data_90d.get("prices", [])]
+                    if len(prices_90d) > 50:
+                        vol_90d = _compute_volatility_surface(prices_90d, stablecoin_id)
+                        if vol_90d:
+                            from app.database import get_cursor as _gc
+                            with _gc() as cur:
+                                cur.execute(
+                                    """INSERT INTO volatility_surfaces
+                                       (asset_id, realized_vol_30d, realized_vol_90d,
+                                        max_drawdown_30d, max_drawdown_90d, computed_at)
+                                       VALUES (%s, %s, %s, %s, %s, NOW())
+                                       ON CONFLICT (asset_id, computed_at) DO UPDATE SET
+                                           realized_vol_90d = EXCLUDED.realized_vol_90d,
+                                           max_drawdown_90d = EXCLUDED.max_drawdown_90d""",
+                                    (stablecoin_id,
+                                     vol_90d.get("realized_vol"),
+                                     vol_90d.get("realized_vol"),
+                                     vol_90d.get("max_drawdown"),
+                                     vol_90d.get("max_drawdown")),
+                                )
+                except Exception as e:
+                    logger.debug(f"90d vol surface failed for {stablecoin_id}: {e}")
 
             except Exception as e:
                 logger.warning(f"Peg monitoring failed for {stablecoin_id}: {e}")

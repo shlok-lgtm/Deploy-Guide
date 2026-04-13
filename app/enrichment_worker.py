@@ -383,7 +383,7 @@ async def run_enrichment_pipeline() -> dict:
 
     async def _run_wallet_reindex():
         from app.indexer.pipeline import run_pipeline_batch
-        return await run_pipeline_batch(batch_size=500)
+        return await run_pipeline_batch(batch_size=5000)
 
     pipeline.add(EnrichmentTask(
         name="wallet_reindex", func=_run_wallet_reindex,
@@ -539,11 +539,8 @@ async def run_enrichment_pipeline() -> dict:
 
     pipeline.add(EnrichmentTask(
         name="liquidity_depth", func=_run_liquidity_collection,
-        timeout_seconds=600, group="data_layer", priority=2,
-        gate_check=make_db_gate(
-            "SELECT MAX(snapshot_at) AS latest FROM liquidity_depth",
-            min_hours=1,
-        ),
+        timeout_seconds=900, group="data_layer", priority=1,
+        # No gate — runs every slow cycle (~3h) for near-continuous liquidity data
     ))
 
     # ---- Tier 2: Yield data ----
@@ -708,11 +705,11 @@ async def run_enrichment_pipeline() -> dict:
 
     async def _run_wallet_graph_expansion():
         from app.data_layer.wallet_expansion import run_wallet_graph_expansion
-        return await run_wallet_graph_expansion(target_new_wallets=500, max_etherscan_calls=2000)
+        return await run_wallet_graph_expansion(target_new_wallets=10_000, max_etherscan_calls=250_000)
 
     pipeline.add(EnrichmentTask(
         name="wallet_graph_expansion", func=_run_wallet_graph_expansion,
-        timeout_seconds=900, group="growth", priority=4,
+        timeout_seconds=3600, group="growth", priority=4,
         gate_check=make_db_gate(
             "SELECT MAX(created_at) AS latest FROM wallet_graph.wallets WHERE source = 'graph_expansion'",
             min_hours=24,

@@ -36,8 +36,30 @@ DEX_CHAINS = {
     "arbitrum": "arbitrum-one",
 }
 
-# Stablecoin contract addresses on each chain (populated from DB)
-_STABLECOIN_CONTRACTS: dict = {}
+# Known stablecoin contracts per chain for DEX pool lookups
+STABLECOIN_CONTRACTS_BY_CHAIN = {
+    "ethereum": {
+        "USDC": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+        "USDT": "0xdac17f958d2ee523a2206206994597c13d831ec7",
+        "DAI":  "0x6b175474e89094c44da98b954eedeac495271d0f",
+        "FRAX": "0x853d955acef822db058eb8505911ed77f175b99e",
+        "PYUSD": "0x6c3ea9036406852006290770bedfcaba0e23a0e8",
+        "USDe": "0x4c9edd5852cd905f086c759e8383e09bff1e68b3",
+        "FDUSD": "0xc5f0f7b66764f6ec8c8dff7ba683102295e16409",
+        "USD1": "0x8d0d000ee44948fc98c9b98a4fa4921476f08b0d",
+    },
+    "base": {
+        "USDC": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "USDT": "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2",
+        "DAI":  "0x50c5725949a6f0c72e6c4a641f24049a917db0cb",
+    },
+    "arbitrum": {
+        "USDC": "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+        "USDT": "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9",
+        "DAI":  "0xda10009cbd5d07dd0cecc66161fc93d7c9000da1",
+        "FRAX": "0x17fc002b466eec40dae837fc4be5c67993ddbd6f",
+    },
+}
 
 
 def _headers() -> dict:
@@ -45,30 +67,6 @@ def _headers() -> dict:
     if API_KEY:
         h["x-cg-pro-api-key"] = API_KEY
     return h
-
-
-def _get_stablecoin_contracts() -> dict:
-    """Load stablecoin contract addresses from DB. Returns {chain: {symbol: address}}."""
-    global _STABLECOIN_CONTRACTS
-    if _STABLECOIN_CONTRACTS:
-        return _STABLECOIN_CONTRACTS
-
-    try:
-        from app.database import fetch_all
-        rows = fetch_all(
-            """SELECT id, symbol, contract FROM stablecoins
-               WHERE scoring_enabled = TRUE AND contract IS NOT NULL"""
-        )
-        if rows:
-            for row in rows:
-                contract = row.get("contract", "")
-                if contract and contract.startswith("0x"):
-                    # Default to ethereum; multi-chain support via config
-                    _STABLECOIN_CONTRACTS.setdefault("ethereum", {})[row["symbol"].upper()] = contract.lower()
-        return _STABLECOIN_CONTRACTS
-    except Exception as e:
-        logger.warning(f"Could not load stablecoin contracts: {e}")
-        return {}
 
 
 async def collect_cex_tickers(
@@ -350,11 +348,16 @@ async def run_liquidity_collection() -> dict:
             except Exception as e:
                 logger.warning(f"CEX ticker collection failed for {asset_id}: {e}")
 
-            # DEX pools on each chain
+            # DEX pools on each chain — use per-chain contract addresses
             for chain, _ in DEX_CHAINS.items():
-                token_addr = contract if chain == "ethereum" and contract else None
+                chain_contracts = STABLECOIN_CONTRACTS_BY_CHAIN.get(chain, {})
+                token_addr = chain_contracts.get(symbol)
                 if not token_addr:
-                    continue
+                    # Fall back to main contract for ethereum
+                    if chain == "ethereum" and contract:
+                        token_addr = contract
+                    else:
+                        continue
 
                 try:
                     dex_records = await collect_dex_pools(client, chain, asset_id, token_addr)

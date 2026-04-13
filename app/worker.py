@@ -599,6 +599,41 @@ async def run_fast_cycle():
         logger.warning(f"Exchange health monitoring failed: {e}")
 
     # -------------------------------------------------------------------------
+    # Hourly data layer collectors — run every fast cycle for high-frequency data
+    # Uses CoinGecko budget: ~90 entities/cycle + ~50 exchanges/cycle
+    # -------------------------------------------------------------------------
+    try:
+        from app.data_layer.entity_snapshots import run_entity_snapshots
+        logger.info("Running hourly entity snapshots...")
+        snap_result = await run_entity_snapshots()
+        logger.info(f"Entity snapshots: {snap_result.get('snapshots_stored', 0)} stored")
+    except Exception as e:
+        logger.warning(f"Entity snapshots failed: {e}")
+
+    try:
+        from app.data_layer.exchange_collector import run_exchange_collection
+        logger.info("Running hourly exchange data collection...")
+        exch_result = await run_exchange_collection()
+        logger.info(f"Exchange data: {exch_result.get('exchanges_processed', 0)} exchanges")
+    except Exception as e:
+        logger.warning(f"Exchange data collection failed: {e}")
+
+    try:
+        from app.data_layer.liquidity_collector import run_liquidity_collection
+        logger.info("Running hourly liquidity depth collection...")
+        liq_result = await run_liquidity_collection()
+        logger.info(f"Liquidity depth: {liq_result.get('total_records', 0)} records")
+    except Exception as e:
+        logger.warning(f"Liquidity depth collection failed: {e}")
+
+    # Flush API usage tracker after data layer calls
+    try:
+        from app.api_usage_tracker import flush
+        flush()
+    except Exception:
+        pass
+
+    # -------------------------------------------------------------------------
     # Verification agent cycle — every cycle
     # -------------------------------------------------------------------------
     try:

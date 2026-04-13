@@ -209,16 +209,20 @@ async def run_contract_surveillance() -> dict:
     """
     from app.database import fetch_all
 
-    # Get contracts to scan — stablecoins
+    # Get contracts to scan — stablecoins (all chains)
+    from app.data_layer.liquidity_collector import STABLECOIN_CONTRACTS_BY_CHAIN
+
+    contracts_to_scan = []
+
+    # Stablecoin contracts on all chains
     stablecoins = fetch_all(
         """SELECT id, symbol, contract FROM stablecoins
            WHERE scoring_enabled = TRUE AND contract IS NOT NULL"""
     )
-
-    # Get contracts from registry
-    contracts_to_scan = []
     if stablecoins:
         for sc in stablecoins:
+            symbol = sc.get("symbol", "").upper()
+            # Ethereum main contract
             contract = sc.get("contract", "")
             if contract and contract.startswith("0x"):
                 contracts_to_scan.append({
@@ -226,6 +230,44 @@ async def run_contract_surveillance() -> dict:
                     "chain": "ethereum",
                     "contract_address": contract,
                 })
+            # Multi-chain contracts
+            for chain in ["base", "arbitrum"]:
+                chain_addr = STABLECOIN_CONTRACTS_BY_CHAIN.get(chain, {}).get(symbol)
+                if chain_addr:
+                    contracts_to_scan.append({
+                        "entity_id": sc["id"],
+                        "chain": chain,
+                        "contract_address": chain_addr,
+                    })
+
+    # Protocol core contracts from contract registry
+    try:
+        import json as _json
+        import os
+        registry_path = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            "config", "contract_registry.json"
+        )
+        if os.path.exists(registry_path):
+            with open(registry_path) as f:
+                registry = _json.load(f)
+            for slug, contracts in registry.get("protocols", {}).items():
+                core = contracts.get("core_contract")
+                if core and core.get("address"):
+                    contracts_to_scan.append({
+                        "entity_id": slug,
+                        "chain": core.get("chain", "ethereum"),
+                        "contract_address": core["address"],
+                    })
+                timelock = contracts.get("governance_timelock")
+                if timelock and timelock.get("address"):
+                    contracts_to_scan.append({
+                        "entity_id": f"{slug}_timelock",
+                        "chain": timelock.get("chain", "ethereum"),
+                        "contract_address": timelock["address"],
+                    })
+    except Exception as e:
+        logger.debug(f"Contract registry load failed: {e}")
 
     if not contracts_to_scan:
         return {"error": "no contracts to scan"}
