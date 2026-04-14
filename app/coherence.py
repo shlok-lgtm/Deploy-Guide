@@ -47,6 +47,12 @@ ALL_DOMAINS = [
     "cxri_components",
     "tti_components",
     "rpi_components",
+    "contract_upgrades",
+    "contagion_events",
+    "validator_performance",
+    "sanctions_screening",
+    "enforcement_records",
+    "parent_company_financials",
 ]
 
 DOMAIN_FREQUENCIES = {
@@ -72,6 +78,12 @@ DOMAIN_FREQUENCIES = {
     "cxri_components": 24,
     "tti_components": 24,
     "rpi_components": 48,
+    "contract_upgrades": 24,
+    "contagion_events": 168,       # event-driven, no strict frequency — check weekly
+    "validator_performance": 24,
+    "sanctions_screening": 24,
+    "enforcement_records": 168,    # weekly
+    "parent_company_financials": 168,  # weekly
 }
 
 

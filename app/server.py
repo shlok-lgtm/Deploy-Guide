@@ -7399,6 +7399,318 @@ async def provenance_attestor_pubkey():
 
 
 # =============================================================================
+# State-Building Pipeline API Endpoints (Pipelines 3, 16, 17, 19, 20, 21)
+# =============================================================================
+
+
+# --- Pipeline 3: Contract Upgrades ---
+
+@app.get("/api/contract-upgrades/history")
+async def contract_upgrade_history(
+    entity_type: Optional[str] = None,
+    entity_id: Optional[int] = None,
+    limit: int = Query(default=50, ge=1, le=500),
+):
+    """Upgrade history for scored contracts."""
+    if entity_type and entity_id:
+        rows = fetch_all(
+            """SELECT * FROM contract_upgrade_history
+               WHERE entity_type = %s AND entity_id = %s
+               ORDER BY upgrade_detected_at DESC LIMIT %s""",
+            (entity_type, entity_id, limit),
+        )
+    elif entity_type:
+        rows = fetch_all(
+            """SELECT * FROM contract_upgrade_history
+               WHERE entity_type = %s
+               ORDER BY upgrade_detected_at DESC LIMIT %s""",
+            (entity_type, limit),
+        )
+    else:
+        rows = fetch_all(
+            """SELECT * FROM contract_upgrade_history
+               ORDER BY upgrade_detected_at DESC LIMIT %s""",
+            (limit,),
+        )
+    return {"upgrades": [dict(r) for r in (rows or [])], "count": len(rows or [])}
+
+
+@app.get("/api/contract-upgrades/recent")
+async def contract_upgrades_recent():
+    """All contract upgrades in the last 30 days."""
+    rows = fetch_all(
+        """SELECT * FROM contract_upgrade_history
+           WHERE upgrade_detected_at > NOW() - INTERVAL '30 days'
+           ORDER BY upgrade_detected_at DESC"""
+    )
+    return {"upgrades": [dict(r) for r in (rows or [])], "count": len(rows or [])}
+
+
+@app.get("/api/stablecoins/{symbol}/contract-upgrades")
+async def stablecoin_contract_upgrades(symbol: str):
+    """Contract upgrade history for a specific stablecoin."""
+    rows = fetch_all(
+        """SELECT * FROM contract_upgrade_history
+           WHERE entity_type = 'stablecoin' AND LOWER(entity_symbol) = LOWER(%s)
+           ORDER BY upgrade_detected_at DESC""",
+        (symbol,),
+    )
+    return {"upgrades": [dict(r) for r in (rows or [])], "count": len(rows or [])}
+
+
+@app.get("/api/protocols/{slug}/contract-upgrades")
+async def protocol_contract_upgrades(slug: str):
+    """Contract upgrade history for a specific protocol."""
+    rows = fetch_all(
+        """SELECT * FROM contract_upgrade_history
+           WHERE entity_type = 'protocol' AND LOWER(entity_symbol) = LOWER(%s)
+           ORDER BY upgrade_detected_at DESC""",
+        (slug,),
+    )
+    return {"upgrades": [dict(r) for r in (rows or [])], "count": len(rows or [])}
+
+
+# --- Pipeline 16: Contagion Events ---
+
+@app.get("/api/contagion-events")
+async def contagion_events_list(
+    event_type: Optional[str] = None,
+    severity: Optional[str] = None,
+    entity_symbol: Optional[str] = None,
+    days: int = Query(default=30, ge=1, le=365),
+    limit: int = Query(default=100, ge=1, le=500),
+):
+    """List archived contagion propagation events."""
+    conditions = ["detected_at > NOW() - INTERVAL '%s days'"]
+    params = [days]
+
+    if event_type:
+        conditions.append("event_type = %s")
+        params.append(event_type)
+    if severity:
+        conditions.append("severity = %s")
+        params.append(severity)
+    if entity_symbol:
+        conditions.append("LOWER(source_entity_symbol) = LOWER(%s)")
+        params.append(entity_symbol)
+
+    where = " AND ".join(conditions)
+    params.append(limit)
+
+    rows = fetch_all(
+        f"""SELECT id, event_type, source_entity_type, source_entity_id,
+                   source_entity_symbol, trigger_metric, trigger_value_before,
+                   trigger_value_after, severity, propagation_summary,
+                   detected_at, content_hash
+            FROM contagion_events
+            WHERE {where}
+            ORDER BY detected_at DESC LIMIT %s""",
+        tuple(params),
+    )
+    return {"events": [dict(r) for r in (rows or [])], "count": len(rows or [])}
+
+
+@app.get("/api/contagion-events/{event_id}")
+async def contagion_event_detail(event_id: int):
+    """Full contagion event record including graph state snapshot."""
+    row = fetch_one(
+        "SELECT * FROM contagion_events WHERE id = %s",
+        (event_id,),
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Contagion event not found")
+    return dict(row)
+
+
+@app.get("/api/stablecoins/{symbol}/contagion-events")
+async def stablecoin_contagion_events(symbol: str):
+    """Contagion events where this stablecoin was the source."""
+    rows = fetch_all(
+        """SELECT id, event_type, trigger_metric, trigger_value_before,
+                  trigger_value_after, severity, propagation_summary,
+                  detected_at, content_hash
+           FROM contagion_events
+           WHERE source_entity_type = 'stablecoin' AND LOWER(source_entity_symbol) = LOWER(%s)
+           ORDER BY detected_at DESC""",
+        (symbol,),
+    )
+    return {"events": [dict(r) for r in (rows or [])], "count": len(rows or [])}
+
+
+@app.get("/api/protocols/{slug}/contagion-events")
+async def protocol_contagion_events(slug: str):
+    """Contagion events where this protocol was the source."""
+    rows = fetch_all(
+        """SELECT id, event_type, trigger_metric, trigger_value_before,
+                  trigger_value_after, severity, propagation_summary,
+                  detected_at, content_hash
+           FROM contagion_events
+           WHERE source_entity_type = 'protocol' AND LOWER(source_entity_symbol) = LOWER(%s)
+           ORDER BY detected_at DESC""",
+        (slug,),
+    )
+    return {"events": [dict(r) for r in (rows or [])], "count": len(rows or [])}
+
+
+# --- Pipeline 19: Sanctions Screening ---
+
+@app.get("/api/sanctions/summary")
+async def sanctions_summary():
+    """Summary of sanctions screening status."""
+    today_count = fetch_one(
+        "SELECT COUNT(*) AS cnt FROM sanctions_screening_results WHERE screened_at::date = CURRENT_DATE"
+    )
+    match_count = fetch_one(
+        "SELECT COUNT(*) AS cnt FROM sanctions_screening_results WHERE is_match = TRUE"
+    )
+    last_screened = fetch_one(
+        "SELECT MAX(screened_at) AS latest FROM sanctions_screening_results"
+    )
+    return {
+        "targets_screened_today": (today_count or {}).get("cnt", 0),
+        "total_matches": (match_count or {}).get("cnt", 0),
+        "last_screened_at": (last_screened or {}).get("latest"),
+    }
+
+
+@app.get("/api/sanctions/matches")
+async def sanctions_matches():
+    """All historical sanctions matches."""
+    rows = fetch_all(
+        """SELECT * FROM sanctions_screening_results
+           WHERE is_match = TRUE
+           ORDER BY screened_at DESC"""
+    )
+    return {"matches": [dict(r) for r in (rows or [])], "count": len(rows or [])}
+
+
+@app.get("/api/stablecoins/{symbol}/sanctions")
+async def stablecoin_sanctions(symbol: str):
+    """Screening history for this stablecoin's issuers."""
+    rows = fetch_all(
+        """SELECT * FROM sanctions_screening_results
+           WHERE LOWER(entity_symbol) = LOWER(%s)
+           ORDER BY screened_at DESC""",
+        (symbol,),
+    )
+    return {"screenings": [dict(r) for r in (rows or [])], "count": len(rows or [])}
+
+
+# --- Pipeline 20: Enforcement History ---
+
+@app.get("/api/enforcement/summary")
+async def enforcement_summary():
+    """Summary of enforcement record collection."""
+    entity_counts = fetch_all(
+        """SELECT entity_symbol, COUNT(*) AS cnt
+           FROM enforcement_records
+           GROUP BY entity_symbol ORDER BY cnt DESC"""
+    )
+    unreviewed = fetch_one(
+        "SELECT COUNT(*) AS cnt FROM enforcement_records WHERE is_relevant IS NULL"
+    )
+    last_scan = fetch_one(
+        "SELECT MAX(discovered_at) AS latest FROM enforcement_records"
+    )
+    return {
+        "records_by_entity": [dict(r) for r in (entity_counts or [])],
+        "unreviewed_count": (unreviewed or {}).get("cnt", 0),
+        "last_scanned_at": (last_scan or {}).get("latest"),
+    }
+
+
+@app.get("/api/enforcement/records")
+async def enforcement_records_list(
+    entity_symbol: Optional[str] = None,
+    record_type: Optional[str] = None,
+    days: int = Query(default=365, ge=1, le=3650),
+):
+    """List enforcement records with optional filters."""
+    conditions = ["discovered_at > NOW() - INTERVAL '%s days'"]
+    params = [days]
+
+    if entity_symbol:
+        conditions.append("LOWER(entity_symbol) = LOWER(%s)")
+        params.append(entity_symbol)
+    if record_type:
+        conditions.append("record_type = %s")
+        params.append(record_type)
+
+    where = " AND ".join(conditions)
+    rows = fetch_all(
+        f"""SELECT id, entity_type, entity_symbol, search_term, record_source,
+                   case_name, case_date, court, docket_number, record_type,
+                   summary, case_url, absolute_url,
+                   COALESCE(is_relevant::text, 'pending_review') AS review_status,
+                   discovered_at
+            FROM enforcement_records
+            WHERE {where}
+            ORDER BY discovered_at DESC""",
+        tuple(params),
+    )
+    return {"records": [dict(r) for r in (rows or [])], "count": len(rows or [])}
+
+
+@app.get("/api/stablecoins/{symbol}/enforcement")
+async def stablecoin_enforcement(symbol: str):
+    """All enforcement records for this stablecoin's issuer."""
+    rows = fetch_all(
+        """SELECT id, entity_type, search_term, record_source, case_name,
+                  case_date, court, docket_number, record_type, summary,
+                  case_url, absolute_url,
+                  COALESCE(is_relevant::text, 'pending_review') AS review_status,
+                  discovered_at
+           FROM enforcement_records
+           WHERE LOWER(entity_symbol) = LOWER(%s)
+           ORDER BY case_date DESC""",
+        (symbol,),
+    )
+    return {"records": [dict(r) for r in (rows or [])], "count": len(rows or [])}
+
+
+# --- Pipeline 21: Parent Company Financials ---
+
+@app.get("/api/parent-company/{symbol}/financials")
+async def parent_company_financials(symbol: str):
+    """Financial history for all parent companies of this stablecoin."""
+    companies = fetch_all(
+        """SELECT pcr.company_name, pcr.sec_cik, pcr.relationship_type,
+                  pcf.fiscal_period, pcf.fiscal_year, pcf.period_end_date,
+                  pcf.total_assets_usd, pcf.total_liabilities_usd,
+                  pcf.total_equity_usd, pcf.revenue_usd, pcf.net_income_usd,
+                  pcf.cash_and_equivalents_usd, pcf.debt_to_equity,
+                  pcf.current_ratio, pcf.captured_at
+           FROM parent_company_registry pcr
+           LEFT JOIN parent_company_financials pcf ON pcr.sec_cik = pcf.cik
+           WHERE LOWER(pcr.entity_symbol) = LOWER(%s) AND pcr.active = TRUE
+           ORDER BY pcf.period_end_date DESC""",
+        (symbol,),
+    )
+    return {"financials": [dict(r) for r in (companies or [])], "count": len(companies or [])}
+
+
+@app.get("/api/parent-company/summary")
+async def parent_company_summary():
+    """List all tracked parent companies with latest period data."""
+    rows = fetch_all(
+        """SELECT pcr.company_name, pcr.sec_cik, pcr.entity_symbol,
+                  pcr.relationship_type,
+                  pcf.fiscal_period, pcf.fiscal_year, pcf.period_end_date,
+                  pcf.total_assets_usd, pcf.revenue_usd, pcf.net_income_usd,
+                  pcf.debt_to_equity
+           FROM parent_company_registry pcr
+           LEFT JOIN LATERAL (
+               SELECT * FROM parent_company_financials
+               WHERE cik = pcr.sec_cik
+               ORDER BY period_end_date DESC LIMIT 1
+           ) pcf ON TRUE
+           WHERE pcr.active = TRUE
+           ORDER BY pcr.company_name"""
+    )
+    return {"companies": [dict(r) for r in (rows or [])], "count": len(rows or [])}
+
+
+# =============================================================================
 
 def _register_spa_catch_all(app_instance):
     """Register the SPA catch-all AFTER all other routes so it doesn't shadow them."""

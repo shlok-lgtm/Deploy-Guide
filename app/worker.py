@@ -1495,6 +1495,55 @@ async def run_slow_cycle():
     except Exception as e:
         logger.warning(f"Edge build gate check failed: {e}")
 
+    # =========================================================================
+    # State-building pipelines — permanent historical record
+    # These run daily and must never block other pipeline tasks.
+    # =========================================================================
+
+    # Pipeline 3: Contract upgrade detection (CRITICAL — run first)
+    try:
+        from app.collectors.contract_upgrades import collect_contract_upgrades
+        logger.info("Running contract upgrade tracker...")
+        upgrade_result = collect_contract_upgrades()
+        logger.info(f"Contract upgrades: {upgrade_result}")
+    except Exception as e:
+        logger.error(f"Contract upgrade collector failed: {e}")
+
+    # Pipeline 17: Rated validator performance (daily-gated internally)
+    try:
+        from app.collectors.rated_validators import collect_validator_performance
+        validator_result = collect_validator_performance()
+        logger.info(f"Validator performance: {validator_result}")
+    except Exception as e:
+        logger.error(f"Validator collector failed: {e}")
+
+    # Pipeline 19: OpenSanctions screening (daily-gated internally)
+    try:
+        from app.collectors.sanctions_screening import run_sanctions_screening
+        sanctions_result = run_sanctions_screening()
+        logger.info(f"Sanctions screening: {sanctions_result}")
+    except Exception as e:
+        logger.error(f"Sanctions screening failed: {e}")
+
+    # Pipeline 20: CourtListener enforcement history (weekly-gated internally)
+    try:
+        from app.collectors.enforcement_history import collect_enforcement_records
+        enforcement_result = collect_enforcement_records()
+        logger.info(f"Enforcement history: {enforcement_result}")
+    except Exception as e:
+        logger.error(f"Enforcement collector failed: {e}")
+
+    # Pipeline 21: SEC EDGAR parent company financials (weekly-gated internally)
+    try:
+        from app.collectors.parent_company_financials import collect_parent_financials
+        edgar_result = collect_parent_financials()
+        logger.info(f"EDGAR financials: {edgar_result}")
+    except Exception as e:
+        logger.error(f"EDGAR collector failed: {e}")
+
+    # Pipeline 16 (contagion archive) integrates directly into divergence
+    # signal emission below — not a separate worker task.
+
     # -------------------------------------------------------------------------
     # Divergence detection — every cycle, store all signals
     # -------------------------------------------------------------------------

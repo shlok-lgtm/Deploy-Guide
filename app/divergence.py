@@ -590,6 +590,13 @@ def detect_all_divergences(store: bool = False):
     if store:
         _store_divergence_signals(all_signals)
 
+        # Pipeline 16: Archive contagion events for alert/critical signals
+        try:
+            from app.services.contagion_archive import archive_divergence_signals
+            archive_divergence_signals(all_signals)
+        except Exception as e:
+            logger.warning(f"Contagion event archiving failed: {e}")
+
     return result
 
 
