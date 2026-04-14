@@ -599,49 +599,196 @@ async def run_fast_cycle():
         logger.warning(f"Exchange health monitoring failed: {e}")
 
     # -------------------------------------------------------------------------
-    # Hourly data layer collectors — run every fast cycle for high-frequency data
+    # Data layer — fetch + store directly in worker.py (proven pattern)
+    # No collector store functions. worker.py owns the INSERT.
     # -------------------------------------------------------------------------
-    logger.error("=== DATA LAYER COLLECTORS START (worker.py fast cycle) ===")
+    logger.error("=== DATA LAYER START ===")
 
-    # ---- MANUAL FETCH+STORE: no collector module, no imported store function ----
-    import json as _mj
-    logger.error("=== MANUAL FETCH+STORE START ===")
+    import json as _dj, math as _dm
+    from app.database import get_cursor as _dl_gc, fetch_all as _dl_fa, fetch_one as _dl_fo
+
+    def _sn(v):
+        if v is None: return None
+        try:
+            f = float(v)
+            return None if (_dm.isnan(f) or _dm.isinf(f)) else f
+        except (TypeError, ValueError): return None
+
+    CG_KEY = os.environ.get("COINGECKO_API_KEY", "")
+    CG_HDR = {"x-cg-pro-api-key": CG_KEY, "Accept": "application/json"} if CG_KEY else {"Accept": "application/json"}
+    CG_BASE = "https://pro-api.coingecko.com/api/v3" if CG_KEY else "https://api.coingecko.com/api/v3"
+
+    # ==== 1. ENTITY SNAPSHOTS — all scored entities ====
     try:
-        async with httpx.AsyncClient(timeout=30) as _mc:
-            _mr = await _mc.get(
-                "https://pro-api.coingecko.com/api/v3/coins/usd-coin",
-                params={"localization": "false", "tickers": "false",
-                        "market_data": "true", "community_data": "false",
-                        "developer_data": "false"},
-                headers={"x-cg-pro-api-key": os.environ.get("COINGECKO_API_KEY", "")},
-            )
-            _md = _mr.json().get("market_data", {})
+        _coins = _dl_fa("SELECT id, coingecko_id FROM stablecoins WHERE scoring_enabled = TRUE AND coingecko_id IS NOT NULL") or []
+        _entities = [(r["id"], r["coingecko_id"], "stablecoin") for r in _coins]
+        _psi = {"aave":"aave","compound-finance":"compound-governance-token","morpho":"morpho",
+                "lido":"lido-dao","uniswap":"uniswap","curve-finance":"curve-dao-token",
+                "convex-finance":"convex-finance","eigenlayer":"eigenlayer","sky":"maker",
+                "spark":"spark","pendle":"pendle","ethena":"ethena"}
+        for s,c in _psi.items(): _entities.append((s,c,"protocol_token"))
 
-        from app.database import get_cursor as _m_gc
-        with _m_gc() as _mcur:
-            _mcur.execute("""
-                INSERT INTO entity_snapshots_hourly
-                (entity_id, entity_type, price_usd, market_cap, total_volume, snapshot_at)
-                VALUES (%s, %s, %s, %s, %s, NOW())
-            """, (
-                "usd-coin", "stablecoin",
-                _md.get("current_price", {}).get("usd"),
-                _md.get("market_cap", {}).get("usd"),
-                _md.get("total_volume", {}).get("usd"),
-            ))
+        _es_ok, _es_err = 0, 0
+        async with httpx.AsyncClient(timeout=30) as _ec:
+            for _eid, _cg, _et in _entities:
+                try:
+                    _r = await _ec.get(f"{CG_BASE}/coins/{_cg}",
+                        params={"localization":"false","tickers":"false","market_data":"true",
+                                "community_data":"false","developer_data":"false"}, headers=CG_HDR)
+                    if _r.status_code != 200: continue
+                    _md = _r.json().get("market_data",{})
+                    with _dl_gc() as _c:
+                        _c.execute("""INSERT INTO entity_snapshots_hourly
+                            (entity_id,entity_type,market_cap,total_volume,price_usd,
+                             price_change_24h,circulating_supply,total_supply,snapshot_at)
+                            VALUES(%s,%s,%s,%s,%s,%s,%s,%s,NOW())""",
+                            (_eid,_et,_sn(_md.get("market_cap",{}).get("usd")),
+                             _sn(_md.get("total_volume",{}).get("usd")),
+                             _sn(_md.get("current_price",{}).get("usd")),
+                             _sn(_md.get("price_change_percentage_24h")),
+                             _sn(_md.get("circulating_supply")),_sn(_md.get("total_supply"))))
+                    _es_ok += 1
+                except Exception as _e:
+                    _es_err += 1
+                    if _es_err <= 3: logger.error(f"entity fail {_eid}: {_e}")
+                await asyncio.sleep(0.15)
+        logger.error(f"=== ENTITIES: {_es_ok} ok, {_es_err} err, total={_dl_fo('SELECT COUNT(*) as c FROM entity_snapshots_hourly')} ===")
+    except Exception as _e1: logger.error(f"=== ENTITIES FAILED: {_e1} ===")
 
-        with _m_gc() as _mcur:
-            _mcur.execute("SELECT COUNT(*) FROM entity_snapshots_hourly")
-            _mcnt = _mcur.fetchone()[0]
-        logger.error(f"=== MANUAL FETCH+STORE DONE: {_mcnt} rows in entity_snapshots_hourly ===")
-    except Exception as _me:
-        logger.error(f"=== MANUAL FETCH+STORE FAILED: {type(_me).__name__}: {_me} ===")
+    # ==== 2. EXCHANGE SNAPSHOTS ====
+    try:
+        _EX = ["binance","coinbase-exchange","okx","bybit_spot","kraken","kucoin","gate",
+               "bitget","htx","crypto_com","mexc","bitfinex","bitstamp","gemini","lbank"]
+        _ex_ok, _ex_err = 0, 0
+        async with httpx.AsyncClient(timeout=30) as _xc:
+            for _xid in _EX:
+                try:
+                    _r = await _xc.get(f"{CG_BASE}/exchanges/{_xid}", headers=CG_HDR)
+                    if _r.status_code != 200: continue
+                    _d = _r.json()
+                    with _dl_gc() as _c:
+                        _c.execute("""INSERT INTO exchange_snapshots
+                            (exchange_id,name,trust_score,trust_score_rank,trade_volume_24h_btc,
+                             year_established,country,trading_pairs,snapshot_at)
+                            VALUES(%s,%s,%s,%s,%s,%s,%s,%s,NOW())""",
+                            (_xid,_d.get("name"),_d.get("trust_score"),_d.get("trust_score_rank"),
+                             _sn(_d.get("trade_volume_24h_btc")),_d.get("year_established"),
+                             _d.get("country"),len(_d.get("tickers",[])) if _d.get("tickers") else None))
+                    _ex_ok += 1
+                except Exception as _e:
+                    _ex_err += 1
+                    if _ex_err <= 3: logger.error(f"exchange fail {_xid}: {_e}")
+                await asyncio.sleep(0.15)
+        logger.error(f"=== EXCHANGES: {_ex_ok} ok, {_ex_err} err, total={_dl_fo('SELECT COUNT(*) as c FROM exchange_snapshots')} ===")
+    except Exception as _e2: logger.error(f"=== EXCHANGES FAILED: {_e2} ===")
 
-    logger.error("=== DATA LAYER COLLECTORS END ===")
+    # ==== 3. YIELD SNAPSHOTS (DeFiLlama) ====
+    try:
+        async with httpx.AsyncClient(timeout=30) as _yc:
+            _r = await _yc.get("https://yields.llama.fi/pools")
+            _pools = _r.json().get("data",[]) if _r.status_code == 200 else []
+        _rel = [p for p in _pools if (p.get("stablecoin") or any(
+            s in (p.get("symbol","").upper()) for s in ["USDC","USDT","DAI","FRAX"]
+        )) and (p.get("tvlUsd") or 0) >= 1_000_000][:200]
+        _ys_ok, _ys_err = 0, 0
+        for _p in _rel:
+            try:
+                with _dl_gc() as _c:
+                    _c.execute("""INSERT INTO yield_snapshots
+                        (pool_id,protocol,chain,asset,apy,apy_base,apy_reward,tvl_usd,stable_pool,snapshot_at)
+                        VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
+                        ON CONFLICT(pool_id,snapshot_at) DO UPDATE SET apy=EXCLUDED.apy,tvl_usd=EXCLUDED.tvl_usd""",
+                        (_p.get("pool",""),_p.get("project",""),_p.get("chain",""),_p.get("symbol",""),
+                         _sn(_p.get("apy")),_sn(_p.get("apyBase")),_sn(_p.get("apyReward")),
+                         _sn(_p.get("tvlUsd")),_p.get("stablecoin",False)))
+                _ys_ok += 1
+            except Exception as _e:
+                _ys_err += 1
+                if _ys_err <= 3: logger.error(f"yield fail: {_e}")
+        logger.error(f"=== YIELDS: {_ys_ok} ok, {_ys_err} err, total={_dl_fo('SELECT COUNT(*) as c FROM yield_snapshots')} ===")
+    except Exception as _e3: logger.error(f"=== YIELDS FAILED: {_e3} ===")
 
-    # Sleep for log flush
-    logger.error("=== SLEEPING 10s FOR LOG FLUSH ===")
-    await asyncio.sleep(10)
+    # ==== 4. BRIDGE FLOWS (DeFiLlama) ====
+    try:
+        async with httpx.AsyncClient(timeout=30) as _bc:
+            _r = await _bc.get("https://bridges.llama.fi/bridges", params={"includeChains":"true"})
+            _brs = _r.json().get("bridges",[]) if _r.status_code == 200 else []
+        _bf_ok, _bf_err = 0, 0
+        for _b in sorted(_brs, key=lambda x: x.get("lastDayVolume",0) or 0, reverse=True)[:20]:
+            try:
+                with _dl_gc() as _c:
+                    _c.execute("""INSERT INTO bridge_flows
+                        (bridge_id,bridge_name,source_chain,dest_chain,volume_usd,period,snapshot_at)
+                        VALUES(%s,%s,'all','all',%s,'24h',NOW())""",
+                        (str(_b.get("id","")),_b.get("displayName") or _b.get("name",""),
+                         _sn(_b.get("lastDayVolume"))))
+                _bf_ok += 1
+            except Exception as _e:
+                _bf_err += 1
+                if _bf_err <= 3: logger.error(f"bridge fail: {_e}")
+        logger.error(f"=== BRIDGES: {_bf_ok} ok, {_bf_err} err, total={_dl_fo('SELECT COUNT(*) as c FROM bridge_flows')} ===")
+    except Exception as _e4: logger.error(f"=== BRIDGES FAILED: {_e4} ===")
+
+    # ==== 5. PEG 5-MIN + MARKET CHART ====
+    try:
+        _pg_ok, _mc_ok = 0, 0
+        _peg_coins = _dl_fa("SELECT id, coingecko_id FROM stablecoins WHERE scoring_enabled = TRUE AND coingecko_id IS NOT NULL") or []
+        async with httpx.AsyncClient(timeout=30) as _pc:
+            for _sc in _peg_coins:
+                try:
+                    _r = await _pc.get(f"{CG_BASE}/coins/{_sc['coingecko_id']}/market_chart",
+                        params={"vs_currency":"usd","days":1}, headers=CG_HDR)
+                    if _r.status_code != 200: continue
+                    from datetime import datetime as _pdt
+                    for _pt in _r.json().get("prices",[]):
+                        _ts = _pdt.fromtimestamp(_pt[0]/1000, tz=timezone.utc)
+                        try:
+                            with _dl_gc() as _c:
+                                _c.execute("INSERT INTO peg_snapshots_5m(stablecoin_id,price,timestamp,deviation_bps) VALUES(%s,%s,%s,%s) ON CONFLICT DO NOTHING",
+                                    (_sc["id"],_pt[1],_ts,round(abs(_pt[1]-1.0)*10000,2)))
+                            _pg_ok += 1
+                        except Exception: pass
+                        try:
+                            with _dl_gc() as _c:
+                                _c.execute("INSERT INTO market_chart_history(coin_id,stablecoin_id,timestamp,price,granularity) VALUES(%s,%s,%s,%s,'5min') ON CONFLICT DO NOTHING",
+                                    (_sc["coingecko_id"],_sc["id"],_ts,_pt[1]))
+                            _mc_ok += 1
+                        except Exception: pass
+                except Exception as _e: logger.error(f"peg fail {_sc['id']}: {_e}")
+                await asyncio.sleep(0.15)
+        logger.error(f"=== PEG: {_pg_ok}, MCHART: {_mc_ok} ===")
+    except Exception as _e5: logger.error(f"=== PEG FAILED: {_e5} ===")
+
+    # ==== 6. LIQUIDITY DEPTH (CEX tickers) ====
+    try:
+        _liq_ok, _liq_err = 0, 0
+        async with httpx.AsyncClient(timeout=30) as _lc:
+            for _sc in (_peg_coins or [])[:10]:
+                try:
+                    _r = await _lc.get(f"{CG_BASE}/coins/{_sc['coingecko_id']}/tickers",
+                        params={"include_exchange_logo":"false"}, headers=CG_HDR)
+                    if _r.status_code != 200: continue
+                    for _tk in _r.json().get("tickers",[])[:20]:
+                        if (_tk.get("target","")).upper() not in ("USD","USDT","USDC","BUSD"): continue
+                        try:
+                            with _dl_gc() as _c:
+                                _c.execute("""INSERT INTO liquidity_depth
+                                    (asset_id,venue,venue_type,spread_bps,volume_24h,trust_score,snapshot_at)
+                                    VALUES(%s,%s,'cex',%s,%s,%s,NOW())""",
+                                    (_sc["id"],_tk.get("market",{}).get("identifier","?"),
+                                     _sn((_tk.get("bid_ask_spread_percentage") or 0)*100),
+                                     _sn(_tk.get("converted_volume",{}).get("usd")),
+                                     _tk.get("trust_score")))
+                            _liq_ok += 1
+                        except Exception as _e:
+                            _liq_err += 1
+                except Exception: pass
+                await asyncio.sleep(0.15)
+        logger.error(f"=== LIQUIDITY: {_liq_ok} ok, {_liq_err} err, total={_dl_fo('SELECT COUNT(*) as c FROM liquidity_depth')} ===")
+    except Exception as _e6: logger.error(f"=== LIQUIDITY FAILED: {_e6} ===")
+
+    logger.error("=== DATA LAYER END ===")
+    await asyncio.sleep(5)
 
     # -------------------------------------------------------------------------
     # Verification agent cycle — every cycle
