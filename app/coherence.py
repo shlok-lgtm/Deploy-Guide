@@ -59,6 +59,8 @@ ALL_DOMAINS = [
     "protocol_parameter_changes",
     "protocol_parameter_snapshots",
     "clustered_concentration",
+    "oracle_readings",
+    "oracle_stress_events",
 ]
 
 DOMAIN_FREQUENCIES = {
@@ -96,6 +98,8 @@ DOMAIN_FREQUENCIES = {
     "protocol_parameter_changes": 4,   # checked every fast cycle (~hourly)
     "protocol_parameter_snapshots": 24,
     "clustered_concentration": 24,
+    "oracle_readings": 2,             # fast-cycle pipeline, alert if >2h stale
+    "oracle_stress_events": 168,      # event-driven, check weekly
 }
 
 

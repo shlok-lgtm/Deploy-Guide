@@ -1124,6 +1124,17 @@ async def run_fast_cycle():
     except Exception as e:
         logger.error(f"Parameter change check failed: {e}")
 
+    # Pipeline 10: Oracle deviation and latency behavioral record (every cycle)
+    try:
+        from app.collectors.oracle_behavior import collect_oracle_readings
+        oracle_result = await collect_oracle_readings()
+        if oracle_result.get("stress_events_detected", 0) > 0:
+            logger.warning(f"Oracle stress events: {oracle_result['stress_events_detected']}")
+        elif oracle_result.get("oracles_read", 0) > 0:
+            logger.info(f"Oracle readings: {oracle_result['oracles_read']} oracles, no stress")
+    except Exception as e:
+        logger.error(f"Oracle behavior collector failed: {e}")
+
     # Log and persist collector performance stats
     if _current_cycle_stats:
         _current_cycle_stats.log_summary()
