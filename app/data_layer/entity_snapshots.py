@@ -75,28 +75,44 @@ async def _fetch_coin_data(
 
 
 def _store_snapshots(snapshots: list[dict]):
-    """Store entity snapshots to database. Per-row error handling — one bad row doesn't kill the batch."""
+    """Store entity snapshots to database. Per-row error handling."""
     if not snapshots:
         return
 
     from app.database import get_cursor
     import math
 
+    def _safe_num(v):
+        if v is None:
+            return None
+        try:
+            f = float(v)
+            if math.isnan(f) or math.isinf(f):
+                return None
+            return f
+        except (TypeError, ValueError):
+            return None
+
     stored = 0
     errors = 0
-    for snap in snapshots:
+    for i, snap in enumerate(snapshots):
         try:
-            # Sanitize numeric values — psycopg2 can't serialize NaN/Infinity to NUMERIC
-            def _safe_num(v):
-                if v is None:
-                    return None
-                try:
-                    f = float(v)
-                    if math.isnan(f) or math.isinf(f):
-                        return None
-                    return f
-                except (TypeError, ValueError):
-                    return None
+            vals = (
+                str(snap.get("entity_id", "")),
+                str(snap.get("entity_type", "")),
+                _safe_num(snap.get("market_cap")),
+                _safe_num(snap.get("total_volume")),
+                _safe_num(snap.get("price_usd")),
+                _safe_num(snap.get("price_change_24h")),
+                _safe_num(snap.get("circulating_supply")),
+                _safe_num(snap.get("total_supply")),
+                int(snap["exchange_tickers_count"]) if snap.get("exchange_tickers_count") is not None else None,
+                json.dumps(snap["developer_data"]) if snap.get("developer_data") else None,
+                json.dumps(snap["community_data"]) if snap.get("community_data") else None,
+                json.dumps(snap["raw_data"]) if snap.get("raw_data") else None,
+            )
+            if i == 0:
+                logger.error(f"ROW 0 VALUES: {vals}")
 
             with get_cursor() as cur:
                 cur.execute(
@@ -111,24 +127,13 @@ def _store_snapshots(snapshots: list[dict]):
                            market_cap = EXCLUDED.market_cap,
                            total_volume = EXCLUDED.total_volume,
                            price_usd = EXCLUDED.price_usd""",
-                    (
-                        str(snap.get("entity_id", "")),
-                        str(snap.get("entity_type", "")),
-                        _safe_num(snap.get("market_cap")),
-                        _safe_num(snap.get("total_volume")),
-                        _safe_num(snap.get("price_usd")),
-                        _safe_num(snap.get("price_change_24h")),
-                        _safe_num(snap.get("circulating_supply")),
-                        _safe_num(snap.get("total_supply")),
-                        int(snap["exchange_tickers_count"]) if snap.get("exchange_tickers_count") is not None else None,
-                        json.dumps(snap["developer_data"]) if snap.get("developer_data") else None,
-                        json.dumps(snap["community_data"]) if snap.get("community_data") else None,
-                        json.dumps(snap["raw_data"]) if snap.get("raw_data") else None,
-                    ),
+                    vals,
                 )
             stored += 1
+            logger.error(f"ROW {i} INSERT OK: {snap.get('entity_id')}")
         except Exception as e:
             errors += 1
+            logger.error(f"ROW {i} INSERT FAILED: {snap.get('entity_id')}: {type(e).__name__}: {e}")
             if errors <= 3:
                 logger.error(f"_store_snapshots row FAILED: entity_id={snap.get('entity_id')}: {type(e).__name__}: {e}")
 
