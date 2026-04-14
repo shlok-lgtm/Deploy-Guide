@@ -787,6 +787,208 @@ async def run_fast_cycle():
         logger.error(f"=== LIQUIDITY: {_liq_ok} ok, {_liq_err} err, total={_dl_fo('SELECT COUNT(*) as c FROM liquidity_depth')} ===")
     except Exception as _e6: logger.error(f"=== LIQUIDITY FAILED: {_e6} ===")
 
+    # ==== 7. MINT/BURN EVENTS (Etherscan tokentx, daily gate) ====
+    try:
+        _mb_last = _dl_fo("SELECT MAX(collected_at) as t FROM mint_burn_events")
+        _mb_age = 25
+        if _mb_last and _mb_last.get("t"):
+            _mt = _mb_last["t"]
+            if _mt.tzinfo is None: _mt = _mt.replace(tzinfo=timezone.utc)
+            _mb_age = (datetime.now(timezone.utc) - _mt).total_seconds() / 3600
+        if _mb_age >= 20:
+            ETH_KEY = os.environ.get("ETHERSCAN_API_KEY", "")
+            _mb_ok, _mb_err = 0, 0
+            async with httpx.AsyncClient(timeout=15) as _mbc:
+                for _sc in (_peg_coins if '_peg_coins' in dir() else _dl_fa("SELECT id, contract FROM stablecoins WHERE scoring_enabled = TRUE AND contract IS NOT NULL") or []):
+                    _contract = _sc.get("contract","")
+                    if not _contract or not _contract.startswith("0x"): continue
+                    try:
+                        _r = await _mbc.get("https://api.etherscan.io/v2/api",
+                            params={"chainid":1,"module":"account","action":"tokentx",
+                                    "contractaddress":_contract,"page":1,"offset":100,
+                                    "sort":"desc","apikey":ETH_KEY})
+                        if _r.status_code != 200: continue
+                        _txs = _r.json().get("result",[]) if _r.json().get("status")=="1" else []
+                        for _tx in _txs:
+                            _from = (_tx.get("from","")).lower()
+                            _to = (_tx.get("to","")).lower()
+                            if _from != "0x0000000000000000000000000000000000000000" and _to != "0x0000000000000000000000000000000000000000":
+                                continue
+                            _evt = "mint" if _from == "0x0000000000000000000000000000000000000000" else "burn"
+                            try:
+                                _raw_val = int(_tx.get("value","0"))
+                                _dec = int(_tx.get("tokenDecimal","18"))
+                                _amt = _raw_val / (10**_dec)
+                            except: _amt = 0
+                            if _amt < 1000: continue
+                            _ts = None
+                            if _tx.get("timeStamp"):
+                                try: _ts = datetime.fromtimestamp(int(_tx["timeStamp"]), tz=timezone.utc)
+                                except: pass
+                            try:
+                                with _dl_gc() as _c:
+                                    _c.execute("""INSERT INTO mint_burn_events
+                                        (stablecoin_id,chain,event_type,amount,tx_hash,block_number,
+                                         from_address,to_address,timestamp,collected_at)
+                                        VALUES(%s,'ethereum',%s,%s,%s,%s,%s,%s,%s,NOW())
+                                        ON CONFLICT(chain,tx_hash,event_type) DO NOTHING""",
+                                        (_sc["id"],_evt,_amt,_tx.get("hash",""),
+                                         int(_tx.get("blockNumber",0)),_from,_to,_ts))
+                                _mb_ok += 1
+                            except Exception as _e:
+                                _mb_err += 1
+                                if _mb_err <= 3: logger.error(f"mintburn fail: {_e}")
+                    except Exception as _e:
+                        logger.error(f"mintburn fetch fail {_sc['id']}: {_e}")
+                    await asyncio.sleep(0.15)
+            logger.error(f"=== MINTBURN: {_mb_ok} ok, {_mb_err} err ===")
+        else:
+            logger.error(f"=== MINTBURN: skipped (last {_mb_age:.0f}h ago) ===")
+    except Exception as _e7: logger.error(f"=== MINTBURN FAILED: {_e7} ===")
+
+    # ==== 8. PROTOCOL POOL WALLETS (Blockscout/Etherscan top holders, daily gate) ====
+    try:
+        _pw_last = _dl_fo("SELECT MAX(discovered_at) as t FROM protocol_pool_wallets")
+        _pw_age = 25
+        if _pw_last and _pw_last.get("t"):
+            _pt = _pw_last["t"]
+            if _pt.tzinfo is None: _pt = _pt.replace(tzinfo=timezone.utc)
+            _pw_age = (datetime.now(timezone.utc) - _pt).total_seconds() / 3600
+        if _pw_age >= 20:
+            from app.collectors.protocol_adapters import get_all_receipt_tokens
+            _registry = get_all_receipt_tokens()
+            _pw_ok, _pw_err = 0, 0
+            ETH_KEY = os.environ.get("ETHERSCAN_API_KEY", "")
+            async with httpx.AsyncClient(timeout=15) as _pwc:
+                for (_proto, _sym, _chain), _rt in list(_registry.items())[:20]:
+                    try:
+                        _r = await _pwc.get("https://eth.blockscout.com/api",
+                            params={"module":"token","action":"getTokenHolders",
+                                    "contractaddress":_rt.contract,"page":1,"offset":50})
+                        if _r.status_code != 200: continue
+                        _holders = _r.json().get("result",[]) if _r.json().get("status")=="1" else []
+                        for _h in _holders:
+                            _addr = (_h.get("address") or _h.get("TokenHolderAddress","")).lower()
+                            if not _addr or _addr == "0x0000000000000000000000000000000000000000": continue
+                            try:
+                                with _dl_gc() as _c:
+                                    _c.execute("""INSERT INTO protocol_pool_wallets
+                                        (protocol_slug,stablecoin_symbol,chain,wallet_address,
+                                         pool_contract_address,discovered_at,last_seen)
+                                        VALUES(%s,%s,%s,%s,%s,NOW(),NOW())
+                                        ON CONFLICT(protocol_slug,stablecoin_symbol,chain,wallet_address)
+                                        DO UPDATE SET last_seen=NOW()""",
+                                        (_proto,_sym,_chain,_addr,_rt.contract.lower()))
+                                _pw_ok += 1
+                            except Exception as _e:
+                                _pw_err += 1
+                                if _pw_err <= 3: logger.error(f"pool_wallet fail: {_e}")
+                    except Exception as _e:
+                        logger.error(f"pool_wallet fetch fail {_proto}/{_sym}: {_e}")
+                    await asyncio.sleep(0.25)
+            logger.error(f"=== POOL_WALLETS: {_pw_ok} ok, {_pw_err} err ===")
+        else:
+            logger.error(f"=== POOL_WALLETS: skipped (last {_pw_age:.0f}h ago) ===")
+    except Exception as _e8: logger.error(f"=== POOL_WALLETS FAILED: {_e8} ===")
+
+    # ==== 9. GOVERNANCE VOTERS (Snapshot, daily gate) ====
+    try:
+        _gv_last = _dl_fo("SELECT MAX(collected_at) as t FROM governance_voters")
+        _gv_age = 25
+        if _gv_last and _gv_last.get("t"):
+            _gt = _gv_last["t"]
+            if _gt.tzinfo is None: _gt = _gt.replace(tzinfo=timezone.utc)
+            _gv_age = (datetime.now(timezone.utc) - _gt).total_seconds() / 3600
+        if _gv_age >= 20:
+            _SPACES = ["aavedao.eth","lido-snapshot.eth","comp-vote.eth",
+                        "uniswapgovernance.eth","curve.eth","morpho.eth"]
+            _gv_ok, _gv_err = 0, 0
+            async with httpx.AsyncClient(timeout=15) as _gvc:
+                for _space in _SPACES:
+                    _proto = _space.replace(".eth","").replace("-snapshot","").replace("-vote","")
+                    try:
+                        # Get latest proposal
+                        _r = await _gvc.post("https://hub.snapshot.org/graphql", json={
+                            "query": """query($space:String!){proposals(where:{space:$space},first:1,orderBy:"created",orderDirection:desc){id}}""",
+                            "variables": {"space": _space}})
+                        _props = _r.json().get("data",{}).get("proposals",[])
+                        if not _props: continue
+                        _pid = _props[0]["id"]
+                        # Get top voters
+                        _r2 = await _gvc.post("https://hub.snapshot.org/graphql", json={
+                            "query": """query($proposal:String!){votes(where:{proposal:$proposal},first:100,orderBy:"vp",orderDirection:desc){voter vp choice created}}""",
+                            "variables": {"proposal": _pid}})
+                        _votes = _r2.json().get("data",{}).get("votes",[])
+                        for _v in _votes:
+                            try:
+                                _vts = None
+                                if _v.get("created"):
+                                    try: _vts = datetime.fromtimestamp(_v["created"], tz=timezone.utc)
+                                    except: pass
+                                with _dl_gc() as _c:
+                                    _c.execute("""INSERT INTO governance_voters
+                                        (protocol,proposal_id,voter_address,voting_power,choice,created_at,collected_at)
+                                        VALUES(%s,%s,%s,%s,%s,%s,NOW())
+                                        ON CONFLICT(protocol,proposal_id,voter_address) DO UPDATE SET collected_at=NOW()""",
+                                        (_proto,_pid,_v.get("voter",""),_sn(_v.get("vp")),
+                                         _v.get("choice"),_vts))
+                                _gv_ok += 1
+                            except Exception as _e:
+                                _gv_err += 1
+                                if _gv_err <= 3: logger.error(f"gov_voter fail: {_e}")
+                    except Exception as _e:
+                        logger.error(f"gov_voter fetch fail {_space}: {_e}")
+                    await asyncio.sleep(0.5)
+            logger.error(f"=== GOV_VOTERS: {_gv_ok} ok, {_gv_err} err ===")
+        else:
+            logger.error(f"=== GOV_VOTERS: skipped (last {_gv_age:.0f}h ago) ===")
+    except Exception as _e9: logger.error(f"=== GOV_VOTERS FAILED: {_e9} ===")
+
+    # ==== 10. CONTRACT SURVEILLANCE (Etherscan source code, weekly gate) ====
+    try:
+        _cs_last = _dl_fo("SELECT MAX(scanned_at) as t FROM contract_surveillance")
+        _cs_age = 170
+        if _cs_last and _cs_last.get("t"):
+            _ct = _cs_last["t"]
+            if _ct.tzinfo is None: _ct = _ct.replace(tzinfo=timezone.utc)
+            _cs_age = (datetime.now(timezone.utc) - _ct).total_seconds() / 3600
+        if _cs_age >= 168:
+            import hashlib as _hl
+            ETH_KEY = os.environ.get("ETHERSCAN_API_KEY", "")
+            _cs_ok, _cs_err = 0, 0
+            _cs_coins = _dl_fa("SELECT id, contract FROM stablecoins WHERE scoring_enabled = TRUE AND contract IS NOT NULL") or []
+            async with httpx.AsyncClient(timeout=15) as _csc:
+                for _sc in _cs_coins:
+                    _addr = _sc.get("contract","")
+                    if not _addr.startswith("0x"): continue
+                    try:
+                        _r = await _csc.get("https://api.etherscan.io/v2/api",
+                            params={"chainid":1,"module":"contract","action":"getsourcecode",
+                                    "address":_addr,"apikey":ETH_KEY})
+                        if _r.status_code != 200: continue
+                        _res = _r.json().get("result",[])
+                        _src = _res[0] if isinstance(_res,list) and _res else {}
+                        _code = _src.get("SourceCode","")
+                        _hash = _hl.sha256(_code.encode()).hexdigest() if _code else None
+                        with _dl_gc() as _c:
+                            _c.execute("""INSERT INTO contract_surveillance
+                                (entity_id,chain,contract_address,source_code_hash,
+                                 is_upgradeable,has_admin_keys,scanned_at)
+                                VALUES(%s,'ethereum',%s,%s,%s,%s,NOW())
+                                ON CONFLICT(entity_id,chain,contract_address,scanned_at) DO NOTHING""",
+                                (_sc["id"],_addr,_hash,
+                                 "Proxy" in _code or "upgradeTo" in _code if _code else None,
+                                 "onlyOwner" in _code or "onlyAdmin" in _code if _code else None))
+                        _cs_ok += 1
+                    except Exception as _e:
+                        _cs_err += 1
+                        if _cs_err <= 3: logger.error(f"contract_surv fail {_sc['id']}: {_e}")
+                    await asyncio.sleep(0.15)
+            logger.error(f"=== CONTRACT_SURV: {_cs_ok} ok, {_cs_err} err ===")
+        else:
+            logger.error(f"=== CONTRACT_SURV: skipped (last {_cs_age:.0f}h ago) ===")
+    except Exception as _e10: logger.error(f"=== CONTRACT_SURV FAILED: {_e10} ===")
+
     logger.error("=== DATA LAYER END ===")
     await asyncio.sleep(5)
 
