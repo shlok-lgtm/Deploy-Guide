@@ -229,8 +229,10 @@ async def rate_limit_and_track(request: Request, call_next):
     elif path.startswith("/api/discovery"):
         entity_type = "discovery"
 
-    # Admin endpoints — exempt from rate limiting but still logged
-    if path.startswith("/api/admin") or path.startswith("/api/ops"):
+    # Admin / ops / provenance-write endpoints — exempt from rate limiting but still logged
+    if path.startswith("/api/admin") or path.startswith("/api/ops") or (
+        path.startswith("/api/provenance/") and request.method == "POST"
+    ):
         response = await call_next(request)
         elapsed_ms = int((time.time() - start_time) * 1000)
         log_request(
@@ -7299,6 +7301,74 @@ async def provenance_register(request: Request):
          body["proved_at"], body["cycle_hour"]),
     )
     return {"status": "registered", "id": row["id"] if row else None}
+
+
+@app.post("/api/provenance/register/static")
+async def provenance_register_static(request: Request):
+    """Register a static (GitHub/docs) provenance proof — same schema as live."""
+    _check_admin_key(request)
+    body = await request.json()
+    required = ["source_domain", "source_endpoint", "response_hash",
+                "attestation_hash", "proof_url", "attestor_pubkey",
+                "proved_at", "cycle_hour"]
+    for field in required:
+        if field not in body:
+            raise HTTPException(status_code=400, detail=f"Missing field: {field}")
+
+    from app.database import fetch_one as _prov_fetch
+    row = _prov_fetch(
+        """INSERT INTO provenance_proofs
+           (source_domain, source_endpoint, response_hash, attestation_hash,
+            proof_url, attestor_pubkey, proved_at, cycle_hour)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+           RETURNING id""",
+        (body["source_domain"], body["source_endpoint"],
+         body["response_hash"], body["attestation_hash"],
+         body["proof_url"], body["attestor_pubkey"],
+         body["proved_at"], body["cycle_hour"]),
+    )
+    return {"status": "registered", "id": row["id"] if row else None}
+
+
+@app.post("/api/provenance/register/batch")
+async def provenance_register_batch(request: Request):
+    """Register multiple proofs in one request (avoids rate-limit issues)."""
+    _check_admin_key(request)
+    body = await request.json()
+    proofs = body.get("proofs", [])
+    if not proofs:
+        raise HTTPException(status_code=400, detail="proofs array is required")
+
+    required = ["source_domain", "source_endpoint", "response_hash",
+                "attestation_hash", "proof_url", "attestor_pubkey",
+                "proved_at", "cycle_hour"]
+    registered = []
+    from app.database import get_cursor as _prov_cursor
+    with _prov_cursor(dict_cursor=True) as cur:
+        for proof in proofs:
+            missing = [f for f in required if f not in proof]
+            if missing:
+                continue
+            cur.execute(
+                """INSERT INTO provenance_proofs
+                   (source_domain, source_endpoint, response_hash, attestation_hash,
+                    proof_url, attestor_pubkey, proved_at, cycle_hour)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                   RETURNING id""",
+                (proof["source_domain"], proof["source_endpoint"],
+                 proof["response_hash"], proof["attestation_hash"],
+                 proof["proof_url"], proof["attestor_pubkey"],
+                 proof["proved_at"], proof["cycle_hour"]),
+            )
+            row = cur.fetchone()
+            if row:
+                registered.append(row["id"])
+
+    return {
+        "status": "registered",
+        "count": len(registered),
+        "ids": registered,
+    }
 
 
 @app.get("/api/provenance/latest")
