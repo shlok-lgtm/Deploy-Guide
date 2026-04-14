@@ -1544,6 +1544,28 @@ async def run_slow_cycle():
     # Pipeline 16 (contagion archive) integrates directly into divergence
     # signal emission below — not a separate worker task.
 
+    # Pipeline 8: Governance proposal corpus (daily-gated internally)
+    try:
+        from app.collectors.governance_proposals import collect_governance_proposals
+        logger.info("Running governance proposal collector...")
+        gov_result = await collect_governance_proposals()
+        logger.info(f"Governance proposals: {gov_result}")
+        if gov_result.get("edits_detected", 0) > 0:
+            logger.warning(f"Governance body edits detected: {gov_result['edits_detected']}")
+    except Exception as e:
+        logger.error(f"Governance proposal collector failed: {e}")
+
+    # Pipeline 6: Contract dependency graph (daily-gated via snapshot table)
+    try:
+        from app.collectors.contract_dependencies import collect_contract_dependencies
+        logger.info("Running contract dependency collector...")
+        dep_result = await collect_contract_dependencies()
+        logger.info(f"Contract dependencies: {dep_result}")
+        if dep_result.get("removed_dependencies", 0) > 0:
+            logger.warning(f"Contract dependencies removed: {dep_result['removed_dependencies']}")
+    except Exception as e:
+        logger.error(f"Contract dependency collector failed: {e}")
+
     # -------------------------------------------------------------------------
     # Divergence detection — every cycle, store all signals
     # -------------------------------------------------------------------------

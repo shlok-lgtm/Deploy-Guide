@@ -53,6 +53,9 @@ ALL_DOMAINS = [
     "sanctions_screening",
     "enforcement_records",
     "parent_company_financials",
+    "governance_proposals",
+    "contract_dependencies",
+    "contract_dependencies_snapshot",
 ]
 
 DOMAIN_FREQUENCIES = {
@@ -84,6 +87,9 @@ DOMAIN_FREQUENCIES = {
     "sanctions_screening": 24,
     "enforcement_records": 168,    # weekly
     "parent_company_financials": 168,  # weekly
+    "governance_proposals": 24,
+    "contract_dependencies": 24,
+    "contract_dependencies_snapshot": 24,
 }
 
 

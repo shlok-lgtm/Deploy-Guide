@@ -7710,6 +7710,179 @@ async def parent_company_summary():
     return {"companies": [dict(r) for r in (rows or [])], "count": len(rows or [])}
 
 
+# --- Pipeline 8: Governance Proposals ---
+
+@app.get("/api/governance/proposals")
+async def governance_proposals_list(
+    protocol_slug: Optional[str] = None,
+    state: Optional[str] = None,
+    days: int = Query(default=90, ge=1, le=3650),
+    limit: int = Query(default=100, ge=1, le=500),
+):
+    """List governance proposals across scored protocols."""
+    conditions = ["captured_at > NOW() - INTERVAL '%s days'"]
+    params = [days]
+
+    if protocol_slug:
+        conditions.append("protocol_slug = %s")
+        params.append(protocol_slug)
+    if state:
+        conditions.append("state = %s")
+        params.append(state)
+
+    where = " AND ".join(conditions)
+    params.append(limit)
+
+    rows = fetch_all(
+        f"""SELECT id, protocol_slug, proposal_id, proposal_source,
+                   title, author_address, author_ens, state,
+                   vote_start, vote_end, scores_total, scores_for,
+                   scores_against, scores_abstain, quorum, votes,
+                   ipfs_hash, body_changed, captured_at
+            FROM governance_proposals
+            WHERE {where}
+            ORDER BY vote_end DESC NULLS LAST LIMIT %s""",
+        tuple(params),
+    )
+    return {"proposals": [dict(r) for r in (rows or [])], "count": len(rows or [])}
+
+
+@app.get("/api/governance/proposals/{proposal_id}")
+async def governance_proposal_detail(proposal_id: str):
+    """Full governance proposal including body text."""
+    row = fetch_one(
+        "SELECT * FROM governance_proposals WHERE proposal_id = %s",
+        (proposal_id,),
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Proposal not found")
+    return dict(row)
+
+
+@app.get("/api/protocols/{slug}/governance/proposals")
+async def protocol_governance_proposals(slug: str):
+    """All governance proposals for a specific protocol."""
+    rows = fetch_all(
+        """SELECT id, proposal_id, proposal_source, title,
+                  author_address, state, vote_start, vote_end,
+                  scores_total, scores_for, scores_against, scores_abstain,
+                  votes, body_changed, captured_at
+           FROM governance_proposals
+           WHERE protocol_slug = %s
+           ORDER BY vote_end DESC NULLS LAST""",
+        (slug,),
+    )
+    return {"proposals": [dict(r) for r in (rows or [])], "count": len(rows or [])}
+
+
+@app.get("/api/governance/edits")
+async def governance_edits():
+    """Proposals where the body was edited after initial capture."""
+    rows = fetch_all(
+        """SELECT id, protocol_slug, proposal_id, proposal_source,
+                  title, state, first_capture_body_hash, body_hash,
+                  captured_at
+           FROM governance_proposals
+           WHERE body_changed = TRUE
+           ORDER BY captured_at DESC"""
+    )
+    return {"edits": [dict(r) for r in (rows or [])], "count": len(rows or [])}
+
+
+# --- Pipeline 6: Contract Dependencies ---
+
+@app.get("/api/contract-dependencies/{entity_type}/{slug}")
+async def contract_dependencies_list(
+    entity_type: str,
+    slug: str,
+    chain: Optional[str] = None,
+):
+    """Current active dependencies for an entity."""
+    conditions = ["entity_type = %s", "entity_slug = %s", "removed_at IS NULL"]
+    params = [entity_type, slug]
+
+    if chain:
+        conditions.append("depends_on_chain = %s")
+        params.append(chain)
+
+    where = " AND ".join(conditions)
+    rows = fetch_all(
+        f"""SELECT source_contract, source_chain,
+                   depends_on_address, depends_on_chain,
+                   depends_on_label, depends_on_type,
+                   call_type, detected_via,
+                   first_seen_at, last_confirmed_at
+            FROM contract_dependencies
+            WHERE {where}
+            ORDER BY depends_on_type, depends_on_address""",
+        tuple(params),
+    )
+    return {"dependencies": [dict(r) for r in (rows or [])], "count": len(rows or [])}
+
+
+@app.get("/api/contract-dependencies/{entity_type}/{slug}/history")
+async def contract_dependencies_history(
+    entity_type: str,
+    slug: str,
+    days: int = Query(default=90, ge=1, le=3650),
+):
+    """Daily dependency graph snapshots over time."""
+    rows = fetch_all(
+        """SELECT snapshot_date, dependency_count,
+                  dependency_addresses, dependency_hashes, content_hash
+           FROM dependency_graph_snapshots
+           WHERE entity_type = %s AND entity_slug = %s
+             AND snapshot_date > CURRENT_DATE - INTERVAL '%s days'
+           ORDER BY snapshot_date DESC""",
+        (entity_type, slug, days),
+    )
+    return {"snapshots": [dict(r) for r in (rows or [])], "count": len(rows or [])}
+
+
+@app.get("/api/contract-dependencies/reverse/{address}")
+async def contract_dependencies_reverse(address: str):
+    """All entities that depend on a given contract address (exploit propagation query)."""
+    rows = fetch_all(
+        """SELECT entity_type, entity_slug, source_contract, source_chain,
+                  depends_on_type, call_type, detected_via,
+                  first_seen_at, last_confirmed_at, removed_at
+           FROM contract_dependencies
+           WHERE depends_on_address = LOWER(%s)
+           ORDER BY removed_at NULLS FIRST, entity_type, entity_slug""",
+        (address.lower(),),
+    )
+    return {"dependents": [dict(r) for r in (rows or [])], "count": len(rows or [])}
+
+
+@app.get("/api/contract-dependencies/changes")
+async def contract_dependencies_changes():
+    """New and removed dependencies in the last 30 days."""
+    new_deps = fetch_all(
+        """SELECT entity_type, entity_slug, source_contract,
+                  depends_on_address, depends_on_chain,
+                  depends_on_label, depends_on_type,
+                  first_seen_at
+           FROM contract_dependencies
+           WHERE first_seen_at > NOW() - INTERVAL '30 days'
+           ORDER BY first_seen_at DESC"""
+    )
+    removed_deps = fetch_all(
+        """SELECT entity_type, entity_slug, source_contract,
+                  depends_on_address, depends_on_chain,
+                  depends_on_label, depends_on_type,
+                  removed_at
+           FROM contract_dependencies
+           WHERE removed_at > NOW() - INTERVAL '30 days'
+           ORDER BY removed_at DESC"""
+    )
+    return {
+        "new": [dict(r) for r in (new_deps or [])],
+        "removed": [dict(r) for r in (removed_deps or [])],
+        "new_count": len(new_deps or []),
+        "removed_count": len(removed_deps or []),
+    }
+
+
 # =============================================================================
 
 def _register_spa_catch_all(app_instance):
