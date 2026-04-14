@@ -56,6 +56,9 @@ ALL_DOMAINS = [
     "governance_proposals",
     "contract_dependencies",
     "contract_dependencies_snapshot",
+    "protocol_parameter_changes",
+    "protocol_parameter_snapshots",
+    "clustered_concentration",
 ]
 
 DOMAIN_FREQUENCIES = {
@@ -90,6 +93,9 @@ DOMAIN_FREQUENCIES = {
     "governance_proposals": 24,
     "contract_dependencies": 24,
     "contract_dependencies_snapshot": 24,
+    "protocol_parameter_changes": 4,   # checked every fast cycle (~hourly)
+    "protocol_parameter_snapshots": 24,
+    "clustered_concentration": 24,
 }
 
 

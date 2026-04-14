@@ -8029,6 +8029,244 @@ async def contract_dependencies_changes():
     }
 
 
+# --- Pipeline 9: Protocol Parameter History ---
+
+@app.get("/api/parameters/{slug}/history")
+async def parameter_change_history(
+    slug: str,
+    asset_symbol: Optional[str] = None,
+    parameter_name: Optional[str] = None,
+    days: int = Query(default=90, ge=1, le=3650),
+    limit: int = Query(default=200, ge=1, le=1000),
+):
+    """Parameter changes for a protocol with concurrent score context."""
+    conditions = ["protocol_slug = %s", "changed_at > NOW() - INTERVAL '%s days'"]
+    params = [slug, days]
+
+    if asset_symbol:
+        conditions.append("UPPER(asset_symbol) = UPPER(%s)")
+        params.append(asset_symbol)
+    if parameter_name:
+        conditions.append("parameter_name ILIKE %s")
+        params.append(f"%{parameter_name}%")
+
+    where = " AND ".join(conditions)
+    params.append(limit)
+
+    rows = fetch_all(
+        f"""SELECT id, parameter_name, parameter_key, asset_symbol,
+                   previous_value, new_value, value_unit,
+                   change_magnitude, change_direction, changed_at,
+                   concurrent_sii_score, concurrent_psi_score,
+                   hours_since_last_sii_change, sii_trend_7d, change_context
+            FROM protocol_parameter_changes
+            WHERE {where}
+            ORDER BY changed_at DESC LIMIT %s""",
+        tuple(params),
+    )
+    return {"changes": [dict(r) for r in (rows or [])], "count": len(rows or [])}
+
+
+@app.get("/api/parameters/{slug}/current")
+async def parameter_current_values(slug: str):
+    """Current parameter values for all watched parameters."""
+    rows = fetch_all(
+        """SELECT parameter_name, parameter_key, asset_symbol,
+                  current_value, current_value_raw, value_unit,
+                  last_updated_at, first_seen_at
+           FROM protocol_parameters
+           WHERE protocol_slug = %s
+           ORDER BY parameter_key""",
+        (slug,),
+    )
+    return {"parameters": [dict(r) for r in (rows or [])], "count": len(rows or [])}
+
+
+@app.get("/api/parameters/{slug}/snapshots")
+async def parameter_snapshots(
+    slug: str,
+    days: int = Query(default=90, ge=1, le=3650),
+):
+    """Daily parameter snapshots over time."""
+    rows = fetch_all(
+        """SELECT snapshot_date, parameters, parameter_count, content_hash
+           FROM protocol_parameter_snapshots
+           WHERE protocol_slug = %s
+             AND snapshot_date > CURRENT_DATE - INTERVAL '%s days'
+           ORDER BY snapshot_date DESC""",
+        (slug, days),
+    )
+    return {"snapshots": [dict(r) for r in (rows or [])], "count": len(rows or [])}
+
+
+@app.get("/api/parameters/changes")
+async def parameter_changes_all(
+    change_context: Optional[str] = None,
+    days: int = Query(default=30, ge=1, le=365),
+    limit: int = Query(default=100, ge=1, le=500),
+):
+    """Recent parameter changes across all protocols."""
+    conditions = ["changed_at > NOW() - INTERVAL '%s days'"]
+    params = [days]
+
+    if change_context:
+        conditions.append("change_context = %s")
+        params.append(change_context)
+
+    where = " AND ".join(conditions)
+    params.append(limit)
+
+    rows = fetch_all(
+        f"""SELECT protocol_slug, parameter_name, asset_symbol,
+                   previous_value, new_value, value_unit,
+                   change_magnitude, change_direction, changed_at,
+                   concurrent_sii_score, concurrent_psi_score,
+                   change_context
+            FROM protocol_parameter_changes
+            WHERE {where}
+            ORDER BY changed_at DESC LIMIT %s""",
+        tuple(params),
+    )
+    return {"changes": [dict(r) for r in (rows or [])], "count": len(rows or [])}
+
+
+@app.get("/api/parameters/{slug}/context")
+async def parameter_context_analysis(slug: str):
+    """Change context analysis: reactive vs proactive ratio over time."""
+    rows = fetch_all(
+        """SELECT change_context, COUNT(*) AS cnt
+           FROM protocol_parameter_changes
+           WHERE protocol_slug = %s AND change_context IS NOT NULL
+           GROUP BY change_context""",
+        (slug,),
+    )
+    context_counts = {r["change_context"]: r["cnt"] for r in (rows or [])}
+
+    reactive = context_counts.get("reactive", 0)
+    proactive = context_counts.get("proactive", 0)
+    total = reactive + proactive + context_counts.get("unknown", 0)
+
+    avg_lag = fetch_one(
+        """SELECT AVG(hours_since_last_sii_change) AS avg_lag
+           FROM protocol_parameter_changes
+           WHERE protocol_slug = %s AND change_context = 'reactive'
+             AND hours_since_last_sii_change IS NOT NULL""",
+        (slug,),
+    )
+
+    return {
+        "protocol_slug": slug,
+        "total_changes": total,
+        "reactive_count": reactive,
+        "proactive_count": proactive,
+        "reactive_pct": round(reactive / total * 100, 1) if total > 0 else 0,
+        "proactive_pct": round(proactive / total * 100, 1) if total > 0 else 0,
+        "avg_reactive_lag_hours": float(avg_lag["avg_lag"]) if avg_lag and avg_lag.get("avg_lag") else None,
+    }
+
+
+# --- Pipeline 14: Graph-Clustered Holder Concentration ---
+
+@app.get("/api/concentration/{symbol}/latest")
+async def concentration_latest(symbol: str):
+    """Most recent concentration snapshot with top clusters."""
+    snapshot = fetch_one(
+        """SELECT * FROM concentration_snapshots
+           WHERE UPPER(stablecoin_symbol) = UPPER(%s)
+           ORDER BY snapshot_date DESC LIMIT 1""",
+        (symbol,),
+    )
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="No concentration data for this stablecoin")
+
+    clusters = fetch_all(
+        """SELECT cluster_id, seed_wallet, member_count,
+                  total_balance_usd, pct_of_supply, cluster_type, actor_labels
+           FROM holder_clusters
+           WHERE UPPER(stablecoin_symbol) = UPPER(%s) AND snapshot_date = %s
+           ORDER BY total_balance_usd DESC LIMIT 20""",
+        (symbol, snapshot["snapshot_date"]),
+    )
+    result = dict(snapshot)
+    result["top_clusters"] = [dict(c) for c in (clusters or [])]
+    return result
+
+
+@app.get("/api/concentration/{symbol}/history")
+async def concentration_history(
+    symbol: str,
+    days: int = Query(default=90, ge=1, le=3650),
+):
+    """Concentration snapshots over time with nominal and clustered metrics."""
+    rows = fetch_all(
+        """SELECT snapshot_date, nominal_gini, clustered_gini,
+                  nominal_top10_pct, clustered_top10_pct,
+                  nominal_top50_pct, clustered_top50_pct,
+                  cluster_count, singleton_count,
+                  exchange_cluster_pct, whale_cluster_pct,
+                  divergence_score, total_wallets_analyzed
+           FROM concentration_snapshots
+           WHERE UPPER(stablecoin_symbol) = UPPER(%s)
+             AND snapshot_date > CURRENT_DATE - INTERVAL '%s days'
+           ORDER BY snapshot_date DESC""",
+        (symbol, days),
+    )
+    return {"snapshots": [dict(r) for r in (rows or [])], "count": len(rows or [])}
+
+
+@app.get("/api/concentration/{symbol}/clusters/{snapshot_date}")
+async def concentration_clusters(symbol: str, snapshot_date: str):
+    """All clusters for a stablecoin on a specific date."""
+    rows = fetch_all(
+        """SELECT cluster_id, seed_wallet, member_wallets, member_count,
+                  total_balance_usd, pct_of_supply, cluster_type, actor_labels
+           FROM holder_clusters
+           WHERE UPPER(stablecoin_symbol) = UPPER(%s) AND snapshot_date = %s
+           ORDER BY total_balance_usd DESC""",
+        (symbol, snapshot_date),
+    )
+    return {"clusters": [dict(r) for r in (rows or [])], "count": len(rows or [])}
+
+
+@app.get("/api/concentration/divergence")
+async def concentration_divergence():
+    """All stablecoins sorted by divergence_score for most recent snapshot."""
+    rows = fetch_all(
+        """SELECT DISTINCT ON (stablecoin_symbol)
+                  stablecoin_symbol, snapshot_date,
+                  nominal_gini, clustered_gini, divergence_score,
+                  nominal_top10_pct, clustered_top10_pct,
+                  cluster_count, total_wallets_analyzed
+           FROM concentration_snapshots
+           ORDER BY stablecoin_symbol, snapshot_date DESC"""
+    )
+    sorted_rows = sorted((rows or []), key=lambda r: float(r.get("divergence_score") or 0), reverse=True)
+    return {"stablecoins": [dict(r) for r in sorted_rows], "count": len(sorted_rows)}
+
+
+@app.get("/api/concentration/changes")
+async def concentration_changes():
+    """Stablecoins where clustered_gini changed >0.02 in the last 7 days."""
+    rows = fetch_all(
+        """WITH recent AS (
+               SELECT stablecoin_symbol, snapshot_date, clustered_gini,
+                      LAG(clustered_gini) OVER (
+                          PARTITION BY stablecoin_symbol ORDER BY snapshot_date
+                      ) AS prev_gini
+               FROM concentration_snapshots
+               WHERE snapshot_date > CURRENT_DATE - INTERVAL '7 days'
+           )
+           SELECT stablecoin_symbol, snapshot_date,
+                  clustered_gini, prev_gini,
+                  ABS(clustered_gini - prev_gini) AS gini_change
+           FROM recent
+           WHERE prev_gini IS NOT NULL
+             AND ABS(clustered_gini - prev_gini) > 0.02
+           ORDER BY ABS(clustered_gini - prev_gini) DESC"""
+    )
+    return {"changes": [dict(r) for r in (rows or [])], "count": len(rows or [])}
+
+
 # =============================================================================
 
 def _register_spa_catch_all(app_instance):

@@ -1113,6 +1113,17 @@ async def run_fast_cycle():
     except Exception as e:
         logger.warning(f"Daily digest failed: {e}")
 
+    # Pipeline 9: Parameter change check (lightweight — every cycle)
+    try:
+        from app.collectors.parameter_history import check_parameter_changes
+        param_result = check_parameter_changes()
+        if param_result.get("changes_detected", 0) > 0:
+            logger.warning(f"Parameter changes detected: {param_result['changes_detected']}")
+        elif param_result.get("parameters_checked", 0) > 0:
+            logger.info(f"Parameter check: {param_result['parameters_checked']} params, no changes")
+    except Exception as e:
+        logger.error(f"Parameter change check failed: {e}")
+
     # Log and persist collector performance stats
     if _current_cycle_stats:
         _current_cycle_stats.log_summary()
@@ -1578,6 +1589,26 @@ async def run_slow_cycle():
             logger.warning(f"Contract dependencies removed: {dep_result['removed_dependencies']}")
     except Exception as e:
         logger.error(f"Contract dependency collector failed: {e}")
+
+    # Pipeline 9: Parameter history (full run with daily snapshots)
+    try:
+        from app.collectors.parameter_history import collect_parameter_history
+        logger.info("Running parameter history collector...")
+        param_full_result = await collect_parameter_history()
+        logger.info(f"Parameter history: {param_full_result}")
+    except Exception as e:
+        logger.error(f"Parameter history collector failed: {e}")
+
+    # Pipeline 14: Graph-clustered holder concentration (daily, computationally heavy)
+    try:
+        from app.collectors.clustered_concentration import collect_clustered_concentration
+        logger.info("Running clustered concentration analysis...")
+        _conc_t0 = time.time()
+        conc_result = await collect_clustered_concentration()
+        _conc_elapsed = time.time() - _conc_t0
+        logger.info(f"Clustered concentration: {conc_result} ({_conc_elapsed:.0f}s)")
+    except Exception as e:
+        logger.error(f"Clustered concentration failed: {e}")
 
     # -------------------------------------------------------------------------
     # Divergence detection — every cycle, store all signals
