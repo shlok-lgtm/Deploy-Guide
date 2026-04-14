@@ -24,6 +24,114 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Provenance source auto-registration
+# ---------------------------------------------------------------------------
+
+def _infer_source_type(url: str) -> str:
+    """Infer provenance source type from URL pattern."""
+    if "api.github.com" in url or "raw.githubusercontent.com" in url:
+        return "static_github"
+    elif "etherscan.io" in url or "basescan.org" in url or "arbiscan.io" in url:
+        return "etherscan_api"
+    elif "coingecko.com" in url or "llama.fi" in url:
+        return "live_api"
+    elif "docs." in url or "documentation" in url:
+        return "html_docs"
+    else:
+        return "protocol_api"
+
+
+def register_provenance_source(
+    source_id: str,
+    entity: str,
+    component: str,
+    url: str,
+    schedule: str = "hourly",
+    source_type: str = None,
+):
+    """
+    Register (or update) a provenance source in the DB.
+    Called when a collector registers or when syncing from PROVENANCE_SOURCES.
+
+    Uses ON CONFLICT DO UPDATE for the URL so endpoint changes propagate
+    to the prover automatically.
+
+    Non-critical — failures are logged but never block collector registration.
+    """
+    if source_type is None:
+        source_type = _infer_source_type(url)
+    try:
+        execute(
+            """INSERT INTO provenance_sources (id, entity, component, source_type, url, schedule)
+               VALUES (%s, %s, %s, %s, %s, %s)
+               ON CONFLICT (id) DO UPDATE SET
+                   url = EXCLUDED.url,
+                   source_type = EXCLUDED.source_type,
+                   updated_at = now()""",
+            (source_id, entity, component, source_type, url, schedule),
+        )
+    except Exception as e:
+        logger.warning(f"Failed to register provenance source {source_id}: {e}")
+
+
+def sync_provenance_sources():
+    """
+    Sync all known provenance sources from PROVENANCE_SOURCES dict into the DB.
+    Called at the start of each scoring cycle so new collectors automatically
+    get provenance coverage on the next prover run.
+    """
+    try:
+        from app.data_layer.provenance_scaling import PROVENANCE_SOURCES
+    except ImportError:
+        logger.debug("provenance_scaling not available — skipping provenance sync")
+        return 0
+
+    synced = 0
+    for source_id, src in PROVENANCE_SOURCES.items():
+        provider = src.get("provider", "unknown")
+        endpoint = src.get("endpoint", "")
+        # Build a representative URL from provider + endpoint
+        url = _build_url(provider, endpoint)
+        component = source_id.replace(f"{provider}_", "", 1) if source_id.startswith(f"{provider}_") else source_id
+        source_type = _infer_source_type(url)
+
+        try:
+            execute(
+                """INSERT INTO provenance_sources (id, entity, component, source_type, url, schedule)
+                   VALUES (%s, %s, %s, %s, %s, %s)
+                   ON CONFLICT (id) DO UPDATE SET
+                       url = EXCLUDED.url,
+                       source_type = EXCLUDED.source_type,
+                       updated_at = now()""",
+                (source_id, provider, component, source_type, url, "hourly"),
+            )
+            synced += 1
+        except Exception as e:
+            logger.warning(f"Failed to sync provenance source {source_id}: {e}")
+
+    if synced:
+        logger.info(f"Synced {synced} provenance sources to DB")
+    return synced
+
+
+def _build_url(provider: str, endpoint: str) -> str:
+    """Map provider + endpoint path to a full URL."""
+    base_urls = {
+        "coingecko": "https://pro-api.coingecko.com/api/v3",
+        "defillama": "https://api.llama.fi",
+        "etherscan": "https://api.etherscan.io/api",
+        "snapshot": "https://hub.snapshot.org",
+        "blockscout": "https://eth.blockscout.com/api",
+        "tally": "https://api.tally.xyz",
+        "issuer_website": "dynamic:cda_source_urls",
+    }
+    base = base_urls.get(provider, "")
+    if not base or base.startswith("dynamic:"):
+        return base or endpoint
+    return f"{base}{endpoint}"
+
+
+# ---------------------------------------------------------------------------
 # CycleStats — per-cycle performance tracking
 # ---------------------------------------------------------------------------
 

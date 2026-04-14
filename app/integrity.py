@@ -321,6 +321,60 @@ def _treasury_events_severity_valid():
     )
 
 
+# -- Provenance source health rules --
+
+def _provenance_disabled_ratio():
+    """Flag if >20% of provenance sources are disabled."""
+    try:
+        total = fetch_one("SELECT COUNT(*) AS cnt FROM provenance_sources")
+        disabled = fetch_one("SELECT COUNT(*) AS cnt FROM provenance_sources WHERE enabled = FALSE")
+        total_cnt = total["cnt"] if total else 0
+        disabled_cnt = disabled["cnt"] if disabled else 0
+        if total_cnt > 0 and disabled_cnt / total_cnt > 0.20:
+            return {
+                "rule": "provenance_high_disabled_ratio", "field": "disabled_pct",
+                "value": round(disabled_cnt / total_cnt * 100, 1), "level": "warning",
+                "message": f"{disabled_cnt}/{total_cnt} provenance sources disabled (>{20}%)",
+            }
+    except Exception as e:
+        return {"rule": "provenance_high_disabled_ratio", "field": "disabled_pct", "value": None, "level": "warning", "message": f"check failed: {e}"}
+    return None
+
+
+def _provenance_proof_freshness():
+    """Flag if no provenance proofs registered in >2 hours (prover may be down)."""
+    try:
+        row = fetch_one("SELECT MAX(proved_at) AS latest FROM provenance_proofs")
+        if not row or not row.get("latest"):
+            return {
+                "rule": "provenance_no_proofs", "field": "latest_proof",
+                "value": None, "level": "warning",
+                "message": "No provenance proofs found — prover may not be running",
+            }
+        latest = row["latest"]
+        if latest.tzinfo is None:
+            latest = latest.replace(tzinfo=timezone.utc)
+        age_hours = (datetime.now(timezone.utc) - latest).total_seconds() / 3600
+        if age_hours > 2:
+            return {
+                "rule": "provenance_proof_stale", "field": "proof_age_hours",
+                "value": round(age_hours, 1), "level": "warning",
+                "message": f"No provenance proofs in {age_hours:.1f}h — prover may be down",
+            }
+    except Exception as e:
+        return {"rule": "provenance_proof_stale", "field": "proof_age_hours", "value": None, "level": "warning", "message": f"check failed: {e}"}
+    return None
+
+
+def _provenance_sources_exist():
+    """At least 1 provenance source should be registered."""
+    return _min_count_check(
+        "SELECT COUNT(*) AS cnt FROM provenance_sources",
+        minimum=1, rule="no_provenance_sources", field="row_count", level="warning",
+        message="No provenance sources registered",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Domain registry
 # ---------------------------------------------------------------------------
@@ -411,6 +465,11 @@ DOMAINS = {
         "freshness_query": "SELECT COUNT(*) AS cnt, MAX(cycle_timestamp) AS latest FROM divergence_signals",
         "max_age_hours": 4,
         "coherence_rules": [],
+    },
+    "provenance": {
+        "freshness_query": "SELECT COUNT(*) AS cnt, MAX(proved_at) AS latest FROM provenance_proofs",
+        "max_age_hours": 2,
+        "coherence_rules": [_provenance_sources_exist, _provenance_disabled_ratio, _provenance_proof_freshness],
     },
 }
 

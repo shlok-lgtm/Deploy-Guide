@@ -513,8 +513,21 @@ async def run_fast_cycle():
     logger.info("=== Fast cycle start ===")
 
     global _current_cycle_stats
-    from app.collectors.registry import CycleStats
+    from app.collectors.registry import CycleStats, sync_provenance_sources
     _current_cycle_stats = CycleStats()
+
+    # Sync provenance source registry so new collectors get prover coverage
+    try:
+        sync_provenance_sources()
+    except Exception as e:
+        logger.warning(f"Provenance source sync failed (non-critical): {e}")
+
+    # Seed any missing provenance sources from local config (idempotent)
+    try:
+        from app.data_layer.prover_source_registry import seed_from_local_config
+        seed_from_local_config()
+    except Exception as e:
+        logger.debug(f"Provenance seed from local config skipped: {e}")
 
     # -------------------------------------------------------------------------
     # SII scoring — score all stablecoins
@@ -1930,6 +1943,21 @@ async def run_slow_cycle_parallel():
         logger.warning("Coherence sweep timed out after %ds", POST_TASK_TIMEOUT)
     except Exception as e:
         logger.warning(f"Coherence sweep failed: {e}")
+
+    # Provenance health re-check (disabled sources)
+    try:
+        async def _provenance_recheck():
+            from app.data_layer.prover_source_registry import run_provenance_health_recheck
+            result = await run_provenance_health_recheck()
+            logger.info(
+                f"Provenance recheck: {result['checked']} checked, "
+                f"{result['re_enabled']} re-enabled, {result['healed']} healed"
+            )
+        await asyncio.wait_for(_provenance_recheck(), timeout=POST_TASK_TIMEOUT)
+    except asyncio.TimeoutError:
+        logger.warning("Provenance recheck timed out after %ds", POST_TASK_TIMEOUT)
+    except Exception as e:
+        logger.warning(f"Provenance recheck failed: {e}")
 
     # Flush API usage tracker
     try:
