@@ -7398,6 +7398,104 @@ async def provenance_attestor_pubkey():
     }
 
 
+# --- Provenance Source Registry & Health ---
+
+@app.get("/api/provenance/sources")
+async def provenance_sources_list():
+    """List all registered provenance sources with health status."""
+    rows = fetch_all("SELECT * FROM provenance_sources ORDER BY entity, component")
+    return {
+        "sources": [dict(r) for r in (rows or [])],
+        "count": len(rows or []),
+    }
+
+
+@app.post("/api/provenance/health/alert")
+async def provenance_health_alert(request: Request):
+    """Record a health alert from the prover (domain change, DNS failure, auto-heal)."""
+    data = await request.json()
+    source_id = data.get("source_id")
+    event = data.get("event")
+    if not source_id or not event:
+        raise HTTPException(status_code=400, detail="source_id and event are required")
+
+    execute(
+        """INSERT INTO provenance_health_alerts
+           (source_id, event, old_url, redirect_url, details)
+           VALUES (%s, %s, %s, %s, %s)""",
+        (
+            source_id,
+            event,
+            data.get("old_url"),
+            data.get("redirect_url"),
+            json.dumps(data),
+        ),
+    )
+    return {"status": "recorded"}
+
+
+@app.get("/api/provenance/health")
+async def provenance_health():
+    """Current provenance source health — active/disabled counts + recent alerts."""
+    sources = fetch_all("SELECT * FROM provenance_sources ORDER BY entity, component")
+    sources = sources or []
+
+    active = [s for s in sources if s.get("enabled")]
+    disabled = [s for s in sources if not s.get("enabled")]
+
+    recent_alerts = fetch_all("""
+        SELECT * FROM provenance_health_alerts
+        WHERE created_at > NOW() - INTERVAL '7 days'
+        ORDER BY created_at DESC
+        LIMIT 20
+    """) or []
+
+    # Check proof freshness — flag if no proofs registered in >2 hours
+    latest_proof = fetch_one(
+        "SELECT MAX(proved_at) AS latest FROM provenance_proofs"
+    )
+    proof_age_hours = None
+    proof_stale = False
+    if latest_proof and latest_proof.get("latest"):
+        from datetime import datetime, timezone
+        latest_ts = latest_proof["latest"]
+        if latest_ts.tzinfo is None:
+            latest_ts = latest_ts.replace(tzinfo=timezone.utc)
+        proof_age_hours = round(
+            (datetime.now(timezone.utc) - latest_ts).total_seconds() / 3600, 2
+        )
+        proof_stale = proof_age_hours > 2
+
+    return {
+        "total": len(sources),
+        "active": len(active),
+        "disabled": len(disabled),
+        "proof_age_hours": proof_age_hours,
+        "proof_stale": proof_stale,
+        "disabled_sources": [
+            {
+                "id": s["id"],
+                "entity": s.get("entity"),
+                "url": s.get("url"),
+                "reason": s.get("disabled_reason"),
+                "consecutive_failures": s.get("consecutive_failures", 0),
+                "since": s["last_failure"].isoformat() if s.get("last_failure") else None,
+            }
+            for s in disabled
+        ],
+        "recent_alerts": [
+            {
+                "source_id": a["source_id"],
+                "event": a["event"],
+                "old_url": a.get("old_url"),
+                "redirect_url": a.get("redirect_url"),
+                "created_at": a["created_at"].isoformat() if a.get("created_at") else None,
+            }
+            for a in recent_alerts
+        ],
+    }
+
+
 # =============================================================================
 # State-Building Pipeline API Endpoints (Pipelines 3, 16, 17, 19, 20, 21)
 # =============================================================================

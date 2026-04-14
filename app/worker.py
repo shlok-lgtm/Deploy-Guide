@@ -513,8 +513,14 @@ async def run_fast_cycle():
     logger.info("=== Fast cycle start ===")
 
     global _current_cycle_stats
-    from app.collectors.registry import CycleStats
+    from app.collectors.registry import CycleStats, sync_provenance_sources
     _current_cycle_stats = CycleStats()
+
+    # Sync provenance source registry so new collectors get prover coverage
+    try:
+        sync_provenance_sources()
+    except Exception as e:
+        logger.warning(f"Provenance source sync failed (non-critical): {e}")
 
     # -------------------------------------------------------------------------
     # SII scoring — score all stablecoins
