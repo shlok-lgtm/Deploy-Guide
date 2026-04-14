@@ -329,12 +329,20 @@ def _record_upgrade(
     )
 
 
-def collect_contract_upgrades() -> dict:
+def collect_contract_upgrades(entity_filter: str | None = None) -> dict:
     """
     Scan all scored entity contracts for bytecode changes.
+
+    Args:
+        entity_filter: If set, only process targets whose entity_symbol
+                       matches (case-insensitive).  Useful for testing
+                       against a single entity like 'usdc'.
+
     Returns summary: {entities_checked, upgrades_detected, first_captures, errors}.
     """
     targets = _build_contract_targets()
+    if entity_filter:
+        targets = [t for t in targets if t["entity_symbol"].lower() == entity_filter.lower()]
     if not targets:
         logger.info("Contract upgrade tracker: no targets found")
         return {"entities_checked": 0, "upgrades_detected": 0, "first_captures": 0}
