@@ -8337,6 +8337,142 @@ async def concentration_changes():
     return {"changes": [dict(r) for r in (rows or [])], "count": len(rows or [])}
 
 
+# --- Pipeline 10: Oracle Deviation and Latency ---
+
+@app.get("/api/oracle/readings")
+async def oracle_readings_latest(
+    asset_symbol: Optional[str] = None,
+    provider: Optional[str] = None,
+    limit: int = Query(default=50, ge=1, le=500),
+):
+    """Most recent reading per oracle."""
+    conditions = []
+    params = []
+
+    if asset_symbol:
+        conditions.append("UPPER(asset_symbol) = UPPER(%s)")
+        params.append(asset_symbol)
+    if provider:
+        conditions.append("oracle_provider = %s")
+        params.append(provider)
+
+    where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+    params.append(limit)
+
+    rows = fetch_all(
+        f"""SELECT DISTINCT ON (oracle_address)
+                   oracle_address, oracle_name, oracle_provider, chain,
+                   asset_symbol, oracle_price, cex_price,
+                   deviation_pct, deviation_abs, latency_seconds,
+                   is_stress_event, recorded_at
+            FROM oracle_price_readings
+            {where}
+            ORDER BY oracle_address, recorded_at DESC
+            LIMIT %s""",
+        tuple(params),
+    )
+    return {"readings": [dict(r) for r in (rows or [])], "count": len(rows or [])}
+
+
+@app.get("/api/oracle/readings/{oracle_address}/history")
+async def oracle_reading_history(
+    oracle_address: str,
+    hours: int = Query(default=24, ge=1, le=720),
+    limit: int = Query(default=200, ge=1, le=2000),
+):
+    """Reading history for a specific oracle."""
+    rows = fetch_all(
+        """SELECT oracle_price, cex_price, deviation_pct, deviation_abs,
+                  latency_seconds, round_id, answer_timestamp,
+                  is_stress_event, recorded_at
+           FROM oracle_price_readings
+           WHERE LOWER(oracle_address) = LOWER(%s)
+             AND recorded_at > NOW() - INTERVAL '%s hours'
+           ORDER BY recorded_at DESC LIMIT %s""",
+        (oracle_address, hours, limit),
+    )
+    return {"readings": [dict(r) for r in (rows or [])], "count": len(rows or [])}
+
+
+@app.get("/api/oracle/stress-events")
+async def oracle_stress_events_list(
+    asset_symbol: Optional[str] = None,
+    event_type: Optional[str] = None,
+    open_only: bool = False,
+    days: int = Query(default=30, ge=1, le=365),
+):
+    """All stress events, with optional filters."""
+    conditions = ["event_start > NOW() - INTERVAL '%s days'"]
+    params = [days]
+
+    if asset_symbol:
+        conditions.append("UPPER(asset_symbol) = UPPER(%s)")
+        params.append(asset_symbol)
+    if event_type:
+        conditions.append("event_type = %s")
+        params.append(event_type)
+    if open_only:
+        conditions.append("event_end IS NULL")
+
+    where = " AND ".join(conditions)
+    rows = fetch_all(
+        f"""SELECT * FROM oracle_stress_events
+            WHERE {where}
+            ORDER BY event_start DESC""",
+        tuple(params),
+    )
+    return {"events": [dict(r) for r in (rows or [])], "count": len(rows or [])}
+
+
+@app.get("/api/oracle/stress-events/active")
+async def oracle_stress_events_active():
+    """All currently open stress events."""
+    rows = fetch_all(
+        """SELECT * FROM oracle_stress_events
+           WHERE event_end IS NULL
+           ORDER BY event_start DESC"""
+    )
+    return {"events": [dict(r) for r in (rows or [])], "count": len(rows or [])}
+
+
+@app.get("/api/oracle/{asset_symbol}/deviation-history")
+async def oracle_deviation_history(
+    asset_symbol: str,
+    hours: int = Query(default=168, ge=1, le=720),
+):
+    """Deviation time series for an asset across all its oracles."""
+    rows = fetch_all(
+        """SELECT oracle_address, oracle_name, oracle_provider,
+                  deviation_pct, latency_seconds, recorded_at
+           FROM oracle_price_readings
+           WHERE UPPER(asset_symbol) = UPPER(%s)
+             AND recorded_at > NOW() - INTERVAL '%s hours'
+           ORDER BY recorded_at DESC""",
+        (asset_symbol, hours),
+    )
+    return {"readings": [dict(r) for r in (rows or [])], "count": len(rows or [])}
+
+
+@app.get("/api/oracle/divergence")
+async def oracle_divergence():
+    """Current deviation between oracle and CEX for all active oracles, sorted by abs deviation."""
+    rows = fetch_all(
+        """SELECT DISTINCT ON (oracle_address)
+                  oracle_address, oracle_name, oracle_provider, chain,
+                  asset_symbol, oracle_price, cex_price,
+                  deviation_pct, deviation_abs, latency_seconds,
+                  is_stress_event, recorded_at
+           FROM oracle_price_readings
+           ORDER BY oracle_address, recorded_at DESC"""
+    )
+    sorted_rows = sorted(
+        (rows or []),
+        key=lambda r: abs(float(r.get("deviation_pct") or 0)),
+        reverse=True,
+    )
+    return {"oracles": [dict(r) for r in sorted_rows], "count": len(sorted_rows)}
+
+
 # =============================================================================
 
 def _register_spa_catch_all(app_instance):
