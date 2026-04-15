@@ -8,6 +8,7 @@ GET /api/ops/state-growth-live (live queries across all tables)
 GET /api/ops/state-growth (existing — reads from daily_pulses history)
 """
 
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -97,6 +98,16 @@ TRACKED_TABLES = {
     "historical_prices":        {"time_col": "recorded_at",    "avg_row_bytes": 80,  "category": "historical"},
     "score_events":             {"time_col": "created_at",     "avg_row_bytes": 300, "category": "historical"},
     "data_provenance":          {"time_col": "recorded_at",    "avg_row_bytes": 200, "category": "historical"},
+
+    # === Oracle / security / parameters ===
+    "oracle_price_readings":    {"time_col": "recorded_at",    "avg_row_bytes": 200, "category": "oracle"},
+    "oracle_stress_events":     {"time_col": "event_start",    "avg_row_bytes": 500, "category": "oracle"},
+    "holder_clusters":          {"time_col": "snapshot_date",  "avg_row_bytes": 400, "category": "data_layer"},
+    "concentration_snapshots":  {"time_col": "snapshot_date",  "avg_row_bytes": 200, "category": "data_layer"},
+    "protocol_parameter_changes":  {"time_col": "detected_at", "avg_row_bytes": 400, "category": "parameters"},
+    "protocol_parameter_snapshots": {"time_col": "snapshot_date", "avg_row_bytes": 1000, "category": "parameters"},
+    "contract_upgrade_history": {"time_col": "upgrade_detected_at", "avg_row_bytes": 300, "category": "security"},
+    "ops.keeper_cycles":        {"time_col": "started_at",     "avg_row_bytes": 200, "category": "keeper"},
 }
 
 
@@ -393,6 +404,336 @@ def get_state_growth() -> dict:
         "tables_tracked": len(tables),
     }
 
+    # =========================================================================
+    # 9. Collector health — per-collector performance from collector_cycle_stats
+    # =========================================================================
+    collector_health = []
+    try:
+        rows = fetch_all("""
+            SELECT DISTINCT ON (collector_name)
+                collector_name, created_at, coins_ok, coins_timeout, coins_error,
+                avg_latency_ms, total_components
+            FROM collector_cycle_stats
+            ORDER BY collector_name, created_at DESC
+        """) or []
+        for r in rows:
+            total_runs = (r.get("coins_ok", 0) or 0) + (r.get("coins_timeout", 0) or 0) + (r.get("coins_error", 0) or 0)
+            collector_health.append({
+                "name": r["collector_name"],
+                "last_run": r["created_at"].isoformat() if r.get("created_at") else None,
+                "ok": r.get("coins_ok", 0),
+                "timeout": r.get("coins_timeout", 0),
+                "error": r.get("coins_error", 0),
+                "success_rate": round(r.get("coins_ok", 0) / max(total_runs, 1) * 100, 1),
+                "avg_latency_ms": r.get("avg_latency_ms", 0),
+                "total_components": r.get("total_components", 0),
+            })
+    except Exception:
+        pass
+
+    # =========================================================================
+    # 10. Active alerts — things needing human attention
+    # =========================================================================
+    active_alerts = {}
+    active_alerts["oracle_stress_open"] = _safe_count(
+        "SELECT COUNT(*) as cnt FROM oracle_stress_events WHERE event_end IS NULL"
+    )
+    active_alerts["contract_upgrades_7d"] = _safe_count(
+        "SELECT COUNT(*) as cnt FROM contract_upgrade_history WHERE upgrade_detected_at >= NOW() - INTERVAL '7 days'"
+    )
+    active_alerts["parameter_changes_7d"] = _safe_count(
+        "SELECT COUNT(*) as cnt FROM protocol_parameter_changes WHERE detected_at >= NOW() - INTERVAL '7 days'"
+    )
+    active_alerts["discovery_signals_24h"] = _safe_count(
+        "SELECT COUNT(*) as cnt FROM discovery_signals WHERE detected_at >= NOW() - INTERVAL '24 hours'"
+    )
+
+    # =========================================================================
+    # 11. Keeper status — on-chain publication state
+    # =========================================================================
+    keeper_status = {}
+    try:
+        last_cycle = _safe_fetch("""
+            SELECT started_at, completed_at, duration_ms,
+                   sii_updates_base, sii_updates_arb, psi_updates,
+                   state_root_published, trigger_reason
+            FROM ops.keeper_cycles
+            ORDER BY started_at DESC LIMIT 1
+        """)
+        if last_cycle:
+            keeper_status = {
+                "last_started": last_cycle["started_at"].isoformat() if last_cycle.get("started_at") else None,
+                "last_completed": last_cycle["completed_at"].isoformat() if last_cycle.get("completed_at") else None,
+                "duration_ms": last_cycle.get("duration_ms"),
+                "sii_updates_base": last_cycle.get("sii_updates_base", 0),
+                "sii_updates_arb": last_cycle.get("sii_updates_arb", 0),
+                "psi_updates": last_cycle.get("psi_updates", 0),
+                "state_root_published": last_cycle.get("state_root_published", False),
+            }
+        keeper_status["total_cycles"] = _safe_count("SELECT COUNT(*) as cnt FROM ops.keeper_cycles")
+        keeper_status["cycles_24h"] = _safe_count(
+            "SELECT COUNT(*) as cnt FROM ops.keeper_cycles WHERE started_at >= NOW() - INTERVAL '24 hours'"
+        )
+    except Exception:
+        pass
+
+    # =========================================================================
+    # 12. Scoring performance — cycle durations and throughput
+    # =========================================================================
+    scoring_performance = {}
+    try:
+        # SII cycle duration trend (last 7 days from collector_cycle_stats)
+        sii_trend = fetch_all("""
+            SELECT DATE(created_at) as day,
+                   AVG(avg_latency_ms) as avg_ms,
+                   SUM(total_components) as total_comps,
+                   SUM(coins_ok) as total_ok
+            FROM collector_cycle_stats
+            WHERE created_at >= NOW() - INTERVAL '7 days'
+            GROUP BY DATE(created_at)
+            ORDER BY day DESC
+        """) or []
+        scoring_performance["daily_trend"] = [
+            {
+                "day": str(r["day"]),
+                "avg_latency_ms": round(float(r["avg_ms"]), 0) if r.get("avg_ms") else 0,
+                "total_components": r.get("total_comps", 0),
+                "coins_scored": r.get("total_ok", 0),
+            }
+            for r in sii_trend
+        ]
+
+        scoring_performance["stablecoins_scored"] = sii_scored
+        scoring_performance["psi_protocols_scored"] = psi_scored
+
+        # Average components per stablecoin
+        avg_comps = _safe_fetch(
+            "SELECT AVG(cnt) as avg_cnt FROM ("
+            "  SELECT stablecoin_id, COUNT(*) as cnt FROM component_readings"
+            "  WHERE collected_at >= NOW() - INTERVAL '24 hours'"
+            "  GROUP BY stablecoin_id"
+            ") sub"
+        )
+        scoring_performance["avg_components_per_coin"] = (
+            round(float(avg_comps["avg_cnt"]), 1) if avg_comps and avg_comps.get("avg_cnt") else 0
+        )
+    except Exception:
+        pass
+
+    # =========================================================================
+    # 13. CDA freshness — per-issuer extraction staleness
+    # =========================================================================
+    cda_freshness = []
+    try:
+        issuers = fetch_all("""
+            SELECT r.asset_symbol, r.issuer_name, r.is_active,
+                   MAX(e.extracted_at) as last_extraction
+            FROM cda_issuer_registry r
+            LEFT JOIN cda_vendor_extractions e ON e.asset_symbol = r.asset_symbol
+            GROUP BY r.asset_symbol, r.issuer_name, r.is_active
+            ORDER BY r.is_active DESC, last_extraction ASC NULLS FIRST
+        """) or []
+        for r in issuers:
+            last = r.get("last_extraction")
+            days_since = None
+            if last:
+                if last.tzinfo is None:
+                    last = last.replace(tzinfo=timezone.utc)
+                days_since = round((now - last).total_seconds() / 86400, 1)
+            cda_freshness.append({
+                "asset": r["asset_symbol"],
+                "issuer": r.get("issuer_name"),
+                "active": r.get("is_active", False),
+                "last_extraction": last.isoformat() if last else None,
+                "days_since": days_since,
+                "stale": days_since is None or days_since > 30,
+            })
+    except Exception:
+        pass
+
+    # =========================================================================
+    # 14. Component coverage — per-index: defined, automated, static, empty
+    # =========================================================================
+    component_coverage = {}
+    try:
+        # SII components per stablecoin
+        sii_comp = fetch_all("""
+            SELECT stablecoin_id, COUNT(*) as total,
+                   COUNT(*) FILTER (WHERE value IS NOT NULL) as populated,
+                   COUNT(*) FILTER (WHERE value IS NULL) as empty
+            FROM component_readings
+            WHERE collected_at >= NOW() - INTERVAL '24 hours'
+            GROUP BY stablecoin_id
+        """) or []
+        component_coverage["sii"] = {
+            "coins_with_readings": len(sii_comp),
+            "avg_components": round(sum(r["total"] for r in sii_comp) / max(len(sii_comp), 1), 1),
+            "avg_populated": round(sum(r["populated"] for r in sii_comp) / max(len(sii_comp), 1), 1),
+            "avg_empty": round(sum(r["empty"] for r in sii_comp) / max(len(sii_comp), 1), 1),
+        }
+
+        # PSI components
+        psi_comp_count = _safe_count(
+            "SELECT COUNT(DISTINCT component_name) as cnt FROM psi_components WHERE collected_at >= NOW() - INTERVAL '48 hours'"
+        )
+        psi_protocols_with = _safe_count(
+            "SELECT COUNT(DISTINCT protocol_slug) as cnt FROM psi_components WHERE collected_at >= NOW() - INTERVAL '48 hours'"
+        )
+        component_coverage["psi"] = {
+            "unique_components": psi_comp_count,
+            "protocols_with_readings": psi_protocols_with,
+        }
+
+        # RPI components
+        rpi_comp_count = _safe_count(
+            "SELECT COUNT(DISTINCT component_name) as cnt FROM rpi_components WHERE collected_at >= NOW() - INTERVAL '48 hours'"
+        )
+        component_coverage["rpi"] = {
+            "unique_components": rpi_comp_count,
+        }
+    except Exception:
+        pass
+
+    # =========================================================================
+    # 15. CQI contagion coverage
+    # =========================================================================
+    cqi_contagion = {}
+    try:
+        pairs_with_pools = _safe_count(
+            "SELECT COUNT(DISTINCT protocol_slug) as cnt FROM protocol_pool_wallets"
+        )
+        pairs_total = _safe_count("SELECT COUNT(DISTINCT protocol_slug) as cnt FROM psi_scores")
+        cqi_contagion = {
+            "protocols_with_pool_data": pairs_with_pools,
+            "protocols_total": pairs_total,
+            "coverage_pct": round(pairs_with_pools / max(pairs_total, 1) * 100, 1),
+            "pool_wallets_discovered": _safe_count("SELECT COUNT(*) as cnt FROM protocol_pool_wallets"),
+        }
+    except Exception:
+        pass
+
+    # =========================================================================
+    # 16. x402 revenue
+    # =========================================================================
+    x402_revenue = {}
+    try:
+        x402_revenue["total_payments"] = _safe_count("SELECT COUNT(*) as cnt FROM payment_log")
+        x402_revenue["payments_24h"] = _safe_count(
+            "SELECT COUNT(*) as cnt FROM payment_log WHERE timestamp >= NOW() - INTERVAL '24 hours'"
+        )
+        x402_revenue["payments_7d"] = _safe_count(
+            "SELECT COUNT(*) as cnt FROM payment_log WHERE timestamp >= NOW() - INTERVAL '7 days'"
+        )
+        x402_revenue["unique_payers"] = _safe_count(
+            "SELECT COUNT(DISTINCT payer_address) as cnt FROM payment_log WHERE payer_address IS NOT NULL"
+        )
+
+        rev_total = _safe_fetch("SELECT COALESCE(SUM(price_usd), 0) as total FROM payment_log")
+        x402_revenue["total_revenue_usd"] = float(rev_total["total"]) if rev_total and rev_total.get("total") else 0
+
+        rev_7d = _safe_fetch(
+            "SELECT COALESCE(SUM(price_usd), 0) as total FROM payment_log WHERE timestamp >= NOW() - INTERVAL '7 days'"
+        )
+        x402_revenue["revenue_7d_usd"] = float(rev_7d["total"]) if rev_7d and rev_7d.get("total") else 0
+
+        # Top endpoints by call count
+        top_endpoints = fetch_all("""
+            SELECT endpoint, COUNT(*) as calls, SUM(price_usd) as revenue
+            FROM payment_log
+            GROUP BY endpoint
+            ORDER BY calls DESC
+            LIMIT 10
+        """) or []
+        x402_revenue["top_endpoints"] = [
+            {"endpoint": r["endpoint"], "calls": r["calls"],
+             "revenue_usd": round(float(r["revenue"]), 6) if r.get("revenue") else 0}
+            for r in top_endpoints
+        ]
+    except Exception:
+        pass
+
+    # =========================================================================
+    # 17. Security scanning — contract surveillance status
+    # =========================================================================
+    security_scanning = {}
+    try:
+        # Contracts monitored by entity type
+        monitored = fetch_all("""
+            SELECT entity_id, chain, contract_address, has_admin_keys,
+                   is_upgradeable, has_pause_function, timelock_hours,
+                   multisig_threshold, source_code_hash, scanned_at
+            FROM contract_surveillance
+            WHERE scanned_at = (
+                SELECT MAX(scanned_at) FROM contract_surveillance cs2
+                WHERE cs2.entity_id = contract_surveillance.entity_id
+                  AND cs2.contract_address = contract_surveillance.contract_address
+            )
+        """) or []
+
+        security_scanning["contracts_monitored"] = len(monitored)
+        security_scanning["unique_entities"] = len(set(r["entity_id"] for r in monitored))
+
+        # Admin key risk summary
+        with_admin = [r for r in monitored if r.get("has_admin_keys")]
+        short_timelock = [r for r in monitored if r.get("timelock_hours") is not None and float(r["timelock_hours"]) < 24]
+        no_multisig = [r for r in monitored if r.get("multisig_threshold") is None or r.get("multisig_threshold") == ""]
+        pause_no_timelock = [
+            r for r in monitored
+            if r.get("has_pause_function") and (r.get("timelock_hours") is None or float(r.get("timelock_hours", 0)) == 0)
+        ]
+
+        security_scanning["admin_key_risk"] = {
+            "contracts_with_admin_keys": len(with_admin),
+            "timelock_under_24h": len(short_timelock),
+            "no_multisig": len(no_multisig),
+            "pausable_without_timelock": len(pause_no_timelock),
+        }
+
+        # Scan coverage vs scored entities
+        scored_entities = set()
+        try:
+            sii_entities = fetch_all("SELECT id FROM stablecoins WHERE scoring_enabled = TRUE") or []
+            scored_entities.update(str(r["id"]) for r in sii_entities)
+            psi_entities = fetch_all("SELECT DISTINCT protocol_slug FROM psi_scores") or []
+            scored_entities.update(r["protocol_slug"] for r in psi_entities)
+        except Exception:
+            pass
+
+        monitored_entities = set(r["entity_id"] for r in monitored)
+        unmonitored = sorted(scored_entities - monitored_entities)
+
+        security_scanning["scan_coverage"] = {
+            "scored_entities": len(scored_entities),
+            "monitored_entities": len(monitored_entities & scored_entities),
+            "coverage_pct": round(len(monitored_entities & scored_entities) / max(len(scored_entities), 1) * 100, 1),
+            "unmonitored_entities": unmonitored[:20],
+        }
+
+        # Upgrade alerts in last 7 and 30 days
+        security_scanning["upgrade_alerts_7d"] = _safe_count(
+            "SELECT COUNT(*) as cnt FROM contract_upgrade_history WHERE upgrade_detected_at >= NOW() - INTERVAL '7 days'"
+        )
+        security_scanning["upgrade_alerts_30d"] = _safe_count(
+            "SELECT COUNT(*) as cnt FROM contract_upgrade_history WHERE upgrade_detected_at >= NOW() - INTERVAL '30 days'"
+        )
+
+        # Historical diff count — total source code changes since monitoring began
+        security_scanning["total_diffs_detected"] = _safe_count(
+            "SELECT COUNT(*) as cnt FROM contract_upgrade_history"
+        )
+
+        # Last scan per contract (most recent only)
+        security_scanning["last_scan"] = _safe_fetch(
+            "SELECT MAX(scanned_at) as latest FROM contract_surveillance"
+        )
+        if security_scanning["last_scan"] and security_scanning["last_scan"].get("latest"):
+            lt = security_scanning["last_scan"]["latest"]
+            security_scanning["last_scan"] = lt.isoformat() if hasattr(lt, 'isoformat') else str(lt)
+        else:
+            security_scanning["last_scan"] = None
+    except Exception:
+        pass
+
     return {
         "generated_at": now.isoformat(),
         "summary": {
@@ -412,4 +753,13 @@ def get_state_growth() -> dict:
         "temporal_depth": temporal,
         "data_quality": data_quality,
         "storage": storage,
+        "collector_health": collector_health,
+        "active_alerts": active_alerts,
+        "keeper_status": keeper_status,
+        "scoring_performance": scoring_performance,
+        "cda_freshness": cda_freshness,
+        "component_coverage": component_coverage,
+        "cqi_contagion": cqi_contagion,
+        "x402_revenue": x402_revenue,
+        "security_scanning": security_scanning,
     }
