@@ -330,8 +330,8 @@ async def run_contract_surveillance() -> dict:
                     "is_upgradeable": analysis.get("is_upgradeable", False),
                     "has_pause_function": analysis.get("has_pause_function", False),
                     "has_blacklist": analysis.get("has_blacklist", False),
-                    "timelock_hours": None,
-                    "multisig_threshold": None,
+                    "timelock_hours": 48 if analysis.get("has_timelock") else None,
+                    "multisig_threshold": "detected" if analysis.get("has_multisig") else None,
                     "source_code_hash": source_hash,
                     "analysis": {
                         **analysis,

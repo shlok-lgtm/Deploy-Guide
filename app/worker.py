@@ -727,15 +727,20 @@ async def run_fast_cycle():
         async with httpx.AsyncClient(timeout=30) as _bc:
             _r = await _bc.get("https://bridges.llama.fi/bridges", params={"includeChains":"true"})
             _brs = _r.json().get("bridges",[]) if _r.status_code == 200 else []
+        logger.error(f"=== BRIDGES: fetched {len(_brs)} bridges from DeFiLlama ===")
         _bf_ok, _bf_err = 0, 0
         for _b in sorted(_brs, key=lambda x: x.get("lastDayVolume",0) or 0, reverse=True)[:20]:
+            _bid = _b.get("id")
+            _bname = _b.get("displayName") or _b.get("name","")
+            _bvol = _sn(_b.get("lastDayVolume"))
+            if _bid is None: continue
             try:
                 with _dl_gc() as _c:
                     _c.execute("""INSERT INTO bridge_flows
                         (bridge_id,bridge_name,source_chain,dest_chain,volume_usd,period,snapshot_at)
-                        VALUES(%s,%s,'all','all',%s,'24h',NOW())""",
-                        (str(_b.get("id","")),_b.get("displayName") or _b.get("name",""),
-                         _sn(_b.get("lastDayVolume"))))
+                        VALUES(%s,%s,'all','all',%s,'24h',NOW())
+                        ON CONFLICT DO NOTHING""",
+                        (str(_bid), _bname, _bvol))
                 _bf_ok += 1
             except Exception as _e:
                 _bf_err += 1
@@ -1129,10 +1134,12 @@ async def run_fast_cycle():
     try:
         from app.collectors.oracle_behavior import collect_oracle_readings
         oracle_result = await collect_oracle_readings()
-        if oracle_result.get("stress_events_detected", 0) > 0:
-            logger.warning(f"Oracle stress events: {oracle_result['stress_events_detected']}")
-        elif oracle_result.get("oracles_read", 0) > 0:
-            logger.info(f"Oracle readings: {oracle_result['oracles_read']} oracles, no stress")
+        logger.error(
+            f"=== ORACLE: {oracle_result.get('oracles_read', 0)} read, "
+            f"{oracle_result.get('readings_stored', 0)} stored, "
+            f"{oracle_result.get('stress_events_detected', 0)} stress, "
+            f"errors={oracle_result.get('errors', [])} ==="
+        )
     except Exception as e:
         logger.error(f"Oracle behavior collector failed: {e}")
 
@@ -1434,49 +1441,37 @@ async def run_slow_cycle():
     # Wallet expansion + profile rebuild — daily gate via DB timestamp
     # -------------------------------------------------------------------------
     try:
-        last_expansion_row = fetch_one(
-            "SELECT MAX(created_at) AS latest FROM wallet_graph.wallets WHERE created_at > NOW() - INTERVAL '48 hours'"
+        current_wallet_count = fetch_one("SELECT COUNT(*) as cnt FROM wallet_graph.wallets")
+        _wc = current_wallet_count["cnt"] if current_wallet_count else 0
+
+        # Always run expansion — no gate. The expansion function itself is idempotent
+        # and the graph needs to grow from 44K to 500K.
+        from app.data_layer.wallet_expansion import run_wallet_graph_expansion
+        logger.error(f"=== WALLET EXPANSION: started, target=10000, current={_wc} ===")
+        expansion_result = await run_wallet_graph_expansion(
+            target_new_wallets=10_000, max_etherscan_calls=5_000
         )
-        wallet_expansion_age = 25
-        if last_expansion_row and last_expansion_row.get("latest"):
-            latest = last_expansion_row["latest"]
-            if latest.tzinfo is None:
-                latest = latest.replace(tzinfo=timezone.utc)
-            wallet_expansion_age = (datetime.now(timezone.utc) - latest).total_seconds() / 3600
-
-        if wallet_expansion_age >= 24:
-            # Wallet expansion — seed new addresses from under-covered stablecoins
-            try:
-                from app.data_layer.wallet_expansion import run_wallet_graph_expansion
-                logger.info("Running wallet expansion pipeline (target: 10K wallets, budget: 5K calls)...")
-                expansion_result = await run_wallet_graph_expansion(
-                    target_new_wallets=10_000, max_etherscan_calls=5_000
-                )
-                new_wallets = expansion_result.get('new_wallets_seeded', 0)
-                logger.error(f"=== WALLET EXPANSION: {new_wallets} new wallets ===")
-            except Exception as e:
-                logger.warning(f"Wallet expansion failed: {e}")
-
-            # Profile rebuild — cap at 2000 stalest wallets, 30-min timeout
-            try:
-                from app.indexer.profiles import rebuild_all_profiles
-                logger.info("Rebuilding wallet profiles (max 2000, 30-min timeout)...")
-                profile_result = await asyncio.wait_for(
-                    asyncio.get_event_loop().run_in_executor(None, rebuild_all_profiles, 2000),
-                    timeout=1800,
-                )
-                logger.info(
-                    f"Profile rebuild complete: {profile_result.get('built', 0)} built, "
-                    f"{profile_result.get('errors', 0)} errors out of {profile_result.get('total', 0)} addresses"
-                )
-            except asyncio.TimeoutError:
-                logger.warning("Profile rebuild hit 30-minute timeout — will continue next cycle")
-            except Exception as e:
-                logger.warning(f"Profile rebuild failed: {e}")
-        else:
-            logger.info(f"Wallet expansion skipped — last ran {wallet_expansion_age:.1f}h ago")
+        new_wallets = expansion_result.get('new_wallets_seeded', 0)
+        logger.error(f"=== WALLET EXPANSION: {new_wallets} new wallets discovered, result={expansion_result} ===")
     except Exception as e:
-        logger.warning(f"Wallet expansion gate check failed: {e}")
+        logger.error(f"=== WALLET EXPANSION FAILED: {e} ===")
+
+    # Profile rebuild — cap at 2000 stalest wallets, 30-min timeout
+    try:
+        from app.indexer.profiles import rebuild_all_profiles
+        logger.info("Rebuilding wallet profiles (max 2000, 30-min timeout)...")
+        profile_result = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(None, rebuild_all_profiles, 2000),
+            timeout=1800,
+        )
+        logger.info(
+            f"Profile rebuild complete: {profile_result.get('built', 0)} built, "
+            f"{profile_result.get('errors', 0)} errors out of {profile_result.get('total', 0)} addresses"
+        )
+    except asyncio.TimeoutError:
+        logger.warning("Profile rebuild hit 30-minute timeout — will continue next cycle")
+    except Exception as e:
+        logger.warning(f"Profile rebuild failed: {e}")
 
     # -------------------------------------------------------------------------
     # Treasury flow detection — every cycle, minimal API budget
@@ -1604,7 +1599,11 @@ async def run_slow_cycle():
         from app.collectors.contract_upgrades import collect_contract_upgrades
         logger.info("Running contract upgrade tracker...")
         upgrade_result = collect_contract_upgrades()
-        logger.info(f"Contract upgrades: {upgrade_result}")
+        logger.error(
+            f"=== CONTRACT UPGRADES: {upgrade_result.get('entities_checked', 0)} checked, "
+            f"{upgrade_result.get('upgrades_detected', 0)} upgrades, "
+            f"{upgrade_result.get('first_captures', 0)} first captures ==="
+        )
     except Exception as e:
         logger.error(f"Contract upgrade collector failed: {e}")
 
@@ -1670,7 +1669,11 @@ async def run_slow_cycle():
         from app.collectors.parameter_history import collect_parameter_history
         logger.info("Running parameter history collector...")
         param_full_result = await collect_parameter_history()
-        logger.info(f"Parameter history: {param_full_result}")
+        logger.error(
+            f"=== PARAMETERS: {param_full_result.get('protocols_checked', 0)} protocols, "
+            f"{param_full_result.get('changes_detected', 0)} changes, "
+            f"{param_full_result.get('snapshots_stored', 0)} snapshots ==="
+        )
     except Exception as e:
         logger.error(f"Parameter history collector failed: {e}")
 
@@ -1681,7 +1684,11 @@ async def run_slow_cycle():
         _conc_t0 = time.time()
         conc_result = await collect_clustered_concentration()
         _conc_elapsed = time.time() - _conc_t0
-        logger.info(f"Clustered concentration: {conc_result} ({_conc_elapsed:.0f}s)")
+        logger.error(
+            f"=== CONCENTRATION: {conc_result.get('stablecoins_analyzed', 0)} stablecoins, "
+            f"{conc_result.get('clusters_computed', 0)} clusters, "
+            f"{conc_result.get('snapshots_stored', 0)} snapshots ({_conc_elapsed:.0f}s) ==="
+        )
     except Exception as e:
         logger.error(f"Clustered concentration failed: {e}")
 

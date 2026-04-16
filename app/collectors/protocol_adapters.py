@@ -351,6 +351,53 @@ CONVEX_TOKENS = {
 
 
 # =============================================================================
+# Lido — wstETH holders
+# =============================================================================
+# wstETH is the wrapped staking receipt. Top holders shows protocol-level
+# exposure to Lido's validator set.
+
+LIDO_TOKENS = {
+    ("lido", "USDC", "ethereum"): ReceiptToken(
+        contract="0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0",
+        label="wstETH (Lido Wrapped Staked ETH)", protocol_slug="lido",
+        stablecoin_symbol="USDC", chain="ethereum",
+        underlying="0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84",  # stETH
+        token_type="staking_receipt",
+    ),
+}
+
+
+# =============================================================================
+# Ethena — sUSDe (staked USDe) and USDe itself
+# =============================================================================
+
+ETHENA_TOKENS = {
+    ("ethena", "USDe", "ethereum"): ReceiptToken(
+        contract="0x9D39A5DE30e57443BfF2A8307A4256c8797A3497",
+        label="sUSDe (Staked USDe)", protocol_slug="ethena",
+        stablecoin_symbol="USDe", chain="ethereum",
+        underlying="0x4c9EDD5852cd905f086C759E8383e09bff1E68B3",  # USDe
+        token_type="staking_receipt",
+    ),
+}
+
+
+# =============================================================================
+# Pendle — PT (Principal Token) for sUSDe
+# =============================================================================
+
+PENDLE_TOKENS = {
+    ("pendle", "USDe", "ethereum"): ReceiptToken(
+        contract="0xB05cABCd99cf9a73b19805edefC5f67CA5d1895E",
+        label="PT-sUSDe (Pendle Principal Token)", protocol_slug="pendle",
+        stablecoin_symbol="USDe", chain="ethereum",
+        underlying="0x9D39A5DE30e57443BfF2A8307A4256c8797A3497",  # sUSDe
+        token_type="pt_token",
+    ),
+}
+
+
+# =============================================================================
 # Unified registry — merge all adapters
 # =============================================================================
 
@@ -369,6 +416,9 @@ def get_all_receipt_tokens() -> dict[tuple, ReceiptToken]:
     registry.update(MAKER_TOKENS)
     registry.update(CURVE_TOKENS)
     registry.update(CONVEX_TOKENS)
+    registry.update(LIDO_TOKENS)
+    registry.update(ETHENA_TOKENS)
+    registry.update(PENDLE_TOKENS)
     return registry
 
 

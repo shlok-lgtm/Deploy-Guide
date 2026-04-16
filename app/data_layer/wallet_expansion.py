@@ -127,22 +127,23 @@ async def run_wallet_graph_expansion(
         process_fn=process_transfers,
     )
 
-    # 5. Batch insert discovered wallets
+    # 5. Batch insert discovered wallets (per-row commits to avoid all-or-nothing)
     new_wallets_seeded = 0
     if discovered_addresses:
         batch = list(discovered_addresses)[:target_new_wallets]
-        try:
-            with get_cursor() as cur:
-                for addr in batch:
+        for addr in batch:
+            try:
+                with get_cursor() as cur:
                     cur.execute(
                         """INSERT INTO wallet_graph.wallets (address, source, created_at)
                            VALUES (%s, 'graph_expansion', NOW())
                            ON CONFLICT (address) DO NOTHING""",
                         (addr,),
                     )
-            new_wallets_seeded = len(batch)
-        except Exception as e:
-            logger.warning(f"Wallet expansion insert failed: {e}")
+                new_wallets_seeded += 1
+            except Exception as e:
+                if new_wallets_seeded == 0:
+                    logger.warning(f"Wallet expansion insert failed: {e}")
 
     # Stats
     try:
