@@ -65,6 +65,7 @@ export function computeUpdates(
   cycleTimestamp: number
 ): ScoreUpdate[] {
   const updates: ScoreUpdate[] = [];
+  const HEARTBEAT_MAX_AGE_SECONDS = 24 * 60 * 60; // 24 hours
 
   for (const apiScore of apiScores) {
     const tokenAddress = tokenAddresses[apiScore.id.toLowerCase()];
@@ -98,28 +99,36 @@ export function computeUpdates(
       continue;
     }
 
-    // Skip if score hasn't changed by more than threshold
+    // Check score delta threshold
     const scoreDelta = Math.abs(newScore - onChain.score);
     const gradeChanged = newGrade !== onChain.grade;
 
-    if (scoreDelta < threshold && !gradeChanged) {
+    // 24-hour heartbeat: republish if on-chain timestamp is older than 24h
+    // regardless of score delta. Proves liveness to integrators.
+    const onChainAge = cycleTimestamp - onChain.timestamp;
+    const heartbeatDue = onChainAge >= HEARTBEAT_MAX_AGE_SECONDS;
+
+    if (scoreDelta < threshold && !gradeChanged && !heartbeatDue) {
       logger.debug("Score unchanged — skipping", {
         id: apiScore.id,
         token: tokenAddress,
         onChainScore: onChain.score,
         newScore,
         delta: scoreDelta,
+        ageHours: Math.round(onChainAge / 3600),
       });
       continue;
     }
 
-    logger.info("Score changed — queuing update", {
+    const reason = heartbeatDue && scoreDelta < threshold ? "heartbeat" : "delta";
+    logger.info(`Score update — ${reason}`, {
       id: apiScore.id,
       token: tokenAddress,
       oldScore: onChain.score,
       newScore,
       delta: scoreDelta,
       gradeChanged,
+      ageHours: Math.round(onChainAge / 3600),
     });
 
     updates.push({

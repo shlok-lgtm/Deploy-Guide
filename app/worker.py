@@ -2223,6 +2223,29 @@ async def run_slow_cycle_parallel():
     except Exception as e:
         logger.warning(f"Contract surveillance re-scan failed: {e}")
 
+    # On-chain CDA verification — crypto-backed stablecoins (DAI, LUSD)
+    try:
+        from app.collectors.on_chain_cda import run_on_chain_cda_verification
+        cda_result = await run_on_chain_cda_verification()
+        logger.error(
+            f"=== ON-CHAIN CDA: {cda_result.get('assets_read', 0)} read, "
+            f"{cda_result.get('stored', 0)} stored ==="
+        )
+    except Exception as e:
+        logger.warning(f"On-chain CDA verification failed: {e}")
+
+    # Solana program monitoring — Drift, Jupiter, Raydium
+    try:
+        from app.collectors.solana_program_monitor import run_solana_program_monitoring
+        sol_result = await run_solana_program_monitoring()
+        logger.error(
+            f"=== SOLANA PROGRAMS: {sol_result.get('programs_checked', 0)} checked, "
+            f"{sol_result.get('upgrades_detected', 0)} upgrades, "
+            f"{sol_result.get('immutable', 0)} immutable ==="
+        )
+    except Exception as e:
+        logger.warning(f"Solana program monitoring failed: {e}")
+
     # Provenance health re-check (disabled sources)
     try:
         async def _provenance_recheck():

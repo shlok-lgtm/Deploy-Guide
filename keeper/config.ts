@@ -55,7 +55,7 @@ export function loadConfig(): KeeperConfig {
     },
 
     pollIntervalSeconds: Number(process.env["POLL_INTERVAL_SECONDS"] ?? "3600"),
-    scoreChangeThreshold: Number(process.env["SCORE_CHANGE_THRESHOLD"] ?? "50"),
+    scoreChangeThreshold: Number(process.env["SCORE_CHANGE_THRESHOLD"] ?? "10"),
 
     keeperPrivateKey: requireEnv("KEEPER_PRIVATE_KEY"),
 
