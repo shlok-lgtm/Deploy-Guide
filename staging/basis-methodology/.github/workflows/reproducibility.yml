@@ -1,0 +1,41 @@
+name: reproducibility
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * *"   # daily against live production vectors
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test deps
+        run: pip install pytest
+
+      - name: Capture live vectors (best effort)
+        run: |
+          python verify/capture_vectors.py \
+            --api https://basisprotocol.xyz \
+            --out test_vectors/ \
+            --limit 10 || echo "capture failed — falling back to committed vectors"
+
+      - name: Verify reference implementation matches captured vectors
+        run: |
+          python -m pytest verify/ -v
+
+      - name: Fail on empty vectors
+        run: |
+          count=$(ls test_vectors/*.json 2>/dev/null | wc -l)
+          echo "$count vector(s) present"
+          if [ "$count" -lt 5 ]; then
+            echo "FAIL: need ≥5 vectors to claim reproducibility"
+            exit 1
+          fi

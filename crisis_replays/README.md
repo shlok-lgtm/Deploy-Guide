@@ -11,6 +11,21 @@ Basis index. Each replay is a self-contained directory with:
   - `README.md`                — context, sources, and what the score was
                                  trying to capture at the time
 
+## What this library is (and is not)
+
+**It is:** a deterministic consistency check. Given the `inputs.json`
+stored for each crisis, the scoring engine produces the same score, grade,
+and computation hash on every machine, every time. The hashes pinned in
+`result.json` are reproducible byte-for-byte from the stored inputs.
+
+**It is not:** a re-derivation from primary historical data. The component
+values in each `inputs.json` are plausible synthetic approximations of
+what the SII/PSI/RPI inputs looked like at the moment of the crisis. They
+were written by `scripts/generate_crisis_replays.py`, not extracted from
+archived chain snapshots, historical price feeds, or raw governance
+records. A future upgrade to "Claim B" (full historical re-derivation
+from primary sources) is out of scope for Bucket A.
+
 ## Re-derivation harness
 
 Every replay can be re-derived from this repo with:
