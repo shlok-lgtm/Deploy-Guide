@@ -145,10 +145,16 @@ class EnrichmentPipeline:
 
         elapsed = time.time() - start
         successes = sum(1 for r in self._results if r.success)
-        logger.info(
-            f"Enrichment pipeline complete: {successes}/{len(self._results)} succeeded "
-            f"in {elapsed:.0f}s (max_concurrent={self.max_concurrent})"
+        failures = [r for r in self._results if not r.success]
+        gated = [r for r in self._results if r.error and "gated" in str(r.error).lower()]
+        logger.error(
+            f"=== ENRICHMENT PIPELINE: {successes}/{len(self._results)} succeeded, "
+            f"{len(failures)} failed, {len(gated)} gated, {elapsed:.0f}s ==="
         )
+        if failures:
+            for f in failures:
+                if "gated" not in str(f.error or "").lower():
+                    logger.error(f"  FAILED: {f.name} — {f.error}")
 
         return list(self._results)
 
@@ -395,11 +401,17 @@ async def run_enrichment_pipeline() -> dict:
     async def _run_wallet_expansion():
         results = {}
         try:
-            from app.indexer.expander import run_wallet_expansion
-            expansion_result = await run_wallet_expansion(max_etherscan_calls=50)
+            from app.data_layer.wallet_expansion import run_wallet_graph_expansion
+            expansion_result = await run_wallet_graph_expansion(
+                target_new_wallets=10_000, max_etherscan_calls=5_000
+            )
             results["expansion"] = expansion_result
+            logger.error(
+                f"=== ENRICHMENT WALLET EXPANSION: "
+                f"{expansion_result.get('new_wallets_seeded', 0)} new wallets ==="
+            )
         except Exception as e:
-            logger.warning(f"Wallet expansion failed: {e}")
+            logger.error(f"Wallet expansion failed: {e}")
             results["expansion_error"] = str(e)
 
         try:
@@ -576,8 +588,40 @@ async def run_enrichment_pipeline() -> dict:
     # ---- Tier 4: Bridge flows ----
 
     async def _run_bridge_flows():
-        from app.data_layer.bridge_flow_collector import run_bridge_flow_collection
-        return await run_bridge_flow_collection()
+        # Use inline fetch — data_layer collector uses bridges.llama.fi which is paywalled
+        import httpx as _bfx
+        from app.database import get_cursor as _bf_gc
+        import math
+        def _sn(v):
+            if v is None: return None
+            try:
+                f = float(v)
+                return None if (math.isnan(f) or math.isinf(f)) else f
+            except: return None
+
+        async with _bfx.AsyncClient(timeout=30) as _bc:
+            _r = await _bc.get("https://api.llama.fi/bridges", params={"includeChains": "true"})
+            if _r.status_code == 402:
+                _r = await _bc.get("https://api.llama.fi/v2/bridges")
+            data = _r.json() if _r.status_code == 200 else {}
+            _brs = data.get("bridges", data if isinstance(data, list) else [])
+
+        ok, err = 0, 0
+        for _b in sorted(_brs, key=lambda x: x.get("lastDayVolume", 0) or 0, reverse=True)[:20]:
+            _bid = _b.get("id")
+            if _bid is None: continue
+            try:
+                with _bf_gc() as _c:
+                    _c.execute("""INSERT INTO bridge_flows
+                        (bridge_id, bridge_name, source_chain, dest_chain, volume_usd, period, snapshot_at)
+                        VALUES(%s, %s, 'all', 'all', %s, '24h', NOW())
+                        ON CONFLICT DO NOTHING""",
+                        (str(_bid), _b.get("displayName") or _b.get("name", ""), _sn(_b.get("lastDayVolume"))))
+                ok += 1
+            except Exception:
+                err += 1
+        logger.error(f"=== ENRICHMENT BRIDGES: {ok} ok, {err} err ===")
+        return {"ok": ok, "err": err}
 
     pipeline.add(EnrichmentTask(
         name="bridge_flows", func=_run_bridge_flows,

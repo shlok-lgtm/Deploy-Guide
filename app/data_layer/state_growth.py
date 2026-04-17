@@ -33,7 +33,7 @@ TRACKED_TABLES = {
 
     # === Wallet graph ===
     "wallet_graph.wallets":             {"time_col": "created_at",     "avg_row_bytes": 100, "category": "wallet"},
-    "wallet_graph.wallet_holdings":     {"time_col": "updated_at",     "avg_row_bytes": 120, "category": "wallet"},
+    "wallet_graph.wallet_holdings":     {"time_col": "indexed_at",     "avg_row_bytes": 120, "category": "wallet"},
     "wallet_graph.wallet_risk_scores":  {"time_col": "computed_at",    "avg_row_bytes": 200, "category": "wallet"},
     "wallet_graph.wallet_edges":        {"time_col": "updated_at",     "avg_row_bytes": 150, "category": "wallet"},
     "wallet_graph.wallet_profiles":     {"time_col": "computed_at",    "avg_row_bytes": 500, "category": "wallet"},

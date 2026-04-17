@@ -1154,6 +1154,13 @@ async def run_fast_cycle():
         _current_cycle_stats.store()
         _current_cycle_stats = None
 
+    # Flush API usage tracker every fast cycle
+    try:
+        from app.api_usage_tracker import flush as _fast_flush
+        _fast_flush()
+    except Exception:
+        pass
+
     # One-time diagnostic: data layer table row counts via pg_stat (instant, no scan)
     try:
         from app.database import fetch_all as _diag_fa
@@ -2322,6 +2329,37 @@ async def main():
     args = parser.parse_args()
     
     init_pool()
+
+    # Ensure API usage tracking tables exist
+    try:
+        execute("""
+            CREATE TABLE IF NOT EXISTS api_usage_tracker (
+                id BIGSERIAL PRIMARY KEY,
+                provider TEXT NOT NULL,
+                endpoint TEXT,
+                calls_count INTEGER DEFAULT 1,
+                caller TEXT,
+                response_status INTEGER,
+                latency_ms INTEGER,
+                recorded_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        execute("""
+            CREATE TABLE IF NOT EXISTS api_usage_hourly (
+                id SERIAL PRIMARY KEY,
+                provider TEXT NOT NULL,
+                hour TIMESTAMPTZ NOT NULL,
+                total_calls INTEGER DEFAULT 0,
+                success_calls INTEGER DEFAULT 0,
+                error_calls INTEGER DEFAULT 0,
+                avg_latency_ms INTEGER,
+                p95_latency_ms INTEGER,
+                callers JSONB,
+                UNIQUE (provider, hour)
+            )
+        """)
+    except Exception as e:
+        logger.debug(f"API usage table creation skipped: {e}")
 
     # Seed email alert channel if not configured
     try:
