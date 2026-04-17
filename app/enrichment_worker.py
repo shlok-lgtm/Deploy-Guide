@@ -440,11 +440,8 @@ async def run_enrichment_pipeline() -> dict:
 
     pipeline.add(EnrichmentTask(
         name="wallet_expansion", func=_run_wallet_expansion,
-        timeout_seconds=2400, group="wallet", priority=4,
-        gate_check=make_db_gate(
-            "SELECT MAX(created_at) AS latest FROM wallet_graph.wallets WHERE created_at > NOW() - INTERVAL '48 hours'",
-            min_hours=24,
-        ),
+        timeout_seconds=2400, group="wallet", priority=1,
+        # No gate — wallet graph must grow from 44K to 500K. Runs every enrichment cycle.
     ))
 
     # ---- CDA collection ----
@@ -507,7 +504,7 @@ async def run_enrichment_pipeline() -> dict:
 
     pipeline.add(EnrichmentTask(
         name="edge_building", func=_run_edges,
-        timeout_seconds=3600, group="wallet", priority=4,
+        timeout_seconds=3600, group="wallet", priority=1,
         gate_check=make_db_gate(
             "SELECT MAX(last_built_at) AS latest FROM wallet_graph.edge_build_status",
             min_hours=10,
