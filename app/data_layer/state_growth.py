@@ -46,7 +46,7 @@ TRACKED_TABLES = {
     "yield_snapshots":          {"time_col": "snapshot_at",    "avg_row_bytes": 250, "category": "data_layer"},
     "governance_proposals":     {"time_col": "collected_at",   "avg_row_bytes": 2000, "category": "data_layer"},
     "governance_voters":        {"time_col": "collected_at",   "avg_row_bytes": 150, "category": "data_layer"},
-    "bridge_flows":             {"time_col": "snapshot_at",    "avg_row_bytes": 200, "category": "data_layer"},
+    "bridge_flows":             {"time_col": "snapshot_at",    "avg_row_bytes": 200, "category": "deferred"},
     "exchange_snapshots":       {"time_col": "snapshot_at",    "avg_row_bytes": 500, "category": "data_layer"},
     "correlation_matrices":     {"time_col": "computed_at",    "avg_row_bytes": 5000, "category": "data_layer"},
     "volatility_surfaces":      {"time_col": "computed_at",    "avg_row_bytes": 200, "category": "data_layer"},
@@ -145,6 +145,7 @@ def _bulk_row_counts() -> dict[str, int]:
     TABLE_COUNT_OVERRIDES = {
         "wallet_graph.wallet_risk_scores": "SELECT COUNT(DISTINCT wallet_address) as cnt FROM wallet_graph.wallet_risk_scores",
         "wallet_graph.wallet_holdings": "SELECT COUNT(DISTINCT wallet_address || token_address) as cnt FROM wallet_graph.wallet_holdings WHERE public.immutable_date(indexed_at) = CURRENT_DATE",
+        "component_readings": "SELECT COUNT(DISTINCT stablecoin_id || component_id) as cnt FROM component_readings WHERE collected_at > NOW() - INTERVAL '24 hours'",
     }
     for table_name, query in TABLE_COUNT_OVERRIDES.items():
         try:
@@ -471,7 +472,7 @@ def get_state_growth() -> dict:
     stale_types = []
     staleness_thresholds = {
         "liquidity_depth": 3, "exchange_snapshots": 3, "entity_snapshots_hourly": 3,
-        "yield_snapshots": 26, "governance_proposals": 26, "bridge_flows": 26,
+        "yield_snapshots": 26, "governance_proposals": 26,
         "peg_snapshots_5m": 26, "mint_burn_events": 26, "contract_surveillance": 170,
         "dex_pool_ohlcv": 6, "market_chart_history": 26,
         "scores": 3, "psi_scores": 26,

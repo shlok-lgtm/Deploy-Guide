@@ -754,52 +754,10 @@ async def run_fast_cycle():
         logger.error(f"=== YIELDS: {_ys_ok}/{len(_ys_rows)} in {time.time()-_ys_start:.1f}s ===")
     except Exception as _e3: logger.error(f"=== YIELDS FAILED: {_e3} ===")
 
-    # ==== 4. BRIDGE FLOWS (DeFiLlama — free endpoint) ====
-    try:
-        # DeFiLlama bridges endpoints have been unstable:
-        # - bridges.llama.fi/bridges was paywalled at one point
-        # - api.llama.fi/bridges now returns 404
-        # Try all known variants; use first that returns 200.
-        _brs = []
-        _tried_status = {}
-        async with httpx.AsyncClient(timeout=30) as _bc:
-            for _url, _params in [
-                ("https://bridges.llama.fi/bridges", {"includeChains": "true"}),
-                ("https://api.llama.fi/bridges", {"includeChains": "true"}),
-                ("https://api.llama.fi/bridgedaystats", None),
-                ("https://api.llama.fi/v1/bridges", None),
-            ]:
-                try:
-                    _r = await _bc.get(_url, params=_params) if _params else await _bc.get(_url)
-                    _tried_status[_url] = _r.status_code
-                    if _r.status_code == 200:
-                        _data = _r.json()
-                        _brs = _data.get("bridges", _data if isinstance(_data, list) else [])
-                        logger.error(f"=== BRIDGES: {_url} returned {len(_brs)} ===")
-                        break
-                except Exception as _be:
-                    _tried_status[_url] = f"error:{_be}"
-        if not _brs:
-            logger.error(f"=== BRIDGES: all endpoints failed: {_tried_status} ===")
-        _bf_ok, _bf_err = 0, 0
-        for _b in sorted(_brs, key=lambda x: x.get("lastDayVolume",0) or 0, reverse=True)[:20]:
-            _bid = _b.get("id")
-            _bname = _b.get("displayName") or _b.get("name","")
-            _bvol = _sn(_b.get("lastDayVolume"))
-            if _bid is None: continue
-            try:
-                with _dl_gc() as _c:
-                    _c.execute("""INSERT INTO bridge_flows
-                        (bridge_id,bridge_name,source_chain,dest_chain,volume_usd,period,snapshot_at)
-                        VALUES(%s,%s,'all','all',%s,'24h',NOW())
-                        ON CONFLICT DO NOTHING""",
-                        (str(_bid), _bname, _bvol))
-                _bf_ok += 1
-            except Exception as _e:
-                _bf_err += 1
-                if _bf_err <= 3: logger.error(f"bridge fail: {_e}")
-        logger.error(f"=== BRIDGES: {_bf_ok} ok, {_bf_err} err, total={_dl_fo('SELECT COUNT(*) as c FROM bridge_flows')} ===")
-    except Exception as _e4: logger.error(f"=== BRIDGES FAILED: {_e4} ===")
+    # ==== 4. BRIDGE FLOWS — DEFERRED (constitution v9.3) ====
+    # DeFiLlama paywalled all bridges endpoints (402/404) circa April 2026.
+    # Deferred to Phase 2: direct contract monitoring using existing Etherscan quota.
+    # Table schema retained for future backfill. See basis_protocol_v9_3_constitution_amendment.md.
 
     # ==== 5. PEG 5-MIN + MARKET CHART ====
     try:
@@ -1220,10 +1178,22 @@ async def run_fast_cycle():
         _current_cycle_stats.store()
         _current_cycle_stats = None
 
-    # Flush API usage tracker every fast cycle
+    # Flush API usage tracker + log budget utilization
     try:
-        from app.api_usage_tracker import flush as _fast_flush
+        from app.api_usage_tracker import flush as _fast_flush, get_realtime_counters
         _fast_flush()
+        _budget_counters = get_realtime_counters()
+        _budgets = {"coingecko": 16_600, "etherscan": 200_000, "blockscout": 100_000}
+        _budget_parts = []
+        for _prov, _cnt in sorted(_budget_counters.items()):
+            _today = _cnt.get("calls_today", 0)
+            _limit = _budgets.get(_prov)
+            if _limit:
+                _budget_parts.append(f"{_prov}: {_today:,}/{_limit:,} ({round(_today/_limit*100)}%)")
+            else:
+                _budget_parts.append(f"{_prov}: {_today:,}")
+        if _budget_parts:
+            logger.error(f"=== [api_budget] {', '.join(_budget_parts)} ===")
     except Exception:
         pass
 
@@ -2463,6 +2433,7 @@ async def main():
             for _tbl in [
                 "wallet_graph.wallet_risk_scores",
                 "wallet_graph.wallet_holdings",
+                "component_readings",
             ]:
                 try:
                     cur.execute("COMMIT")  # VACUUM can't run inside a transaction
@@ -2587,6 +2558,8 @@ async def main():
             logger.info("Oracle registry seeded with 7 feeds at startup")
     except Exception as e:
         logger.debug(f"Oracle table creation skipped: {e}")
+
+    logger.error("[bridges] collector disabled — DeFiLlama paywalled all endpoints. See constitution v9.3 for deferral rationale.")
 
     # Seed email alert channel if not configured
     try:
