@@ -284,3 +284,268 @@ design:
   keeper-side enforcement + audit.
 
 Proceed.
+
+---
+
+## 11. Design-review Q&A (added after initial draft)
+
+The five questions below were raised as a design review of Sections 1–10
+above. They are answered here before any keeper work begins. Where an
+answer conflicts with earlier text, this section is authoritative and
+the earlier text is superseded.
+
+### Q1 — Event signature and scale
+
+**Question:** What exactly does `ReportPublished` look like on chain,
+and what are the consequences of squeezing every new commit type
+through it?
+
+**Answer.** From `src/interfaces/IBasisSIIOracle.sol:110`:
+
+```solidity
+event ReportPublished(
+    bytes32 indexed entityId,
+    bytes32         reportHash,
+    bytes4          lensId,
+    uint48          timestamp
+);
+```
+
+Only `entityId` is indexed (topic1). `reportHash`, `lensId`, and
+`timestamp` live in the non-indexed `data` field. Consequences:
+
+1. You cannot filter by `lensId` using `eth_getLogs` topic filters.
+   A subscriber that wants "all track-record commits" must fetch
+   every `ReportPublished` log in the range and decode `data` in
+   userland, then discard the ones whose `lensId` ≠ the lens of
+   interest. O(N) over the history of the log, not O(matches).
+2. At current volume (tens of report commits per day across SII +
+   PSI) this is fine. At 10k+ cumulative events it becomes costly
+   from a public-RPC standpoint. The project already mirrors on-chain
+   events to Postgres via the off-chain indexer, so the authoritative
+   query path is Postgres, not RPC — see Q5.
+3. No `TrackRecordPublished` / `DisputeCommitmentPublished` event
+   fires. Those typed events exist in the interface source
+   (`IBasisSIIOracle.sol:113-128`) but the deployed bytecode does
+   NOT emit them, because the deployed contract predates those
+   function additions. Consumers that want "track record vs report vs
+   dispute" segregation must do it in the indexer.
+
+### Q2 — Overwrite vs append, and the entityId scheme
+
+**Question:** `publishReportHash` overwrites any prior value at the
+same key. What does the final entityId scheme look like, and is it
+collision-free?
+
+**Answer.** Storage shape is confirmed overwrite, not append
+(`src/BasisSIIOracle.sol:243-261`):
+
+```solidity
+mapping(bytes32 => bytes32) public reportHashes;
+mapping(bytes32 => uint48)  public reportTimestamps;
+mapping(bytes32 => bytes4)  public reportLenses;
+
+function publishReportHash(bytes32 entityId, bytes32 reportHash, bytes4 lensId)
+    external onlyKeeper whenNotPaused {
+    reportHashes[entityId] = reportHash;          // unconditional write
+    reportTimestamps[entityId] = uint48(block.timestamp);
+    reportLenses[entityId] = lensId;
+    emit ReportPublished(entityId, reportHash, lensId, uint48(block.timestamp));
+}
+```
+
+No `require(reportHashes[entityId] == 0)` guard. Re-publishing the same
+entityId silently replaces prior content. Consequences for the scheme:
+
+1. `entityId` MUST encode enough of the commit's natural key that two
+   legitimate commits never collide. For track-record events, that
+   means the key material must uniquely identify the event. For
+   disputes, it must uniquely identify the `(disputeId, transition)`
+   pair. For methodology, it must uniquely identify the versioned
+   methodology ID.
+2. Authoritative entityId schemes (this supersedes Section 2):
+
+   ```
+   // Track-record event
+   entityId = keccak256(abi.encodePacked(
+       "basis:track_record:v1",
+       eventType,              // bytes4
+       entity_slug_bytes,      // variable-length ASCII bytes
+       uint64(eventTimestamp)  // Unix seconds
+   ))
+   reportHash = sha256(canonical_event_payload)
+
+   // Dispute transition
+   entityId = keccak256(abi.encodePacked(
+       "basis:dispute:v1",
+       disputeId,              // bytes32 = keccak256("dispute:{db_id}")
+       transitionKind          // bytes4: "SUBM" | "CTRE" | "RSLV"
+   ))
+   reportHash = sha256(canonical_transition_payload)
+
+   // Methodology document
+   entityId = keccak256(abi.encodePacked(
+       "basis:methodology:v1",
+       methodologyId_bytes     // e.g. "track_record_outcomes_v1"
+   ))
+   reportHash = sha256(canonical_methodology_doc)
+   ```
+
+3. Collision analysis. The three domain strings are literal-distinct
+   and shorter than any real SII symbol preimage is longer than
+   (real SII `entityId = keccak256(symbol)`, with `symbol` ≤ ~8 bytes
+   of ASCII). Domain-string length alone guarantees preimage
+   separation across types. Within a type, the unique-fields tuple
+   is the natural key: if two legitimate commits share one, they are
+   by definition the same commit.
+4. Write-once is therefore enforced by two layers:
+   - **Natural-key uniqueness** in `entityId` (collisions mean the
+     same event, so overwriting with the same `reportHash` is a
+     no-op from the reviewer's perspective).
+   - **Keeper guard** that calls `getReportHash(entityId)` and
+     refuses to re-publish with a different `reportHash`. Code in
+     Section 5.
+   On-chain enforcement is still absent; see Section 9.
+
+### Q3 — Lens byte scheme and the registry
+
+**Question:** Are the lens tags stable? Who picks the bytes? How is
+the mapping from lensId → meaning discoverable?
+
+**Answer.** The project has no canonical on-chain lens registry today.
+`lensId` is a freeform 4-byte discriminator; current live usage is
+only `0x00000000` (keeper/index.ts:472). The RPI "lens" concept
+(`migrations/048_lens_configs.sql`, `app/lenses/*.json`) is a
+separate off-chain string-keyed system and does NOT share bytes with
+`ReportPublished.lensId`. Adopt this numeric range scheme (supersedes
+the ASCII tags in Section 2):
+
+| Range | Meaning |
+|---|---|
+| `0x00000000` | default / unspecified (current SII/PSI report commits) |
+| `0x00000001 – 0x000000FF` | reserved for future core report types |
+| `0x00000100` | track-record event commit (Bucket A1) |
+| `0x00000101 – 0x000001FF` | reserved for future track-record subtypes |
+| `0x00000200` | dispute transition commit (Bucket A4) |
+| `0x00000201 – 0x000002FF` | reserved for future dispute subtypes |
+| `0x00000300` | methodology document commit (Bucket A — misc) |
+| `0x00000301 – 0x000003FF` | reserved for future methodology subtypes |
+| `0x00000400 – 0x0000FFFF` | reserved for Bucket B |
+
+The numeric scheme is deliberate: it sorts, it is unambiguously
+machine-readable, it avoids the trap of ASCII tags that look like
+one meaningful value but are actually a different byte order, and it
+leaves headroom within each bucket for subtyping without a new
+top-level range.
+
+**`transitionKind` for disputes no longer travels as `lensId`.** It
+was ambiguous to overload `lensId` for two purposes. `lensId` is
+strictly the type discriminator; the transition kind is encoded only
+inside `entityId` (per Q2) and inside the canonical payload. Dispute
+`lensId` is uniformly `0x00000200`.
+
+**Registry commit is the first act.** Immediately after keeper
+integration ships, before any other new-domain commit is published,
+the lens registry itself SHALL be committed as a methodology hash:
+
+```
+lensId       = 0x00000300  (methodology)
+entityId     = keccak256(abi.encodePacked(
+                   "basis:methodology:v1",
+                   bytes("lens_registry_v1")
+               ))
+reportHash   = sha256(docs/oracle_option_c_routing.md § 11 Q3 table)
+```
+
+That way the registry is itself anchored and reviewers can verify
+any later lens interpretation against a hash that was first in the
+chain.
+
+### Q4 — Existing consumer impact
+
+**Question:** What breaks when the keeper starts writing
+`0x00000100 / 0x00000200 / 0x00000300` to `lensId`?
+
+**Answer.** Survey across the codebase:
+
+- **Keeper (`keeper/index.ts:472`, `keeper/publisher.ts:283`):** the
+  only consumer today actively setting `lensId`. It emits
+  `0x00000000` for general report hashes. The new values don't
+  conflict. Change scope: publisher.ts gains three new entry
+  helpers, each hardcoding its lens; index.ts routes three new
+  pending-work queues through them.
+- **Python backend (`app/**/*.py`):** no references to the string
+  literal `ReportPublished`, `publishReportHash`, or `lensId` in
+  Python. (`grep` confirmed zero matches.) Nothing on the API side
+  filters by lens.
+- **Off-chain indexer:** `app/ops/tools/oracle_monitor.py` polls
+  the oracle and mirrors state. It does not currently branch on
+  `lensId`. Change scope: add a dispatch on the 4-byte tag mapping
+  to `track_record_commitments`, `dispute_commitments`,
+  `methodology_hashes` tables, with the `0x00000000` default
+  continuing to route to the existing SII/PSI report tables.
+- **Public integration guide (`basis_protocol_integration_guide.md`):**
+  mentions `getReportHash(entityId)` at lines 300, 301, 528, 556 as
+  a per-entityId lookup. No external documentation promises lens
+  filtering. External integrators are therefore unaffected.
+- **Solidity (`src/BasisSIIOracle.sol:251`):** the source comment
+  says `lensId Regulatory lens used (e.g., "SCO6")`. That comment
+  is out of date (SCO6 was aspirational; no deployed caller uses
+  it). Not a consumer — just stale inline text.
+- **Test suite (`test/BasisSIIOracle.t.sol`):** tests `lensId`
+  round-trip but does not pin it to specific values for SII/PSI.
+  Unaffected.
+
+No breakage. The three new lens values occupy a range that has never
+been written.
+
+### Q5 — Read path and enumeration
+
+**Question:** When a reviewer asks "show me every track-record
+commit for entity X in the last 30 days," where do they go?
+
+**Answer.** There are two tiers:
+
+1. **Per-key integrity check (on-chain, cheap, always-valid):** the
+   reviewer has or computes an `entityId` and calls
+   `getReportHash(entityId)`. One RPC call, O(1), returns
+   `(reportHash, lensId, timestamp)`. This is the ONLY on-chain
+   read path we promise for Bucket A. It's sufficient for the
+   core honest-anchor property.
+2. **Enumeration (off-chain, Postgres-authoritative):** "give me
+   every track-record commit in the last 30 days" is answered
+   by `track_record_commitments` in Postgres, joined to
+   `track_record_events`. The row's `on_chain_tx_hash` and
+   `on_chain_entity_id` columns let any reviewer convert a Postgres
+   row back into a one-call on-chain integrity check via path (1).
+
+The read path is NOT `eth_getLogs` over the whole ReportPublished
+stream. That works today at current volume but is not promised to
+scale. Any integrator who wants enumeration uses the Basis Hub API
+or Postgres replicas, then verifies selected rows on chain.
+
+Recommended schema addition to `track_record_commitments` and
+`dispute_commitments`:
+
+```sql
+ALTER TABLE track_record_commitments
+  ADD COLUMN on_chain_entity_id bytea;
+ALTER TABLE dispute_commitments
+  ADD COLUMN on_chain_entity_id bytea;
+```
+
+So reviewers can move from DB row → on-chain check without
+recomputing the keccak.
+
+---
+
+## 12. Supersession log
+
+- Section 2 tag conventions (`"TRCK"`, `"MTHD"`, `transitionKind` as
+  lens) are **SUPERSEDED** by Section 11 Q3 (numeric ranges).
+- Section 2 track-record entityId scheme is **SUPERSEDED** by
+  Section 11 Q2 (adds explicit `eventType`, `entity_slug`, and
+  `eventTimestamp` into the preimage; drops `eventHash`).
+- Section 5 keeper pseudo-code is **SUPERSEDED** by the Task 3
+  runbook (to be written next) which uses the numeric-range lens
+  scheme and the updated entityId preimages.
