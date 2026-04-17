@@ -2561,6 +2561,74 @@ async def main():
 
     logger.error("[bridges] collector disabled — DeFiLlama paywalled all endpoints. See constitution v9.3 for deferral rationale.")
 
+    # Stale type diagnostic — run the same check the dashboard uses
+    try:
+        _stale_thresholds = {
+            "liquidity_depth": ("snapshot_at", 3),
+            "exchange_snapshots": ("snapshot_at", 3),
+            "entity_snapshots_hourly": ("snapshot_at", 3),
+            "yield_snapshots": ("snapshot_at", 26),
+            "governance_proposals": ("collected_at", 26),
+            "peg_snapshots_5m": ("timestamp", 26),
+            "mint_burn_events": ("collected_at", 26),
+            "contract_surveillance": ("scanned_at", 170),
+            "dex_pool_ohlcv": ("timestamp", 6),
+            "market_chart_history": ("timestamp", 26),
+            "scores": ("computed_at", 3),
+            "psi_scores": ("scored_at", 26),
+        }
+        _stale_found = []
+        for _st_tbl, (_st_col, _st_max) in _stale_thresholds.items():
+            try:
+                _st_row = fetch_one(f"SELECT MAX({_st_col}) as latest FROM {_st_tbl}")
+                if _st_row and _st_row.get("latest"):
+                    _st_lt = _st_row["latest"]
+                    if _st_lt.tzinfo is None:
+                        _st_lt = _st_lt.replace(tzinfo=timezone.utc)
+                    _st_age = (datetime.now(timezone.utc) - _st_lt).total_seconds() / 3600
+                    if _st_age > _st_max:
+                        _stale_found.append(f"{_st_tbl} (age={_st_age:.1f}h, threshold={_st_max}h)")
+                else:
+                    _stale_found.append(f"{_st_tbl} (empty table, threshold={_st_max}h)")
+            except Exception as _st_e:
+                _stale_found.append(f"{_st_tbl} (query error: {_st_e})")
+        if _stale_found:
+            logger.error(f"[stale_diagnostic] {len(_stale_found)} stale: {', '.join(_stale_found)}")
+        else:
+            logger.error("[stale_diagnostic] all data types fresh")
+    except Exception as _sd_e:
+        logger.error(f"[stale_diagnostic] failed: {_sd_e}")
+
+    # Provenance gap diagnostic — which sources are silent?
+    try:
+        _prov_configured = fetch_all("SELECT id, entity, url, schedule FROM provenance_sources WHERE enabled = true")
+        _prov_active = fetch_all(
+            "SELECT DISTINCT source_domain FROM provenance_proofs WHERE proved_at > NOW() - INTERVAL '24 hours'"
+        )
+        _prov_configured_ids = {r["id"] for r in (_prov_configured or [])}
+        _prov_active_ids = {r["source_domain"] for r in (_prov_active or [])}
+        _prov_missing = sorted(_prov_configured_ids - _prov_active_ids)
+        logger.error(
+            f"[provenance_gap] configured={len(_prov_configured_ids)} sources, "
+            f"producing={len(_prov_active_ids)}, "
+            f"missing={_prov_missing}"
+        )
+    except Exception as _pg_e:
+        logger.error(f"[provenance_gap] diagnostic failed: {_pg_e}")
+
+    # API usage diagnostic — check if tracking tables have data
+    try:
+        _api_hourly = fetch_one("SELECT COUNT(*) as cnt, MAX(hour) as latest FROM api_usage_hourly")
+        _api_tracker = fetch_one("SELECT COUNT(*) as cnt, MAX(recorded_at) as latest FROM api_usage_tracker")
+        logger.error(
+            f"[api_usage_diagnostic] api_usage_hourly: {_api_hourly['cnt'] if _api_hourly else 0} rows, "
+            f"latest={_api_hourly.get('latest') if _api_hourly else 'none'} | "
+            f"api_usage_tracker: {_api_tracker['cnt'] if _api_tracker else 0} rows, "
+            f"latest={_api_tracker.get('latest') if _api_tracker else 'none'}"
+        )
+    except Exception as _aud_e:
+        logger.error(f"[api_usage_diagnostic] failed: {_aud_e}")
+
     # Seed email alert channel if not configured
     try:
         existing = fetch_one("SELECT id FROM ops_alert_config WHERE channel = 'email'")
