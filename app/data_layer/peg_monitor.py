@@ -106,18 +106,19 @@ def _store_peg_snapshots(stablecoin_id: str, price_points: list[tuple]):
     if not rows:
         return
 
-    # Batch insert — single transaction
+    # Batch insert — single round-trip via execute_values
     stored = 0
     try:
+        from psycopg2.extras import execute_values
         with get_cursor() as cur:
-            cur.executemany(
+            execute_values(cur,
                 """INSERT INTO peg_snapshots_5m
                    (stablecoin_id, price, timestamp, deviation_bps)
-                   VALUES (%s, %s, %s, %s)
+                   VALUES %s
                    ON CONFLICT (stablecoin_id, timestamp) DO UPDATE SET
                        price = EXCLUDED.price,
                        deviation_bps = EXCLUDED.deviation_bps""",
-                rows,
+                rows, page_size=500,
             )
         stored = len(rows)
     except Exception as batch_err:

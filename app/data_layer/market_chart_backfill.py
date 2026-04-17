@@ -113,17 +113,18 @@ def _store_market_chart_records(records: list[dict]):
 
     stored = 0
     try:
+        from psycopg2.extras import execute_values
         with get_cursor() as cur:
-            cur.executemany(
+            execute_values(cur,
                 """INSERT INTO market_chart_history
                    (coin_id, stablecoin_id, timestamp, price, market_cap,
                     total_volume, granularity)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)
+                   VALUES %s
                    ON CONFLICT (coin_id, timestamp, granularity) DO UPDATE SET
                        price = EXCLUDED.price,
                        market_cap = EXCLUDED.market_cap,
                        total_volume = EXCLUDED.total_volume""",
-                rows,
+                rows, page_size=500,
             )
         stored = len(rows)
     except Exception as batch_err:

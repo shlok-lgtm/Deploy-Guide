@@ -470,7 +470,8 @@ async def score_stablecoin(client: httpx.AsyncClient, stablecoin_id: str) -> dic
     score_data = compute_sii_from_components(components)
 
     # 3. Get price context
-    current = await fetch_current(client, cfg["coingecko_id"])
+    _cg_fix_score = {"susd": "nusd", "spark": "spark-protocol"}
+    current = await fetch_current(client, _cg_fix_score.get(cfg["coingecko_id"], cfg["coingecko_id"]))
     price_ctx = extract_price_context(current) if current else {}
 
     # 4. Store everything
@@ -722,13 +723,17 @@ async def run_fast_cycle():
             ))
         _ys_ok = 0
         try:
+            # Build single multi-row INSERT (one round-trip instead of 200)
+            _ys_now = datetime.now(timezone.utc)
+            _ys_rows_with_ts = [r + (_ys_now,) for r in _ys_rows]
+            from psycopg2.extras import execute_values as _ev_ys
             with _dl_gc() as _c:
-                _c.executemany(
+                _ev_ys(_c,
                     """INSERT INTO yield_snapshots
                        (pool_id,protocol,chain,asset,apy,apy_base,apy_reward,tvl_usd,stable_pool,snapshot_at)
-                       VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
+                       VALUES %s
                        ON CONFLICT(pool_id,snapshot_at) DO UPDATE SET apy=EXCLUDED.apy,tvl_usd=EXCLUDED.tvl_usd""",
-                    _ys_rows,
+                    _ys_rows_with_ts, page_size=500,
                 )
             _ys_ok = len(_ys_rows)
         except Exception as _yb:
@@ -813,7 +818,7 @@ async def run_fast_cycle():
                         await asyncio.sleep(0.15)
                         continue
                     from datetime import datetime as _pdt
-                    # Batch all inserts for this coin into a single transaction
+                    from psycopg2.extras import execute_values as _ev
                     _peg_rows = []
                     _mc_rows = []
                     for _pt in _r.json().get("prices",[]):
@@ -823,15 +828,15 @@ async def run_fast_cycle():
                     if _peg_rows:
                         try:
                             with _dl_gc() as _c:
-                                _c.executemany(
+                                _ev(_c,
                                     "INSERT INTO peg_snapshots_5m(stablecoin_id,price,timestamp,deviation_bps) "
-                                    "VALUES(%s,%s,%s,%s) ON CONFLICT DO NOTHING",
-                                    _peg_rows,
+                                    "VALUES %s ON CONFLICT DO NOTHING",
+                                    _peg_rows, page_size=500,
                                 )
-                                _c.executemany(
+                                _ev(_c,
                                     "INSERT INTO market_chart_history(coin_id,stablecoin_id,timestamp,price,granularity) "
-                                    "VALUES(%s,%s,%s,%s,'5min') ON CONFLICT DO NOTHING",
-                                    _mc_rows,
+                                    "VALUES %s ON CONFLICT DO NOTHING",
+                                    [r + ('5min',) for r in _mc_rows], page_size=500,
                                 )
                             _pg_ok += len(_peg_rows)
                             _mc_ok += len(_mc_rows)
