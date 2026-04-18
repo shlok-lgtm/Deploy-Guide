@@ -505,6 +505,96 @@ async def score_stablecoin(client: httpx.AsyncClient, stablecoin_id: str) -> dic
 
 
 # =============================================================================
+# Cycle diagnostics — runs at startup and end of every fast cycle
+# =============================================================================
+
+def run_cycle_diagnostics():
+    """Log stale types, provenance gaps, API budget, and usage stats."""
+    # 1. Stale types
+    try:
+        _stale_thresholds = {
+            "liquidity_depth": ("snapshot_at", 3),
+            "exchange_snapshots": ("snapshot_at", 3),
+            "entity_snapshots_hourly": ("snapshot_at", 3),
+            "yield_snapshots": ("snapshot_at", 26),
+            "governance_proposals": ("collected_at", 26),
+            "peg_snapshots_5m": ("timestamp", 26),
+            "mint_burn_events": ("collected_at", 26),
+            "contract_surveillance": ("scanned_at", 170),
+            "dex_pool_ohlcv": ("timestamp", 6),
+            "market_chart_history": ("timestamp", 26),
+            "scores": ("computed_at", 3),
+            "psi_scores": ("scored_at", 26),
+        }
+        _stale_found = []
+        for _tbl, (_col, _max_h) in _stale_thresholds.items():
+            try:
+                _row = fetch_one(f"SELECT MAX({_col}) as latest FROM {_tbl}")
+                if _row and _row.get("latest"):
+                    _lt = _row["latest"]
+                    if _lt.tzinfo is None:
+                        _lt = _lt.replace(tzinfo=timezone.utc)
+                    _age = (datetime.now(timezone.utc) - _lt).total_seconds() / 3600
+                    if _age > _max_h:
+                        _stale_found.append(f"{_tbl} (age={_age:.1f}h, threshold={_max_h}h)")
+                else:
+                    _stale_found.append(f"{_tbl} (empty, threshold={_max_h}h)")
+            except Exception as _e:
+                _stale_found.append(f"{_tbl} (error: {_e})")
+        if _stale_found:
+            logger.error(f"[stale_diagnostic] stale={len(_stale_found)}: {', '.join(_stale_found)}")
+        else:
+            logger.error("[stale_diagnostic] all data types fresh")
+    except Exception as _e:
+        logger.error(f"[stale_diagnostic] failed: {_e}")
+
+    # 2. Provenance gaps
+    try:
+        _configured = fetch_all("SELECT id FROM provenance_sources WHERE enabled = true")
+        _active = fetch_all(
+            "SELECT DISTINCT source_domain FROM provenance_proofs WHERE proved_at > NOW() - INTERVAL '24 hours'"
+        )
+        _conf_ids = {r["id"] for r in (_configured or [])}
+        _act_ids = {r["source_domain"] for r in (_active or [])}
+        _missing = sorted(_conf_ids - _act_ids)
+        logger.error(
+            f"[provenance_gap] configured={len(_conf_ids)}, producing={len(_act_ids)}, missing={_missing}"
+        )
+    except Exception as _e:
+        logger.error(f"[provenance_gap] failed: {_e}")
+
+    # 3. API budget
+    try:
+        from app.api_usage_tracker import get_realtime_counters
+        _counters = get_realtime_counters()
+        _limits = {"coingecko": 16_600, "etherscan": 200_000, "blockscout": 100_000}
+        _parts = []
+        for _p, _c in sorted(_counters.items()):
+            _today = _c.get("calls_today", 0)
+            _lim = _limits.get(_p)
+            if _lim:
+                _parts.append(f"{_p}={_today:,}/{_lim:,} ({round(_today/_lim*100)}%)")
+            else:
+                _parts.append(f"{_p}={_today:,}")
+        logger.error(f"[api_budget] {', '.join(_parts) if _parts else 'no calls tracked'}")
+    except Exception as _e:
+        logger.error(f"[api_budget] failed: {_e}")
+
+    # 4. API usage table verification
+    try:
+        _hourly = fetch_one("SELECT COUNT(*) as cnt, MAX(hour) as latest FROM api_usage_hourly")
+        _tracker = fetch_one("SELECT COUNT(*) as cnt, MAX(recorded_at) as latest FROM api_usage_tracker")
+        logger.error(
+            f"[api_usage_verify] hourly: {_hourly['cnt'] if _hourly else 0} rows, "
+            f"latest={_hourly.get('latest') if _hourly else 'none'} | "
+            f"tracker: {_tracker['cnt'] if _tracker else 0} rows, "
+            f"latest={_tracker.get('latest') if _tracker else 'none'}"
+        )
+    except Exception as _e:
+        logger.error(f"[api_usage_verify] failed: {_e}")
+
+
+# =============================================================================
 # Orchestrator: Fast cycle — critical scoring + lightweight tasks (<15 min)
 # =============================================================================
 
@@ -1178,22 +1268,10 @@ async def run_fast_cycle():
         _current_cycle_stats.store()
         _current_cycle_stats = None
 
-    # Flush API usage tracker + log budget utilization
+    # Flush API usage tracker (budget logging handled by run_cycle_diagnostics below)
     try:
-        from app.api_usage_tracker import flush as _fast_flush, get_realtime_counters
+        from app.api_usage_tracker import flush as _fast_flush
         _fast_flush()
-        _budget_counters = get_realtime_counters()
-        _budgets = {"coingecko": 16_600, "etherscan": 200_000, "blockscout": 100_000}
-        _budget_parts = []
-        for _prov, _cnt in sorted(_budget_counters.items()):
-            _today = _cnt.get("calls_today", 0)
-            _limit = _budgets.get(_prov)
-            if _limit:
-                _budget_parts.append(f"{_prov}: {_today:,}/{_limit:,} ({round(_today/_limit*100)}%)")
-            else:
-                _budget_parts.append(f"{_prov}: {_today:,}")
-        if _budget_parts:
-            logger.error(f"=== [api_budget] {', '.join(_budget_parts)} ===")
     except Exception:
         pass
 
@@ -1249,7 +1327,10 @@ async def run_fast_cycle():
         logger.error(f"=== DATA LAYER DIAGNOSTIC FAILED: {_de} ===")
 
     elapsed = time.time() - fast_start
-    logger.info(f"=== Fast cycle complete in {elapsed:.0f}s ===")
+    logger.error(f"=== Fast cycle complete in {elapsed:.0f}s ===")
+
+    # End-of-cycle diagnostics — fires every fast cycle for Railway visibility
+    run_cycle_diagnostics()
 
     return {
         "results": results,
@@ -2561,73 +2642,9 @@ async def main():
 
     logger.error("[bridges] collector disabled — DeFiLlama paywalled all endpoints. See constitution v9.3 for deferral rationale.")
 
-    # Stale type diagnostic — run the same check the dashboard uses
-    try:
-        _stale_thresholds = {
-            "liquidity_depth": ("snapshot_at", 3),
-            "exchange_snapshots": ("snapshot_at", 3),
-            "entity_snapshots_hourly": ("snapshot_at", 3),
-            "yield_snapshots": ("snapshot_at", 26),
-            "governance_proposals": ("collected_at", 26),
-            "peg_snapshots_5m": ("timestamp", 26),
-            "mint_burn_events": ("collected_at", 26),
-            "contract_surveillance": ("scanned_at", 170),
-            "dex_pool_ohlcv": ("timestamp", 6),
-            "market_chart_history": ("timestamp", 26),
-            "scores": ("computed_at", 3),
-            "psi_scores": ("scored_at", 26),
-        }
-        _stale_found = []
-        for _st_tbl, (_st_col, _st_max) in _stale_thresholds.items():
-            try:
-                _st_row = fetch_one(f"SELECT MAX({_st_col}) as latest FROM {_st_tbl}")
-                if _st_row and _st_row.get("latest"):
-                    _st_lt = _st_row["latest"]
-                    if _st_lt.tzinfo is None:
-                        _st_lt = _st_lt.replace(tzinfo=timezone.utc)
-                    _st_age = (datetime.now(timezone.utc) - _st_lt).total_seconds() / 3600
-                    if _st_age > _st_max:
-                        _stale_found.append(f"{_st_tbl} (age={_st_age:.1f}h, threshold={_st_max}h)")
-                else:
-                    _stale_found.append(f"{_st_tbl} (empty table, threshold={_st_max}h)")
-            except Exception as _st_e:
-                _stale_found.append(f"{_st_tbl} (query error: {_st_e})")
-        if _stale_found:
-            logger.error(f"[stale_diagnostic] {len(_stale_found)} stale: {', '.join(_stale_found)}")
-        else:
-            logger.error("[stale_diagnostic] all data types fresh")
-    except Exception as _sd_e:
-        logger.error(f"[stale_diagnostic] failed: {_sd_e}")
-
-    # Provenance gap diagnostic — which sources are silent?
-    try:
-        _prov_configured = fetch_all("SELECT id, entity, url, schedule FROM provenance_sources WHERE enabled = true")
-        _prov_active = fetch_all(
-            "SELECT DISTINCT source_domain FROM provenance_proofs WHERE proved_at > NOW() - INTERVAL '24 hours'"
-        )
-        _prov_configured_ids = {r["id"] for r in (_prov_configured or [])}
-        _prov_active_ids = {r["source_domain"] for r in (_prov_active or [])}
-        _prov_missing = sorted(_prov_configured_ids - _prov_active_ids)
-        logger.error(
-            f"[provenance_gap] configured={len(_prov_configured_ids)} sources, "
-            f"producing={len(_prov_active_ids)}, "
-            f"missing={_prov_missing}"
-        )
-    except Exception as _pg_e:
-        logger.error(f"[provenance_gap] diagnostic failed: {_pg_e}")
-
-    # API usage diagnostic — check if tracking tables have data
-    try:
-        _api_hourly = fetch_one("SELECT COUNT(*) as cnt, MAX(hour) as latest FROM api_usage_hourly")
-        _api_tracker = fetch_one("SELECT COUNT(*) as cnt, MAX(recorded_at) as latest FROM api_usage_tracker")
-        logger.error(
-            f"[api_usage_diagnostic] api_usage_hourly: {_api_hourly['cnt'] if _api_hourly else 0} rows, "
-            f"latest={_api_hourly.get('latest') if _api_hourly else 'none'} | "
-            f"api_usage_tracker: {_api_tracker['cnt'] if _api_tracker else 0} rows, "
-            f"latest={_api_tracker.get('latest') if _api_tracker else 'none'}"
-        )
-    except Exception as _aud_e:
-        logger.error(f"[api_usage_diagnostic] failed: {_aud_e}")
+    # Run diagnostics at startup — immediate snapshot before first cycle
+    logger.error("[startup_diagnostic] running initial stale/provenance/budget check...")
+    run_cycle_diagnostics()
 
     # Seed email alert channel if not configured
     try:
