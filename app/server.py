@@ -7277,6 +7277,64 @@ async def state_root_latest():
 # Provenance Proofs
 # =============================================================================
 
+def _normalize_source_domain(raw_domain: str, endpoint: str = "") -> str:
+    """Map raw hostnames to semantic provenance source names."""
+    from urllib.parse import urlparse
+    host = raw_domain
+    path = endpoint
+    # If raw_domain is a full URL, parse it
+    if "://" in raw_domain:
+        p = urlparse(raw_domain)
+        host = p.netloc
+        path = path or p.path
+    host = host.lower()
+    path = (path or "").lower()
+
+    # Etherscan — split by endpoint
+    if "etherscan" in host:
+        if "tokentx" in path: return "etherscan_tokentx"
+        if "tokenholdercount" in path or "tokenbalance" in path: return "etherscan_holders"
+        if "getsourcecode" in path or "getabi" in path: return "etherscan_sourcecode"
+        return "etherscan_holders"
+
+    # CoinGecko — split by endpoint
+    if "coingecko" in host:
+        if "market_chart" in path: return "coingecko_market_chart"
+        if "exchanges" in path: return "coingecko_exchanges"
+        if "tickers" in path: return "coingecko_tickers"
+        if "onchain" in path or "pools" in path: return "geckoterminal_dex"
+        return "coingecko_price"
+
+    # DeFiLlama — split by subdomain and path
+    if "llama.fi" in host:
+        if "yields" in host or "pools" in path: return "defillama_yields"
+        if "bridges" in host or "bridge" in path: return "defillama_bridges"
+        if "stablecoins" in host: return "defillama_tvl"
+        return "defillama_tvl"
+
+    # Blockscout
+    if "blockscout" in host:
+        return "blockscout_balances"
+
+    # Snapshot
+    if "snapshot" in host:
+        return "snapshot_governance"
+
+    # Tally
+    if "tally" in host:
+        return "tally_governance"
+
+    # CDA issuer PDFs
+    if "hubspot" in host or "website-files" in host or ".pdf" in path:
+        return "cda_issuer_pdf"
+
+    # Already a semantic name (not a hostname)
+    if "." not in raw_domain or "_" in raw_domain:
+        return raw_domain
+
+    return raw_domain
+
+
 @app.post("/api/provenance/register")
 async def provenance_register(request: Request):
     _check_admin_key(request)
@@ -7288,6 +7346,8 @@ async def provenance_register(request: Request):
         if field not in body:
             raise HTTPException(status_code=400, detail=f"Missing field: {field}")
 
+    _src = _normalize_source_domain(body["source_domain"], body.get("source_endpoint", ""))
+
     from app.database import fetch_one as _prov_fetch
     row = _prov_fetch(
         """INSERT INTO provenance_proofs
@@ -7295,12 +7355,12 @@ async def provenance_register(request: Request):
             proof_url, attestor_pubkey, proved_at, cycle_hour)
            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
            RETURNING id""",
-        (body["source_domain"], body["source_endpoint"],
+        (_src, body["source_endpoint"],
          body["response_hash"], body["attestation_hash"],
          body["proof_url"], body["attestor_pubkey"],
          body["proved_at"], body["cycle_hour"]),
     )
-    return {"status": "registered", "id": row["id"] if row else None}
+    return {"status": "registered", "id": row["id"] if row else None, "source_domain": _src}
 
 
 @app.post("/api/provenance/register/static")
@@ -7315,6 +7375,8 @@ async def provenance_register_static(request: Request):
         if field not in body:
             raise HTTPException(status_code=400, detail=f"Missing field: {field}")
 
+    _src = _normalize_source_domain(body["source_domain"], body.get("source_endpoint", ""))
+
     from app.database import fetch_one as _prov_fetch
     row = _prov_fetch(
         """INSERT INTO provenance_proofs
@@ -7322,12 +7384,12 @@ async def provenance_register_static(request: Request):
             proof_url, attestor_pubkey, proved_at, cycle_hour)
            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
            RETURNING id""",
-        (body["source_domain"], body["source_endpoint"],
+        (_src, body["source_endpoint"],
          body["response_hash"], body["attestation_hash"],
          body["proof_url"], body["attestor_pubkey"],
          body["proved_at"], body["cycle_hour"]),
     )
-    return {"status": "registered", "id": row["id"] if row else None}
+    return {"status": "registered", "id": row["id"] if row else None, "source_domain": _src}
 
 
 @app.post("/api/provenance/register/batch")
@@ -7349,13 +7411,14 @@ async def provenance_register_batch(request: Request):
             missing = [f for f in required if f not in proof]
             if missing:
                 continue
+            _psrc = _normalize_source_domain(proof["source_domain"], proof.get("source_endpoint", ""))
             cur.execute(
                 """INSERT INTO provenance_proofs
                    (source_domain, source_endpoint, response_hash, attestation_hash,
                     proof_url, attestor_pubkey, proved_at, cycle_hour)
                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                    RETURNING id""",
-                (proof["source_domain"], proof["source_endpoint"],
+                (_psrc, proof["source_endpoint"],
                  proof["response_hash"], proof["attestation_hash"],
                  proof["proof_url"], proof["attestor_pubkey"],
                  proof["proved_at"], proof["cycle_hour"]),

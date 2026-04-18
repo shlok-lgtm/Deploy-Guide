@@ -574,20 +574,41 @@ def run_cycle_diagnostics():
     except Exception as _e:
         logger.error(f"[provenance_gap] failed: {_e}")
 
-    # 3. API budget
+    # 3. API budget — read from new tracker (in-memory) + DB fallback
     try:
-        from app.api_usage_tracker import get_realtime_counters
-        _counters = get_realtime_counters()
         _limits = {"coingecko": 16_600, "etherscan": 200_000, "blockscout": 100_000}
         _parts = []
-        for _p, _c in sorted(_counters.items()):
-            _today = _c.get("calls_today", 0)
-            _lim = _limits.get(_p)
-            if _lim:
-                _parts.append(f"{_p}={_today:,}/{_lim:,} ({round(_today/_lim*100)}%)")
-            else:
-                _parts.append(f"{_p}={_today:,}")
-        logger.error(f"[api_budget] {', '.join(_parts) if _parts else 'no calls tracked'}")
+        # Try new tracker first
+        try:
+            from app.utils.api_tracker import tracker as _bt
+            _budget = _bt.get_budget_summary()
+            for _p, _today in sorted(_budget.items()):
+                _lim = _limits.get(_p)
+                if _lim:
+                    _parts.append(f"{_p}={_today:,}/{_lim:,} ({round(_today/_lim*100)}%)")
+                else:
+                    _parts.append(f"{_p}={_today:,}")
+        except Exception:
+            pass
+        # Fallback to DB
+        if not _parts:
+            try:
+                _db_budget = fetch_all("""
+                    SELECT provider, SUM(total_calls) as total
+                    FROM api_usage_hourly
+                    WHERE hour > NOW() - INTERVAL '24 hours'
+                    GROUP BY provider ORDER BY total DESC
+                """)
+                for _r in (_db_budget or []):
+                    _p, _today = _r["provider"], int(_r["total"])
+                    _lim = _limits.get(_p)
+                    if _lim:
+                        _parts.append(f"{_p}={_today:,}/{_lim:,} ({round(_today/_lim*100)}%)")
+                    else:
+                        _parts.append(f"{_p}={_today:,}")
+            except Exception:
+                pass
+        logger.error(f"[api_budget] {', '.join(_parts) if _parts else 'no calls tracked yet'}")
     except Exception as _e:
         logger.error(f"[api_budget] failed: {_e}")
 
@@ -1279,10 +1300,17 @@ async def run_fast_cycle():
         _current_cycle_stats.store()
         _current_cycle_stats = None
 
-    # Flush API usage tracker (budget logging handled by run_cycle_diagnostics below)
+    # Flush API trackers
     try:
         from app.api_usage_tracker import flush as _fast_flush
         _fast_flush()
+    except Exception:
+        pass
+    try:
+        from app.utils.api_tracker import tracker as _cycle_tracker
+        _flushed = _cycle_tracker.flush()
+        if _flushed:
+            logger.error(f"[api_tracker] flushed {_flushed} rows to api_usage_hourly")
     except Exception:
         pass
 
@@ -2486,6 +2514,31 @@ async def main():
     logger.error("[startup] worker main() entered — initializing pool")
     init_pool()
     logger.error("[startup] pool initialized — running schema fixes")
+
+    # Wire API call tracking via httpx monkey-patch
+    try:
+        import httpx as _httpx_mod
+        from app.utils.api_tracker import tracker as _api_tracker
+        _orig_send = _httpx_mod.AsyncClient.send
+        async def _tracked_send(self, request, **kwargs):
+            _t0 = time.monotonic()
+            try:
+                _resp = await _orig_send(self, request, **kwargs)
+                _host = request.url.host or ""
+                _provider = _host.split(".")[-2] if "." in _host else _host
+                _api_tracker.record(_provider, str(request.url.path)[:100], _resp.status_code,
+                                    int((time.monotonic() - _t0) * 1000))
+                return _resp
+            except Exception as _te:
+                _host = request.url.host or ""
+                _provider = _host.split(".")[-2] if "." in _host else _host
+                _api_tracker.record(_provider, str(request.url.path)[:100], 599,
+                                    int((time.monotonic() - _t0) * 1000))
+                raise
+        _httpx_mod.AsyncClient.send = _tracked_send
+        logger.error("[startup] httpx monkey-patched for API tracking")
+    except Exception as e:
+        logger.error(f"[startup] httpx monkey-patch failed: {e}")
 
     # Ensure API usage tracking tables exist
     try:
