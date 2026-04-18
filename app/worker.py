@@ -2525,34 +2525,36 @@ async def main():
         if _vac_url:
             _vac_conn = _vac_pg.connect(_vac_url)
             _vac_conn.autocommit = True
-            _vac_cur = _vac_conn.cursor()
-            for _tbl in [
-                "wallet_graph.wallet_risk_scores",
-                "wallet_graph.wallet_holdings",
-                "component_readings",
-            ]:
-                try:
-                    _vac_cur.execute(f"VACUUM ANALYZE {_tbl}")
-                except Exception as _ve:
-                    logger.error(f"[startup] VACUUM ANALYZE {_tbl} failed: {_ve}")
+            try:
+                _vac_cur = _vac_conn.cursor()
+                for _tbl in [
+                    "wallet_graph.wallet_risk_scores",
+                    "wallet_graph.wallet_holdings",
+                    "component_readings",
+                ]:
+                    try:
+                        _vac_cur.execute(f"VACUUM ANALYZE {_tbl}")
+                    except Exception as _ve:
+                        logger.error(f"[startup] VACUUM ANALYZE {_tbl} failed: {_ve}")
+                        try:
+                            _vac_cur.execute(f"ANALYZE {_tbl}")
+                        except Exception:
+                            pass
+                # Regular ANALYZE for other key tables
+                for _tbl in [
+                    "score_history", "scores", "psi_scores",
+                    "wallet_graph.wallets", "wallet_graph.wallet_edges",
+                    "entity_snapshots_hourly", "data_provenance", "state_attestations",
+                    "provenance_proofs", "assessment_events",
+                ]:
                     try:
                         _vac_cur.execute(f"ANALYZE {_tbl}")
                     except Exception:
                         pass
-            # Regular ANALYZE for other key tables
-            for _tbl in [
-                "score_history", "scores", "psi_scores",
-                "wallet_graph.wallets", "wallet_graph.wallet_edges",
-                "entity_snapshots_hourly", "data_provenance", "state_attestations",
-                "provenance_proofs", "assessment_events",
-            ]:
-                try:
-                    _vac_cur.execute(f"ANALYZE {_tbl}")
-                except Exception:
-                    pass
-            _vac_cur.close()
-            _vac_conn.close()
-            logger.error("[startup] VACUUM ANALYZE complete")
+                _vac_cur.close()
+                logger.error("[startup] VACUUM ANALYZE complete")
+            finally:
+                _vac_conn.close()
     except Exception as e:
         logger.error(f"[startup] VACUUM ANALYZE skipped: {e}")
 
