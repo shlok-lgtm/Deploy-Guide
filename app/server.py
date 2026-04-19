@@ -746,6 +746,298 @@ async def robots_txt():
 
 
 # =============================================================================
+# Entity pages + Sitemap — Task 1
+# =============================================================================
+
+def _resolve_entity(slug: str) -> dict | None:
+    """Resolve entity slug across all indices. Returns primary index data or None."""
+    slug_lower = slug.lower()
+
+    # SII (stablecoins)
+    row = fetch_one("""
+        SELECT s.overall_score, s.grade, s.peg_score, s.liquidity_score,
+               s.mint_burn_score, s.distribution_score, s.structural_score,
+               s.component_count, s.formula_version, s.computed_at,
+               st.name, st.symbol, st.id as stablecoin_id
+        FROM scores s JOIN stablecoins st ON st.id = s.stablecoin_id
+        WHERE LOWER(st.symbol) = %s OR LOWER(st.id) = %s
+    """, (slug_lower, slug_lower))
+    if row:
+        return {
+            "index": "SII", "index_full": "Stablecoin Integrity Index",
+            "slug": slug_lower, "name": row.get("name", slug),
+            "score": float(row["overall_score"]) if row.get("overall_score") else None,
+            "grade": row.get("grade"),
+            "categories": {
+                "Peg Stability": row.get("peg_score"),
+                "Liquidity Depth": row.get("liquidity_score"),
+                "Mint/Burn Dynamics": row.get("mint_burn_score"),
+                "Holder Distribution": row.get("distribution_score"),
+                "Structural Risk": row.get("structural_score"),
+            },
+            "computed_at": row["computed_at"].isoformat() if row.get("computed_at") else None,
+            "formula_version": row.get("formula_version"),
+            "accruing": False,
+            "api_path": f"/api/scores/{slug_lower}",
+        }
+
+    # PSI
+    row = fetch_one("""
+        SELECT overall_score, grade, protocol_name, category_scores,
+               component_scores, formula_version, computed_at
+        FROM psi_scores WHERE LOWER(protocol_slug) = %s
+        ORDER BY computed_at DESC LIMIT 1
+    """, (slug_lower,))
+    if row:
+        cats = row.get("category_scores") or {}
+        return {
+            "index": "PSI", "index_full": "Protocol Solvency Index",
+            "slug": slug_lower, "name": row.get("protocol_name", slug),
+            "score": float(row["overall_score"]) if row.get("overall_score") else None,
+            "grade": row.get("grade"),
+            "categories": {k.replace("_", " ").title(): v for k, v in cats.items()},
+            "computed_at": row["computed_at"].isoformat() if row.get("computed_at") else None,
+            "formula_version": row.get("formula_version"),
+            "accruing": False,
+            "api_path": f"/api/psi/scores/{slug_lower}",
+        }
+
+    # RPI
+    row = fetch_one("""
+        SELECT overall_score, grade, protocol_name, component_scores,
+               methodology_version, computed_at
+        FROM rpi_scores WHERE LOWER(protocol_slug) = %s
+        ORDER BY computed_at DESC LIMIT 1
+    """, (slug_lower,))
+    if row:
+        cats = row.get("component_scores") or {}
+        return {
+            "index": "RPI", "index_full": "Revenue Protocol Index",
+            "slug": slug_lower, "name": row.get("protocol_name", slug),
+            "score": float(row["overall_score"]) if row.get("overall_score") else None,
+            "grade": row.get("grade"),
+            "categories": {k.replace("_", " ").title(): v for k, v in cats.items()},
+            "computed_at": row["computed_at"].isoformat() if row.get("computed_at") else None,
+            "formula_version": row.get("methodology_version"),
+            "accruing": False,
+            "api_path": f"/api/rpi/scores/{slug_lower}",
+        }
+
+    # Circle 7
+    for idx in ["lsti", "bri", "dohi", "vsri", "cxri", "tti"]:
+        row = fetch_one("""
+            SELECT overall_score, entity_name, category_scores,
+                   formula_version, computed_at
+            FROM generic_index_scores
+            WHERE index_id = %s AND LOWER(entity_slug) = %s
+            ORDER BY computed_at DESC LIMIT 1
+        """, (idx, slug_lower))
+        if row:
+            cats = row.get("category_scores") or {}
+            if isinstance(cats, str):
+                import json as _j
+                cats = _j.loads(cats)
+            return {
+                "index": idx.upper(), "index_full": idx.upper(),
+                "slug": slug_lower, "name": row.get("entity_name", slug),
+                "score": float(row["overall_score"]) if row.get("overall_score") else None,
+                "grade": None,
+                "categories": {k.replace("_", " ").title(): v for k, v in cats.items()} if isinstance(cats, dict) else {},
+                "computed_at": row["computed_at"].isoformat() if row.get("computed_at") else None,
+                "formula_version": row.get("formula_version"),
+                "accruing": True,
+                "api_path": f"/api/scores/{slug_lower}",
+            }
+
+    return None
+
+
+def _also_scored_in(slug: str, primary_index: str) -> list:
+    """Find other indices that also score this entity."""
+    slug_lower = slug.lower()
+    others = []
+    checks = [
+        ("SII", "SELECT 1 FROM scores s JOIN stablecoins st ON st.id=s.stablecoin_id WHERE LOWER(st.symbol)=%s OR LOWER(st.id)=%s", (slug_lower, slug_lower)),
+        ("PSI", "SELECT 1 FROM psi_scores WHERE LOWER(protocol_slug)=%s LIMIT 1", (slug_lower,)),
+        ("RPI", "SELECT 1 FROM rpi_scores WHERE LOWER(protocol_slug)=%s LIMIT 1", (slug_lower,)),
+    ]
+    for idx in ["lsti", "bri", "dohi", "vsri", "cxri", "tti"]:
+        checks.append((idx.upper(), f"SELECT 1 FROM generic_index_scores WHERE index_id='{idx}' AND LOWER(entity_slug)=%s LIMIT 1", (slug_lower,)))
+
+    for idx_name, sql, params in checks:
+        if idx_name == primary_index:
+            continue
+        try:
+            if fetch_one(sql, params):
+                others.append(idx_name)
+        except Exception:
+            pass
+    return others
+
+
+@app.get("/entity/{slug}")
+async def entity_page(slug: str, request: Request):
+    """Server-rendered entity page with JSON-LD."""
+    from starlette.concurrency import run_in_threadpool
+    from fastapi.responses import HTMLResponse
+    from app.templates._html import CSS, CANONICAL_BASE_URL
+
+    entity = await run_in_threadpool(_resolve_entity, slug)
+    if not entity:
+        raise HTTPException(status_code=404, detail=f"Entity '{slug}' not found in any index")
+
+    name = entity["name"]
+    score = entity["score"]
+    grade = entity.get("grade") or ("A" if score and score >= 90 else "B" if score and score >= 80 else "C" if score and score >= 70 else "D" if score and score >= 60 else "F" if score else "—")
+    idx = entity["index"]
+    accruing = entity["accruing"]
+    computed = entity.get("computed_at", "")
+    cats = entity.get("categories") or {}
+
+    also = await run_in_threadpool(_also_scored_in, slug, idx)
+
+    # Top 2 category drivers for meta description
+    sorted_cats = sorted(((k, float(v)) for k, v in cats.items() if v is not None), key=lambda x: x[1], reverse=True)
+    top_drivers = ", ".join(f"{k} {v:.0f}" for k, v in sorted_cats[:2]) if sorted_cats else ""
+    meta_desc = f"{name}: {idx} {score:.1f}/100, {grade} grade. {top_drivers}. Last updated {computed[:10] if computed else 'recently'}." if score else f"{name} entity page — Basis Protocol"
+    if len(meta_desc) > 160:
+        meta_desc = meta_desc[:157] + "..."
+
+    title = f"{name} Risk Score — {idx} {score:.1f}, {grade} grade" if score else f"{name} — {idx}"
+
+    # Category table
+    cat_rows = ""
+    for cat_name, cat_val in sorted_cats:
+        bar_w = int(float(cat_val) * 1.5) if cat_val else 0
+        cat_rows += f'<tr><td>{cat_name}</td><td class="num">{float(cat_val):.1f}</td><td><span class="bar" style="width:{bar_w}px"></span></td></tr>'
+
+    # Also scored in
+    also_html = ""
+    if also:
+        also_links = ", ".join(f'<a href="/entity/{slug}?via={a.lower()}">{a}</a>' for a in also)
+        also_html = f'<div class="section"><h3>Also scored in</h3><p>{also_links}</p></div>'
+
+    accruing_tag = ' <span style="background:#f39c12;color:#fff;font-size:10px;padding:2px 6px;border-radius:2px">ACCRUING</span>' if accruing else ""
+
+    # JSON-LD
+    json_ld = {
+        "@context": "https://schema.org",
+        "@type": "Dataset",
+        "name": f"{name} Risk Score — {idx}",
+        "description": meta_desc,
+        "creator": {"@type": "Organization", "name": "Basis Protocol", "url": "https://basisprotocol.xyz"},
+        "dateModified": computed or "",
+        "license": "https://basisprotocol.xyz/license",
+        "url": f"https://basisprotocol.xyz/entity/{slug}",
+        "variableMeasured": [
+            {"@type": "PropertyValue", "name": k, "value": float(v)} for k, v in sorted_cats
+        ],
+        "distribution": [{
+            "@type": "DataDownload",
+            "contentUrl": f"https://basisprotocol.xyz{entity['api_path']}",
+            "encodingFormat": "application/json",
+        }],
+    }
+    if score:
+        json_ld["review"] = {
+            "@type": "Rating",
+            "ratingValue": round(score, 1),
+            "bestRating": 100,
+            "worstRating": 0,
+        }
+    import json as _json
+    json_ld_str = _json.dumps(json_ld, default=str)
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{title} | Basis Protocol</title>
+<meta name="description" content="{meta_desc}">
+<link rel="canonical" href="https://basisprotocol.xyz/entity/{slug}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=IBM+Plex+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+<style>{CSS}</style>
+<script type="application/ld+json">{json_ld_str}</script>
+</head>
+<body>
+<div class="page-wrap">
+<div class="page-frame">
+<div class="page-content" style="padding-top:24px">
+<p class="meta"><a href="/">Basis Protocol</a> › <a href="/rankings">{idx}</a> › {name}</p>
+<h1>{name}{accruing_tag}</h1>
+<div style="display:flex;gap:24px;align-items:baseline;margin:12px 0 20px">
+<div class="score">{score:.1f if score else '—'}</div>
+<div style="font-size:24px;font-weight:600">{grade}</div>
+<div class="meta">{idx} · {entity.get('formula_version', '')} · {computed[:10] if computed else ''}</div>
+</div>
+{"<p class='meta' style='color:#f39c12'>This index is accruing — scores are computed but not yet promoted to production status.</p>" if accruing else ""}
+<div class="section">
+<h3>Category Breakdown</h3>
+<table><thead><tr><th>Category</th><th>Score</th><th></th></tr></thead>
+<tbody>{cat_rows}</tbody></table>
+</div>
+{also_html}
+<div class="section">
+<h3>Links</h3>
+<p><a href="/proof/{idx.lower()}/{slug}">Computation provenance</a> · <a href="/witness">Evidence archive</a> · <a href="{entity['api_path']}">API endpoint</a></p>
+</div>
+</div>
+<div class="page-footer"><span>Basis Protocol</span><span>basisprotocol.xyz</span></div>
+</div>
+</div>
+</body>
+</html>"""
+
+    return HTMLResponse(content=html, headers={
+        "Cache-Control": "public, max-age=300",
+        "Basis-URL-Stability": "permanent",
+    })
+
+
+@app.get("/sitemap.xml")
+async def sitemap_xml():
+    """Dynamic sitemap listing all entity pages."""
+    from starlette.concurrency import run_in_threadpool
+    from fastapi.responses import Response
+
+    def _build():
+        urls = []
+        # SII
+        rows = fetch_all("SELECT st.symbol, s.computed_at FROM scores s JOIN stablecoins st ON st.id=s.stablecoin_id")
+        for r in (rows or []):
+            urls.append((r["symbol"].lower(), r["computed_at"]))
+        # PSI
+        rows = fetch_all("SELECT DISTINCT ON (protocol_slug) protocol_slug, computed_at FROM psi_scores ORDER BY protocol_slug, computed_at DESC")
+        for r in (rows or []):
+            urls.append((r["protocol_slug"], r["computed_at"]))
+        # RPI
+        rows = fetch_all("SELECT DISTINCT ON (protocol_slug) protocol_slug, computed_at FROM rpi_scores ORDER BY protocol_slug, computed_at DESC")
+        for r in (rows or []):
+            urls.append((r["protocol_slug"], r["computed_at"]))
+        # Circle 7
+        rows = fetch_all("SELECT DISTINCT ON (entity_slug) entity_slug, computed_at FROM generic_index_scores ORDER BY entity_slug, computed_at DESC")
+        for r in (rows or []):
+            urls.append((r["entity_slug"], r["computed_at"]))
+        return urls
+
+    entities = await run_in_threadpool(_build)
+    seen = set()
+    xml_parts = ['<?xml version="1.0" encoding="UTF-8"?>', '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
+    for slug, ts in entities:
+        if slug in seen:
+            continue
+        seen.add(slug)
+        lastmod = ts.strftime("%Y-%m-%d") if hasattr(ts, "strftime") else str(ts)[:10] if ts else ""
+        xml_parts.append(f"<url><loc>https://basisprotocol.xyz/entity/{slug}</loc><lastmod>{lastmod}</lastmod></url>")
+    xml_parts.append("</urlset>")
+
+    return Response(content="\n".join(xml_parts), media_type="application/xml",
+                    headers={"Cache-Control": "public, max-age=3600"})
+
+
+# =============================================================================
 # 1. GET /api/health
 # =============================================================================
 
