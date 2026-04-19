@@ -280,78 +280,156 @@ def _render_protocol_scores(lines: list, d: dict):
 
 def _render_protocol_event(lines: list, d: dict):
     entity_id = d.get("entity_id", "")
+    name = d.get("name", entity_id)
+    exposure = d.get("exposure") or []
+    unscored_symbols = {e["symbol"].upper() for e in exposure if not e.get("sii_score")}
 
-    # 1. Oracle stress ≥25bps (0.25% — column stores percentage values)
+    # 1. Oracle stress ≥25bps
     stress = (d.get("oracle_behavior") or {}).get("stress_events") or []
     sig_stress = [s for s in stress if s.get("max_deviation_pct") and abs(s["max_deviation_pct"]) >= 0.25]
-    logger.info(
-        f"[event_select] {entity_id} bucket1: {len(stress)} raw stress, "
-        f"{len(sig_stress)} above 25bps threshold "
-        f"(values: {[round(s.get('max_deviation_pct', 0), 4) for s in stress[:5]]})"
-    )
     if sig_stress:
         ev = sig_stress[0]
-        dur = f", lasted {ev['duration_s']}s" if ev.get("duration_s") else ""
+        feed = ev.get("feed", "a monitored feed")
+        date = (ev.get("timestamp") or "")[:10]
+        dev = f"{abs(ev.get('max_deviation_pct', 0)):.1f}%"
+        dur_s = ev.get("duration_s")
+        dur = f" for {dur_s} seconds" if dur_s else ""
         lines.append(
-            f"**Oracle stress event** on {ev.get('feed', 'unknown feed')} "
-            f"({(ev.get('timestamp') or '')[:10]}): "
-            f"max deviation {ev.get('max_deviation_pct', 0):.2f}%{dur}.")
+            f"{name}'s oracle infrastructure experienced stress on {date}: "
+            f"the {feed} deviated {dev} from the CEX reference price{dur}. "
+            f"Basis captured the deviation in real time and flagged the reading as a stress event. "
+            f"[Proof]({CANONICAL_BASE_URL}/proof/psi/{entity_id})")
         return
 
-    # 2. Reactive-high-urgency parameter change
+    # 2. Reactive parameter change
     params = d.get("parameter_changes") or []
     reactive = [p for p in params if p.get("context") == "reactive"]
-    logger.info(f"[event_select] {entity_id} bucket2: {len(params)} params, {len(reactive)} reactive")
     if reactive:
         p = reactive[0]
+        param = p.get("parameter", "a risk parameter")
+        date = (p.get("timestamp") or "")[:10]
+        old_v = p.get("old_value", "?")
+        new_v = p.get("new_value", "?")
+        unit = p.get("unit") or ""
         lines.append(
-            f"**Reactive parameter change** on {p.get('parameter', '')} "
-            f"({(p.get('timestamp') or '')[:10]}): "
-            f"{p.get('old_value', '?')} → {p.get('new_value', '?')} {p.get('unit', '')}.")
+            f"{name} made a reactive parameter change on {date}: "
+            f"{param} moved from {old_v} to {new_v} {unit} in response to market conditions. "
+            f"Basis captured the on-chain transaction and classified this as a reactive adjustment — "
+            f"the kind of change that a point-in-time audit would not have seen. "
+            f"[Proof]({CANONICAL_BASE_URL}/proof/psi/{entity_id})")
         return
 
     # 3. Post-publication governance edit
     edits = (d.get("governance_activity") or {}).get("edited_after_publication") or []
-    logger.info(f"[event_select] {entity_id} bucket3: {len(edits)} edits")
     if edits:
         ed = edits[0]
+        title = ed.get("title", "a governance proposal")
+        orig_hash = (ed.get("original_hash") or "")[:12]
         lines.append(
-            f"**Governance edit detected** on \"{ed.get('title', 'proposal')}\" — "
-            f"body modified after publication. "
-            f"Original hash: `{(ed.get('original_hash') or '?')[:12]}...`")
+            f"Basis detected a post-publication edit to \"{title}\" — "
+            f"the proposal body was modified after voting opened. "
+            f"The original text is preserved at hash `{orig_hash}...`; "
+            f"the current text differs. This is the kind of governance transparency gap "
+            f"that continuous monitoring catches. "
+            f"[Proof]({CANONICAL_BASE_URL}/proof/psi/{entity_id})")
         return
 
     # 4-5. Admin key rotation / peg event — not yet wired
 
-    # 6. Any executed governance event or parameter change proposal
+    # 6. Executed proposal
     events = (d.get("governance_activity") or {}).get("recent_high_impact") or []
-    logger.info(f"[event_select] {entity_id} bucket6: {len(events)} events")
     if events:
         ev = events[0]
-        title = ev.get("title", "")
-        if len(title) > 80:
-            title = title[:77] + "..."
-        ev_type = ev.get("type", "governance event").replace("_", " ").title()
-        logger.info(f"[event_select] {entity_id} SELECTED bucket6: {ev_type} — {title[:50]}")
+        title = ev.get("title") or ""
+        date = (ev.get("timestamp") or "")[:10]
+        outcome = ev.get("outcome") or "executed"
+
+        # Extract what the proposal does from the title
+        description = _describe_proposal(title)
+
+        # Check for coverage gap
+        gap_tokens = _extract_tokens_from_title(title) & unscored_symbols
+        gap_line = ""
+        if gap_tokens:
+            token = next(iter(gap_tokens))
+            gap_line = (
+                f" {token} is not yet in Basis's SII coverage — "
+                f"your exposure to this new collateral will be scored once it crosses the $1M threshold."
+            )
+
         lines.append(
-            f"**{ev_type}** ({(ev.get('timestamp') or '')[:10]}): "
-            f"\"{title}\" — outcome: {ev.get('outcome', 'unknown')}.")
+            f"{name} executed a governance proposal on {date}: "
+            f"\"{title[:80]}{'...' if len(title) > 80 else ''}\", "
+            f"{description}. "
+            f"Basis captured the proposal text, the vote sequence, and the execution timestamp."
+            f"{gap_line} "
+            f"[Proposal]({CANONICAL_BASE_URL}/proof/psi/{entity_id})")
         return
+
     if params:
         p = params[0]
-        logger.info(f"[event_select] {entity_id} SELECTED bucket6-fallback: param {p.get('parameter')}")
+        param = p.get("parameter", "a parameter")
+        date = (p.get("timestamp") or "")[:10]
         lines.append(
-            f"**Parameter change** on {p.get('parameter', '')} "
-            f"({(p.get('timestamp') or '')[:10]}): "
-            f"{p.get('old_value', '?')} → {p.get('new_value', '?')} {p.get('unit', '')}.")
+            f"{name} adjusted {param} on {date}. "
+            f"Basis captured the on-chain change with before and after values. "
+            f"[Proof]({CANONICAL_BASE_URL}/proof/psi/{entity_id})")
         return
 
     # 7. Empty window
-    logger.info(f"[event_select] {entity_id} SELECTED bucket7: empty window")
     lines.append(
         f"No material events affecting your exposure set in the last 90 days. "
         f"Basis will reconstruct any prior event on request — "
         f"query the temporal engine at `{CANONICAL_BASE_URL}/api/scores/{entity_id}/history`.")
+
+
+def _describe_proposal(title: str) -> str:
+    """Extract a one-line description of what a proposal does from its title."""
+    t = title.lower()
+    if "onboard" in t:
+        token = _extract_first_token(title)
+        return f"adding {token} as a new collateral type" if token else "onboarding a new asset"
+    if "deprecat" in t:
+        token = _extract_first_token(title)
+        return f"beginning removal of {token} from active markets" if token else "deprecating an existing market"
+    if "parameter update" in t or "parameter change" in t:
+        token = _extract_first_token(title)
+        return f"adjusting risk parameters for {token}" if token else "adjusting risk parameters"
+    if "launch" in t and "configuration" in t:
+        token = _extract_first_token(title)
+        return f"launching the {token} deployment with initial parameters" if token else "launching a new deployment"
+    if "risk steward" in t or "risk parameter" in t:
+        return "adjusting risk parameters via the risk steward framework"
+    if "temp check" in t:
+        return "proposing a new protocol configuration for community review"
+    if "upgrade" in t:
+        return "upgrading protocol infrastructure"
+    return "modifying protocol configuration as described in the proposal"
+
+
+def _extract_first_token(title: str) -> str:
+    """Try to extract a token symbol from a proposal title."""
+    import re
+    match = re.search(r'\b([A-Z]{2,10}(?:\.[eE])?)\b', title)
+    if match:
+        candidate = match.group(1)
+        noise = {"THE", "AND", "FOR", "WITH", "FROM", "AAVE", "TEMP", "CHECK", "THIS", "THAT"}
+        if candidate not in noise:
+            return candidate
+    return ""
+
+
+def _extract_tokens_from_title(title: str) -> set:
+    """Extract all potential token symbols from a title."""
+    import re
+    tokens = set()
+    for match in re.finditer(r'\b([A-Z]{2,10})\b', title):
+        candidate = match.group(1)
+        noise = {"THE", "AND", "FOR", "WITH", "FROM", "AAVE", "TEMP", "CHECK", "THIS", "THAT",
+                 "INSTANCE", "SONIC", "MAIN", "BASE", "RISK", "UPDATE", "LAUNCH", "ONBOARD"}
+        if candidate not in noise:
+            tokens.add(candidate)
+    return tokens
 
 
 # =============================================================================
