@@ -559,8 +559,9 @@ def run_cycle_diagnostics():
         _act_ids = {r["source_domain"] for r in (_active or [])}
         _missing_hourly = sorted(_hourly_ids - _act_ids)
         _missing_weekly = sorted(_weekly_ids - _act_ids)
+        _producing_hourly = len(_hourly_ids) - len(_missing_hourly)
         logger.error(
-            f"[provenance_gap] hourly: {len(_hourly_ids - _missing_hourly)}/{len(_hourly_ids)} producing, "
+            f"[provenance_gap] hourly: {_producing_hourly}/{len(_hourly_ids)} producing, "
             f"weekly: {len(_weekly_ids)}, "
             f"missing_hourly={_missing_hourly}"
         )
@@ -2844,14 +2845,13 @@ async def main():
                 except asyncio.TimeoutError:
                     logger.error("Fast cycle exceeded 30-minute timeout")
 
-                # Slow cycle — runs every 3rd cycle (every ~3 hours)
-                # Uses parallel enrichment worker for concurrent execution
+                # Enrichment cycle — runs every cycle now that fast cycle is <20 min
                 cycle_counter += 1
-                if cycle_counter % 3 == 0:
-                    try:
-                        await asyncio.wait_for(run_slow_cycle_parallel(), timeout=SLOW_CYCLE_TIMEOUT)
-                    except asyncio.TimeoutError:
-                        logger.error("Slow cycle exceeded 60-minute timeout")
+                try:
+                    logger.error(f"=== Starting enrichment (cycle {cycle_counter}) ===")
+                    await asyncio.wait_for(run_slow_cycle_parallel(), timeout=SLOW_CYCLE_TIMEOUT)
+                except asyncio.TimeoutError:
+                    logger.error("Enrichment exceeded 60-minute timeout")
 
                 # Governance crawl — every 6th cycle (~6 hours)
                 if cycle_counter % 6 == 0:

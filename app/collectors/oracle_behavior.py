@@ -533,7 +533,7 @@ async def collect_oracle_readings() -> dict:
                     return {"stress": False}
 
             except Exception as e:
-                logger.debug(f"Oracle read failed for {oracle.get('oracle_name')}: {e}")
+                logger.error(f"[oracle] {oracle.get('oracle_name', '?')}: {type(e).__name__} — {e}")
                 return None
 
         # Run all oracle reads concurrently
