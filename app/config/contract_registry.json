@@ -40,6 +40,16 @@
       "multisig": {"address": "0xcBa28b38103307Ec8dA98377ffF9816C164f9AFa", "chain": "ethereum", "type": "gnosis_safe"},
       "core_contract": {"address": "0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb", "chain": "ethereum"}
     },
+    "morpho_blue": {
+      "governance_timelock": {"address": "0x6C137b41f43C0Fa6a42e2c3E82cEbCaA8e80C3e2", "chain": "ethereum"},
+      "multisig": {"address": "0xcBa28b38103307Ec8dA98377ffF9816C164f9AFa", "chain": "ethereum", "type": "gnosis_safe"},
+      "core_contract": {"address": "0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb", "chain": "ethereum"},
+      "metadata": {
+        "supported_chains": ["ethereum", "base"],
+        "singleton_address_base": "0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb",
+        "api_endpoint": "https://blue-api.morpho.org/graphql"
+      }
+    },
     "spark": {
       "governance_timelock": {"address": "0xbEF99f5f55cF7cDb3a70998C57061B7e1386a9b0", "chain": "ethereum"},
       "multisig": null,

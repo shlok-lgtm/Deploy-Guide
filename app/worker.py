@@ -710,6 +710,22 @@ async def run_fast_cycle():
         logger.warning(f"PSI scoring failed: {e}")
 
     # -------------------------------------------------------------------------
+    # Morpho Blue isolated-market exposure — fills protocol_collateral_exposure
+    # for Morpho (DeFiLlama yields API doesn't index isolated markets).
+    # -------------------------------------------------------------------------
+    try:
+        from app.collectors.morpho_blue import run_morpho_blue_collection
+        morpho_result = run_morpho_blue_collection()
+        if morpho_result.get("enabled"):
+            logger.info(
+                f"Morpho Blue exposure: {morpho_result.get('exposure_rows', 0)} rows "
+                f"({morpho_result.get('stablecoin_rows', 0)} stablecoin) "
+                f"from {morpho_result.get('markets', 0)} markets"
+            )
+    except Exception as e:
+        logger.warning(f"Morpho Blue collection failed: {e}")
+
+    # -------------------------------------------------------------------------
     # Bridge monitoring — every cycle (lightweight HTTP checks)
     # -------------------------------------------------------------------------
     try:
