@@ -261,9 +261,12 @@ def fetch_protocol_data(slug):
     """Fetch protocol data from DeFiLlama."""
     time.sleep(1)  # rate limit
     try:
-        resp = requests.get(f"{DEFILLAMA_BASE}/protocol/{slug}", timeout=45)
+        resp = requests.get(f"{DEFILLAMA_BASE}/protocol/{slug}", timeout=15)
         resp.raise_for_status()
         return resp.json()
+    except requests.exceptions.Timeout:
+        logger.error(f"[psi_collector] {slug}: DL /protocol timeout after 15s, skipping")
+        return None
     except Exception as e:
         logger.error(f"Failed to fetch {slug}: {e}")
         return None
@@ -273,9 +276,11 @@ def fetch_fees_data(slug):
     """Fetch fee/revenue data from DeFiLlama."""
     time.sleep(1)
     try:
-        resp = requests.get(f"{DEFILLAMA_BASE}/summary/fees/{slug}", timeout=45)
+        resp = requests.get(f"{DEFILLAMA_BASE}/summary/fees/{slug}", timeout=15)
         if resp.status_code == 200:
             return resp.json()
+    except requests.exceptions.Timeout:
+        logger.error(f"[psi_collector] {slug}: DL /fees timeout after 15s, skipping")
     except Exception:
         pass
     return None

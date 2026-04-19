@@ -1368,9 +1368,6 @@ async def run_fast_cycle():
     elapsed = time.time() - fast_start
     logger.error(f"=== Fast cycle complete in {elapsed:.0f}s ===")
 
-    # End-of-cycle diagnostics — fires every fast cycle for Railway visibility
-    run_cycle_diagnostics()
-
     return {
         "results": results,
         "successes": successes,
@@ -2821,8 +2818,18 @@ async def main():
     except Exception as e:
         logger.warning(f"Worker startup alert failed: {e}")
 
-    FAST_CYCLE_TIMEOUT = 15 * 60   # 15 minutes max for fast cycle
+    FAST_CYCLE_TIMEOUT = 30 * 60   # 30 minutes max for fast cycle
     SLOW_CYCLE_TIMEOUT = 60 * 60   # 60 minutes max for slow cycle
+
+    # Independent diagnostic loop — fires every 10 min regardless of cycle state
+    async def _diagnostic_loop():
+        await asyncio.sleep(60)  # wait 1 min for first cycle to start
+        while True:
+            try:
+                run_cycle_diagnostics()
+            except Exception as _dl_e:
+                logger.error(f"[diagnostic_loop] failed: {_dl_e}")
+            await asyncio.sleep(600)  # 10 minutes
 
     try:
         if args.coin:
@@ -2831,13 +2838,14 @@ async def main():
                 print(result)
         elif args.loop:
             logger.info(f"Starting worker loop (interval: {args.interval} min)")
+            asyncio.create_task(_diagnostic_loop())
             cycle_counter = 0
             while True:
-                # Fast cycle — ALWAYS runs, must stay under 15 min
+                # Fast cycle — runs every interval
                 try:
                     await asyncio.wait_for(run_fast_cycle(), timeout=FAST_CYCLE_TIMEOUT)
                 except asyncio.TimeoutError:
-                    logger.error("Fast cycle exceeded 15-minute timeout")
+                    logger.error("Fast cycle exceeded 30-minute timeout")
 
                 # Slow cycle — runs every 3rd cycle (every ~3 hours)
                 # Uses parallel enrichment worker for concurrent execution
