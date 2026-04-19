@@ -332,6 +332,166 @@ def _rule_c_coherence_drop() -> list[dict]:
     return entries
 
 
+def _rule_d_oracle_stress() -> list[dict]:
+    """Rule D: Oracle stress event — open events from oracle_stress_events."""
+    entries = []
+    try:
+        rows = fetch_all("""
+            SELECT id, oracle_address, oracle_name, asset_symbol, chain,
+                   event_type, event_start, max_deviation_pct, max_latency_seconds,
+                   content_hash
+            FROM oracle_stress_events
+            WHERE event_end IS NULL
+              AND event_start >= NOW() - INTERVAL '2 hours'
+        """)
+        for row in (rows or []):
+            asset = (row.get("asset_symbol") or "").lower()
+            if not asset:
+                continue
+
+            baseline = _get_entity_baseline(asset, "sii")
+            if not baseline.get("score"):
+                logger.info(f"Rule D: skipping oracle stress for unmapped entity {asset}")
+                continue
+
+            trigger_detail = {
+                "oracle_address": row.get("oracle_address"),
+                "oracle_name": row.get("oracle_name"),
+                "asset_symbol": row.get("asset_symbol"),
+                "chain": row.get("chain"),
+                "event_type": row.get("event_type"),
+                "event_start": str(row.get("event_start")),
+                "max_deviation_pct": float(row["max_deviation_pct"]) if row.get("max_deviation_pct") else None,
+                "max_latency_seconds": row.get("max_latency_seconds"),
+                "content_hash": row.get("content_hash"),
+            }
+            content_hash = _compute_content_hash(
+                asset, "oracle_stress", trigger_detail,
+                str(row.get("event_start", "")), baseline,
+            )
+            entries.append({
+                "entity_slug": asset, "index_name": "sii",
+                "trigger_kind": "oracle_stress",
+                "trigger_detail": trigger_detail,
+                "triggered_at": row.get("event_start") or datetime.now(timezone.utc),
+                "baseline_snapshot": baseline,
+                "source_domain": "oracle_stress_events",
+                "content_hash": content_hash,
+            })
+    except Exception as e:
+        logger.warning(f"Rule D (oracle stress) failed: {e}")
+
+    return entries
+
+
+def _rule_e_governance_edit() -> list[dict]:
+    """Rule E: Governance proposal edited post-publication."""
+    entries = []
+    try:
+        rows = fetch_all("""
+            SELECT id, protocol_slug, proposal_id, proposal_source, title,
+                   body_hash, first_capture_body_hash, captured_at, content_hash
+            FROM governance_proposals
+            WHERE body_changed = TRUE
+              AND captured_at >= NOW() - INTERVAL '2 hours'
+        """)
+        for row in (rows or []):
+            entity = row.get("protocol_slug", "")
+            if not entity:
+                continue
+
+            baseline = _get_entity_baseline(entity, "psi")
+            if not baseline.get("score"):
+                logger.info(f"Rule E: skipping governance edit for unmapped entity {entity}")
+                continue
+
+            trigger_detail = {
+                "proposal_id": row.get("proposal_id"),
+                "protocol_slug": entity,
+                "proposal_source": row.get("proposal_source"),
+                "title": row.get("title"),
+                "first_capture_body_hash": row.get("first_capture_body_hash"),
+                "current_body_hash": row.get("body_hash"),
+                "edit_detected_at": str(row.get("captured_at")),
+                "content_hash": row.get("content_hash"),
+            }
+            content_hash = _compute_content_hash(
+                entity, "governance_edit", trigger_detail,
+                str(row.get("captured_at", "")), baseline,
+            )
+            entries.append({
+                "entity_slug": entity, "index_name": "psi",
+                "trigger_kind": "governance_edit",
+                "trigger_detail": trigger_detail,
+                "triggered_at": row.get("captured_at") or datetime.now(timezone.utc),
+                "baseline_snapshot": baseline,
+                "source_domain": "governance_proposals",
+                "content_hash": content_hash,
+            })
+    except Exception as e:
+        logger.warning(f"Rule E (governance edit) failed: {e}")
+
+    return entries
+
+
+def _rule_f_contract_upgrade() -> list[dict]:
+    """Rule F: Contract upgrade detected."""
+    entries = []
+    try:
+        rows = fetch_all("""
+            SELECT id, entity_type, entity_id, entity_symbol, contract_address, chain,
+                   previous_bytecode_hash, current_bytecode_hash,
+                   previous_implementation, current_implementation,
+                   block_number, upgrade_detected_at, slither_queued, content_hash
+            FROM contract_upgrade_history
+            WHERE upgrade_detected_at >= NOW() - INTERVAL '2 hours'
+        """)
+        for row in (rows or []):
+            entity = (row.get("entity_symbol") or "").lower()
+            if not entity:
+                continue
+
+            # Try SII first, then PSI
+            baseline = _get_entity_baseline(entity, "sii")
+            index_name = "sii"
+            if not baseline.get("score"):
+                baseline = _get_entity_baseline(entity, "psi")
+                index_name = "psi"
+            if not baseline.get("score"):
+                logger.info(f"Rule F: skipping contract upgrade for unmapped entity {entity}")
+                continue
+
+            trigger_detail = {
+                "contract_address": row.get("contract_address"),
+                "chain": row.get("chain"),
+                "previous_bytecode_hash": row.get("previous_bytecode_hash"),
+                "current_bytecode_hash": row.get("current_bytecode_hash"),
+                "previous_implementation": row.get("previous_implementation"),
+                "current_implementation": row.get("current_implementation"),
+                "block_number": row.get("block_number"),
+                "upgrade_detected_at": str(row.get("upgrade_detected_at")),
+                "slither_queued": row.get("slither_queued"),
+                "content_hash": row.get("content_hash"),
+            }
+            content_hash = _compute_content_hash(
+                entity, "contract_upgrade", trigger_detail,
+                str(row.get("upgrade_detected_at", "")), baseline,
+            )
+            entries.append({
+                "entity_slug": entity, "index_name": index_name,
+                "trigger_kind": "contract_upgrade",
+                "trigger_detail": trigger_detail,
+                "triggered_at": row.get("upgrade_detected_at") or datetime.now(timezone.utc),
+                "baseline_snapshot": baseline,
+                "source_domain": "contract_upgrades",
+                "content_hash": content_hash,
+            })
+    except Exception as e:
+        logger.warning(f"Rule F (contract upgrade) failed: {e}")
+
+    return entries
+
+
 # =============================================================================
 # Main entry point
 # =============================================================================
@@ -352,6 +512,9 @@ def detect_and_log_entries() -> dict:
         ("score_change", _rule_a_score_changes, "sii_components"),
         ("divergence", _rule_b_divergence, "divergence_signals"),
         ("coherence_drop", _rule_c_coherence_drop, "coherence_reports"),
+        ("oracle_stress", _rule_d_oracle_stress, "oracle_stress_events"),
+        ("governance_edit", _rule_e_governance_edit, "governance_proposals"),
+        ("contract_upgrade", _rule_f_contract_upgrade, "contract_upgrades"),
     ]:
         try:
             # Freshness gate
