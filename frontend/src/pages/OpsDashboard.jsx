@@ -2358,8 +2358,8 @@ function ReportsPanel() {
   }
 
   const templateOptions = entityType === "wallet"
-    ? ["wallet_risk"]
-    : ["protocol_risk", "compliance", "underwriting", "sbt_metadata"];
+    ? ["wallet_risk", "engagement"]
+    : ["protocol_risk", "compliance", "underwriting", "sbt_metadata", "engagement"];
 
   const lensOptions = ["", "SCO60", "MICA67", "GENIUS"];
   const showLens = template === "compliance";
@@ -2448,6 +2448,12 @@ function ReportsPanel() {
             style={btn()}>Batch: Top 5 Basel SCO60</button>
           <button onClick={() => generateBatch("all_protocols")} disabled={generating}
             style={btn()}>Batch: All Protocol Risk</button>
+          <button onClick={() => { setEntityType("protocol"); setEntityId("aave"); setTemplate("engagement"); setLens(""); setFormat("markdown"); setTimeout(generateReport, 100); }}
+            style={btn()}>Engagement: Aave</button>
+          <button onClick={() => { setEntityType("protocol"); setEntityId("morpho"); setTemplate("engagement"); setLens(""); setFormat("markdown"); setTimeout(generateReport, 100); }}
+            style={btn()}>Engagement: Morpho</button>
+          <button onClick={() => { setEntityType("stablecoin"); setEntityId("usdc"); setTemplate("engagement"); setLens(""); setFormat("markdown"); setTimeout(generateReport, 100); }}
+            style={btn()}>Engagement: USDC</button>
         </div>
         {batchResults.length > 0 && (
           <div style={{ marginTop: 12 }}>

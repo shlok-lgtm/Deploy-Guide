@@ -11,6 +11,7 @@ from app.templates.wallet_risk import render as render_wallet_risk
 from app.templates.compliance import render as render_compliance
 from app.templates.underwriting import render as render_underwriting
 from app.templates.sbt_metadata import render as render_sbt_metadata
+from app.templates.engagement import render as render_engagement
 
 
 TEMPLATES = {
@@ -19,6 +20,7 @@ TEMPLATES = {
     "compliance": render_compliance,
     "underwriting": render_underwriting,
     "sbt_metadata": render_sbt_metadata,
+    "engagement": render_engagement,
 }
 
 
