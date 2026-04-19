@@ -668,6 +668,84 @@ def check_methodology_version(requested_version, current_version="v1.0.0"):
 
 
 # =============================================================================
+# Well-known discovery endpoints
+# =============================================================================
+
+@app.get("/.well-known/x402")
+async def well_known_x402():
+    from app.paid_endpoints import PAID_ENDPOINTS, USDC_BASE, BASIS_WALLET
+    from fastapi.responses import JSONResponse
+    resources = []
+    for ep in PAID_ENDPOINTS:
+        resources.append({
+            "url": f"https://basisprotocol.xyz{ep['url']}",
+            "method": ep["method"],
+            "description": ep["description"],
+            "mimeType": "application/json",
+            "accepts": [{
+                "scheme": "exact",
+                "network": "eip155:8453",
+                "asset": USDC_BASE,
+                "amount": ep["price_usdc_base_units"],
+                "payTo": BASIS_WALLET,
+                "maxTimeoutSeconds": 300,
+                "extra": {"name": "USD Coin", "version": "2"},
+            }],
+        })
+    return JSONResponse(
+        content={"x402Version": 2, "resources": resources},
+        headers={"Cache-Control": "public, max-age=300"},
+    )
+
+
+@app.get("/.well-known/agent-card.json")
+async def well_known_agent_card():
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        content={
+            "name": "Basis Protocol",
+            "description": "Computed, attested risk surfaces for on-chain finance.",
+            "url": "https://basisprotocol.xyz",
+            "identity": {
+                "evm_address": "0x2dF0f62D1861Aa59A4430e3B2b2E7a0D29Cb723b",
+                "chains": ["eip155:1", "eip155:8453", "eip155:42161"],
+            },
+            "payment": {
+                "protocols": ["x402"],
+                "discovery": "https://basisprotocol.xyz/.well-known/x402",
+            },
+            "capabilities": [
+                {"category": "oracle", "description": "Score reads per entity (SII, PSI, RPI, plus 6 accruing indices)"},
+                {"category": "cqi", "description": "Composition quality, contagion, and stress analysis"},
+                {"category": "witness", "description": "Evidence retrieval with content-addressable hashes"},
+                {"category": "divergence", "description": "Live divergence, pulse, and coherence signals"},
+            ],
+            "contact": "shlok@basisprotocol.xyz",
+            "version": "1.0.0",
+        },
+        headers={"Cache-Control": "public, max-age=300"},
+    )
+
+
+@app.get("/robots.txt")
+async def robots_txt():
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse(
+        content="User-agent: *\nAllow: /\n\n"
+        "User-agent: GPTBot\nAllow: /\n\n"
+        "User-agent: ClaudeBot\nAllow: /\n\n"
+        "User-agent: Claude-SearchBot\nAllow: /\n\n"
+        "User-agent: PerplexityBot\nAllow: /\n\n"
+        "User-agent: Google-Extended\nAllow: /\n\n"
+        "User-agent: CCBot\nAllow: /\n\n"
+        "User-agent: Googlebot\nAllow: /\n\n"
+        "User-agent: Bingbot\nAllow: /\n\n"
+        "Sitemap: https://basisprotocol.xyz/sitemap.xml\n",
+        media_type="text/plain",
+    )
+
+
+# =============================================================================
 # 1. GET /api/health
 # =============================================================================
 
@@ -6955,14 +7033,18 @@ async def generate_report(
             if template == "sbt_metadata":
                 content = render_sbt(data, lens_result, report_hash, ts)
             else:
-                content = _json.dumps({
+                json_payload = {
                     "entity_type": entity_type,
                     "entity_id": entity_id,
                     "report_data": data,
                     "lens_result": lens_result,
                     "report_hash": report_hash,
                     "generated_at": ts,
-                }, default=str, indent=2)
+                }
+                if template == "engagement":
+                    from app.templates.engagement import generate_email_draft
+                    json_payload["email_draft"] = generate_email_draft(data, report_hash, ts)
+                content = _json.dumps(json_payload, default=str, indent=2)
             return JSONResponse(
                 content=_json.loads(content) if isinstance(content, str) else content,
                 headers={"X-Report-Hash": report_hash},
@@ -7041,6 +7123,98 @@ async def sbt_metadata(token_id: int):
     content = render_sbt(data, None, report_hash, ts)
     import json as _json
     return JSONResponse(_json.loads(content))
+
+
+# =============================================================================
+# Shareable Engagement Routes
+# =============================================================================
+
+
+@app.get("/engagement/{entity_type}/{entity_id}")
+async def engagement_shareable(entity_type: str, entity_id: str):
+    """Shareable HTML engagement page for an entity's most recent report."""
+    try:
+        from app.report import assemble_report_data
+        from app.report_attestation import compute_report_hash
+        from app.templates.engagement import render as render_engagement
+        from starlette.concurrency import run_in_threadpool
+
+        if entity_type not in ("stablecoin", "protocol", "wallet"):
+            raise HTTPException(status_code=400, detail=f"Invalid entity_type: {entity_type}. Use stablecoin, protocol, or wallet.")
+
+        data = await run_in_threadpool(assemble_report_data, entity_type, entity_id)
+        if not data:
+            raise HTTPException(status_code=404, detail=f"{entity_type} '{entity_id}' not found")
+
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        report_hash = compute_report_hash(data, "engagement", None, None, ts,
+                                          state_hashes=data.get("state_hashes"))
+
+        html = render_engagement(data, None, report_hash, ts, "html")
+        return HTMLResponse(
+            content=html,
+            headers={
+                "X-Report-Hash": report_hash,
+                "Cache-Control": "public, max-age=300",
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        import traceback
+        from starlette.responses import PlainTextResponse
+        return PlainTextResponse(
+            content=traceback.format_exc(),
+            status_code=500,
+            media_type="text/plain",
+        )
+
+
+@app.get("/engagement/{entity_type}/{entity_id}/{report_hash}")
+async def engagement_by_hash(entity_type: str, entity_id: str, report_hash: str):
+    """Historical engagement artifact for a specific report hash."""
+    try:
+        from app.report import assemble_report_data
+        from app.report_attestation import compute_report_hash as _compute_hash
+        from app.templates.engagement import render as render_engagement
+        from starlette.concurrency import run_in_threadpool
+
+        if entity_type not in ("stablecoin", "protocol", "wallet"):
+            raise HTTPException(status_code=400, detail=f"Invalid entity_type: {entity_type}. Use stablecoin, protocol, or wallet.")
+
+        # Try to look up the attestation record for this hash
+        row = fetch_one(
+            "SELECT entity_type, entity_id, generated_at FROM report_attestations WHERE report_hash = %s",
+            (report_hash,),
+        )
+
+        # Regardless of whether we found the attestation, generate fresh data
+        # (the attestation just confirms the hash existed)
+        data = await run_in_threadpool(assemble_report_data, entity_type, entity_id)
+        if not data:
+            raise HTTPException(status_code=404, detail=f"{entity_type} '{entity_id}' not found")
+
+        ts = row["generated_at"].strftime("%Y-%m-%d %H:%M UTC") if row and row.get("generated_at") else \
+            datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+        html = render_engagement(data, None, report_hash, ts, "html")
+        return HTMLResponse(
+            content=html,
+            headers={
+                "X-Report-Hash": report_hash,
+                "Cache-Control": "public, max-age=300",
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        import traceback
+        from starlette.responses import PlainTextResponse
+        return PlainTextResponse(
+            content=traceback.format_exc(),
+            status_code=500,
+            media_type="text/plain",
+        )
 
 
 # =============================================================================

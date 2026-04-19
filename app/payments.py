@@ -184,44 +184,11 @@ def create_x402_middleware():
     server = x402ResourceServer(facilitator_clients=facilitator)
     server.register(X402_NETWORK, ExactEvmServerScheme())
 
-    routes = {
-        "GET /api/paid/sii/rankings": _route(
-            "$0.005", "All stablecoin SII rankings with scores, grades, and category breakdowns"
-        ),
-        "GET /api/paid/sii/{coin}": _route(
-            "$0.001", "Single stablecoin SII score with full component breakdown"
-        ),
-        "GET /api/paid/psi/scores": _route(
-            "$0.005", "All protocol solvency scores"
-        ),
-        "GET /api/paid/psi/scores/{slug}": _route(
-            "$0.001", "Single protocol solvency score with component breakdown"
-        ),
-        "GET /api/paid/cqi": _route(
-            "$0.001", "Composite Quality Index for a stablecoin-protocol pair"
-        ),
-        "GET /api/paid/rqs/{slug}": _route(
-            "$0.001", "Reserve Quality Score for a protocol's stablecoin treasury holdings"
-        ),
-        "GET /api/paid/pulse/latest": _route(
-            "$0.002", "Latest daily system pulse with integrity status"
-        ),
-        "GET /api/paid/discovery/latest": _route(
-            "$0.005", "Latest cross-domain discovery signals"
-        ),
-        "GET /api/paid/wallets/{address}/profile": _route(
-            "$0.005", "Full wallet risk profile with behavioral signals and reputation"
-        ),
-        "GET /api/paid/report/{entity_type}/{entity_id}": _route(
-            "$0.01", "Attested risk report with optional regulatory lens"
-        ),
-        "GET /api/paid/rpi/scores": _route(
-            "$0.005", "All protocol Risk Posture Index scores"
-        ),
-        "GET /api/paid/rpi/scores/{slug}": _route(
-            "$0.001", "Single protocol RPI score with component breakdown"
-        ),
-    }
+    routes = {}
+    from app.paid_endpoints import PAID_ENDPOINTS
+    for ep in PAID_ENDPOINTS:
+        key = f"{ep['method']} {ep['url']}"
+        routes[key] = _route(ep["price"], ep["description"])
 
     return PaymentMiddlewareASGI, {"routes": routes, "server": server}
 
