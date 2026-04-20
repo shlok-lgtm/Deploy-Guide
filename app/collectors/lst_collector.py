@@ -87,7 +87,11 @@ LST_STATIC_CONFIG = {
     },
     "kelp-rseth": {
         "audit_status": 3, "upgradeability_risk": 50, "admin_key_risk": 55,
-        "withdrawal_queue_impl": 60, "exploit_history_lst": 100,
+        # exploit_history_lst lowered 100 -> 10 per audits/lsti_rseth_audit_2026-04-20.md:
+        # 2026-04-18 LayerZero-bridge mint of 116,500 unbacked rsETH (~$292M).
+        # Severity band ($100M+) = 10, recency <90d = full weight. Held as static
+        # floor until DeFiLlama hacks ingestion confirms (min(live, static) keeps it low).
+        "withdrawal_queue_impl": 60, "exploit_history_lst": 10,
         "slashing_insurance": 40, "beacon_chain_dependency": 50, "mev_exposure": 60,
     },
 }
