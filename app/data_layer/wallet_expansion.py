@@ -253,3 +253,149 @@ async def run_wallet_graph_expansion(
     )
 
     return result
+
+
+async def run_multi_source_seeding() -> dict:
+    """
+    Seed wallets from non-edge sources: governance voters, mint/burn originators,
+    protocol pool wallets, and top stablecoin holders (Etherscan).
+    Minimal API cost — mostly SQL inserts from existing tables.
+    """
+    from app.database import fetch_one, fetch_all, get_cursor
+
+    results = {"sources": {}, "total_new": 0}
+
+    # Source 1: Governance voters
+    try:
+        voters = fetch_all("""
+            SELECT DISTINCT LOWER(voter_address) as addr
+            FROM governance_voters
+            WHERE voter_address IS NOT NULL
+              AND LOWER(voter_address) NOT IN (SELECT LOWER(address) FROM wallet_graph.wallets)
+            LIMIT 2000
+        """)
+        count = 0
+        for r in (voters or []):
+            try:
+                with get_cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO wallet_graph.wallets (address, source, created_at) VALUES (%s, 'governance_voter', NOW()) ON CONFLICT DO NOTHING",
+                        (r["addr"],),
+                    )
+                    if cur.rowcount > 0:
+                        count += 1
+            except Exception:
+                pass
+        results["sources"]["governance_voters"] = count
+        results["total_new"] += count
+        logger.error(f"[wallet_seeding] governance_voters: {count} new wallets")
+    except Exception as e:
+        logger.error(f"[wallet_seeding] governance_voters failed: {e}")
+
+    # Source 2: Mint/burn originators
+    try:
+        minters = fetch_all("""
+            SELECT DISTINCT LOWER(from_address) as addr
+            FROM mint_burn_events
+            WHERE from_address IS NOT NULL
+              AND from_address != '0x0000000000000000000000000000000000000000'
+              AND LOWER(from_address) NOT IN (SELECT LOWER(address) FROM wallet_graph.wallets)
+            LIMIT 2000
+        """)
+        count = 0
+        for r in (minters or []):
+            try:
+                with get_cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO wallet_graph.wallets (address, source, created_at) VALUES (%s, 'mint_burn', NOW()) ON CONFLICT DO NOTHING",
+                        (r["addr"],),
+                    )
+                    if cur.rowcount > 0:
+                        count += 1
+            except Exception:
+                pass
+        results["sources"]["mint_burn"] = count
+        results["total_new"] += count
+        logger.error(f"[wallet_seeding] mint_burn: {count} new wallets")
+    except Exception as e:
+        logger.error(f"[wallet_seeding] mint_burn failed: {e}")
+
+    # Source 3: Protocol pool wallets
+    try:
+        pool_wallets = fetch_all("""
+            SELECT DISTINCT LOWER(wallet_address) as addr
+            FROM protocol_pool_wallets
+            WHERE LOWER(wallet_address) NOT IN (SELECT LOWER(address) FROM wallet_graph.wallets)
+            LIMIT 2000
+        """)
+        count = 0
+        for r in (pool_wallets or []):
+            try:
+                with get_cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO wallet_graph.wallets (address, source, created_at) VALUES (%s, 'pool_wallet', NOW()) ON CONFLICT DO NOTHING",
+                        (r["addr"],),
+                    )
+                    if cur.rowcount > 0:
+                        count += 1
+            except Exception:
+                pass
+        results["sources"]["pool_wallets"] = count
+        results["total_new"] += count
+        logger.error(f"[wallet_seeding] pool_wallets: {count} new wallets")
+    except Exception as e:
+        logger.error(f"[wallet_seeding] pool_wallets failed: {e}")
+
+    # Source 4: Top stablecoin holders (Etherscan — uses API calls)
+    try:
+        api_key = os.environ.get("ETHERSCAN_API_KEY", "")
+        if api_key:
+            stablecoins = fetch_all(
+                "SELECT id, contract FROM stablecoins WHERE scoring_enabled = TRUE AND contract IS NOT NULL LIMIT 10"
+            )
+            holder_count = 0
+            async with httpx.AsyncClient(timeout=15) as client:
+                for sc in (stablecoins or [])[:5]:
+                    contract = sc.get("contract", "")
+                    if not contract or not contract.startswith("0x"):
+                        continue
+                    try:
+                        resp = await client.get(
+                            ETHERSCAN_V2_BASE,
+                            params={
+                                "chainid": 1, "module": "token", "action": "tokenholderlist",
+                                "contractaddress": contract, "page": 1, "offset": 50,
+                                "apikey": api_key,
+                            },
+                        )
+                        if resp.status_code != 200:
+                            continue
+                        data = resp.json()
+                        holders = data.get("result", []) if data.get("status") == "1" else []
+                        for h in holders:
+                            addr = (h.get("TokenHolderAddress") or "").lower()
+                            if addr and addr.startswith("0x") and len(addr) == 42:
+                                try:
+                                    with get_cursor() as cur:
+                                        cur.execute(
+                                            "INSERT INTO wallet_graph.wallets (address, source, created_at) VALUES (%s, 'top_holder', NOW()) ON CONFLICT DO NOTHING",
+                                            (addr,),
+                                        )
+                                        if cur.rowcount > 0:
+                                            holder_count += 1
+                                except Exception:
+                                    pass
+                        await asyncio.sleep(0.2)
+                    except Exception as e:
+                        logger.debug(f"Top holder fetch failed for {sc['id']}: {e}")
+            results["sources"]["top_holders"] = holder_count
+            results["total_new"] += holder_count
+            logger.error(f"[wallet_seeding] top_holders: {holder_count} new wallets")
+    except Exception as e:
+        logger.error(f"[wallet_seeding] top_holders failed: {e}")
+
+    logger.error(
+        f"[wallet_seeding] SUMMARY: {results['total_new']} total new wallets — "
+        f"{results['sources']}"
+    )
+    return results

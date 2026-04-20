@@ -404,12 +404,22 @@ async def run_enrichment_pipeline() -> dict:
     async def _run_wallet_expansion():
         results = {}
         logger.error("=== [wallet_expansion] ENTERED _run_wallet_expansion ===")
+
+        # Multi-source seeding FIRST — SQL-only, no API calls, immediate growth
+        try:
+            from app.data_layer.wallet_expansion import run_multi_source_seeding
+            seeding = await run_multi_source_seeding()
+            results["multi_source"] = seeding
+        except Exception as e:
+            logger.error(f"[wallet_expansion] multi-source seeding failed: {e}")
+
+        # Then edge-based expansion
         try:
             from app.data_layer.wallet_expansion import run_wallet_graph_expansion
             from app.database import fetch_one as _wfe
             _wc = _wfe("SELECT COUNT(*) as cnt FROM wallet_graph.wallets")
             _count = _wc["cnt"] if _wc else 0
-            logger.error(f"=== [wallet_expansion] starting, current_count={_count}, target=10000 ===")
+            logger.error(f"=== [wallet_expansion] starting edge expansion, current_count={_count}, target=10000 ===")
             expansion_result = await run_wallet_graph_expansion(
                 target_new_wallets=10_000, max_etherscan_calls=5_000
             )

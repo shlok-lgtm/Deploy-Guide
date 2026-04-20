@@ -247,21 +247,39 @@ async def run_edge_builder(
     if priority == "unbuilt":
         order_clause = "w.created_at ASC"
 
+    # Include wallets that haven't been built in 7+ days (re-scan for new transfers)
     wallets = fetch_all(
         f"""
         SELECT w.address, w.total_stablecoin_value
         FROM wallet_graph.wallets w
         LEFT JOIN wallet_graph.edge_build_status e
             ON w.address = e.wallet_address AND e.chain = %s
-        WHERE e.wallet_address IS NULL OR e.status = 'pending'
+        WHERE e.wallet_address IS NULL
+           OR e.status = 'pending'
+           OR e.last_built_at < NOW() - INTERVAL '7 days'
         ORDER BY {order_clause}
         LIMIT %s
         """,
         (chain, max_wallets),
     )
 
+    # Count how many are fresh vs stale
+    unbuilt = fetch_one(
+        "SELECT COUNT(*) as cnt FROM wallet_graph.wallets w "
+        "LEFT JOIN wallet_graph.edge_build_status e ON w.address = e.wallet_address AND e.chain = %s "
+        "WHERE e.wallet_address IS NULL", (chain,)
+    )
+    stale = fetch_one(
+        "SELECT COUNT(*) as cnt FROM wallet_graph.edge_build_status "
+        "WHERE chain = %s AND last_built_at < NOW() - INTERVAL '7 days'", (chain,)
+    )
+    logger.error(
+        f"[edge_builder] {chain}: {len(wallets)} candidates "
+        f"(unbuilt={unbuilt['cnt'] if unbuilt else 0}, stale_7d={stale['cnt'] if stale else 0})"
+    )
+
     if not wallets:
-        logger.info(f"No wallets need edge building on {chain}")
+        logger.error(f"[edge_builder] {chain}: no wallets need edge building")
         return {"chain": chain, "wallets_processed": 0, "total_edges_created": 0, "total_transfers": 0}
 
     api_key = os.environ.get("ETHERSCAN_API_KEY", "") if chain == "ethereum" else ""
@@ -297,9 +315,9 @@ async def run_edge_builder(
                     (w["address"], chain),
                 )
 
-    logger.info(
-        f"Edge builder [{chain}] complete: {wallets_processed} wallets, "
-        f"{total_edges} edges, {total_transfers} transfers"
+    logger.error(
+        f"[edge_builder] {chain}: examined {wallets_processed} wallets, "
+        f"new_edges={total_edges}, transfers={total_transfers}"
     )
 
     # Attest edges for this chain
