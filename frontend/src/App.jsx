@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import OpsDashboard from "./pages/OpsDashboard";
+import IncidentPage from "./pages/IncidentPage";
 
 const API = "";
 const _DK = "BF6KF2i34EslzTnvBXAjcLlDZBlQKLSTP9LdrAzxUHI";
@@ -3123,6 +3124,11 @@ export default function App() {
   // Route /ops to Operations Hub
   if (window.location.pathname.startsWith("/ops")) {
     return <OpsDashboard />;
+  }
+  // Route /incident/:slug to incident evidence page
+  if (window.location.pathname.startsWith("/incident/")) {
+    const slug = window.location.pathname.replace(/^\/incident\//, "").split("/")[0].split("?")[0];
+    if (slug) return <IncidentPage slug={slug} />;
   }
 
   const [view, setView] = useState("rankings");
