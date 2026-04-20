@@ -200,11 +200,22 @@ def _render_markdown(md: str) -> str:
             i += 1
             continue
 
-        # Heading
+        # Heading — supports trailing {#custom-id} anchor marker (pandoc
+        # convention). Without an explicit marker, no id is emitted.
         m = re.match(r"^(#{1,6})\s+(.*)$", line)
         if m:
             level = len(m.group(1))
-            out.append(f"<h{level}>{_render_inline(m.group(2))}</h{level}>")
+            heading_text = m.group(2).rstrip()
+            anchor_m = re.search(r"\s*\{#([A-Za-z][\w\-]*)\}\s*$", heading_text)
+            if anchor_m:
+                heading_id = anchor_m.group(1)
+                heading_text = heading_text[: anchor_m.start()].rstrip()
+                out.append(
+                    f'<h{level} id="{html_lib.escape(heading_id, quote=True)}">'
+                    f"{_render_inline(heading_text)}</h{level}>"
+                )
+            else:
+                out.append(f"<h{level}>{_render_inline(heading_text)}</h{level}>")
             i += 1
             continue
 

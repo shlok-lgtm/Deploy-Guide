@@ -47,12 +47,12 @@ function formatValue(componentId, value) {
   if (Number.isNaN(n)) return String(value);
   switch (componentId) {
     case "market_cap":
-    case "dex_pool_depth":
       if (n >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
       if (n >= 1e6) return `$${(n / 1e6).toFixed(1)}M`;
       if (n >= 1e3) return `$${(n / 1e3).toFixed(0)}K`;
       return `$${n.toFixed(0)}`;
-    case "eth_peg_deviation":
+    case "eth_price_ratio":
+      return n.toFixed(3);
     case "peg_volatility_7d":
     case "top_holder_concentration":
       return `${n.toFixed(2)}%`;
@@ -61,6 +61,12 @@ function formatValue(componentId, value) {
     default:
       return String(n);
   }
+}
+
+function designLabel(d) {
+  if (d === "rebasing") return "Rebasing";
+  if (d === "reward-bearing") return "Reward-bearing";
+  return null;
 }
 
 export default function IncidentPage({ slug }) {
@@ -290,6 +296,7 @@ function ComparisonSection({ data, mobile }) {
         {order.map((compId, i) => {
           const m = meta[compId] || {};
           const rowBorder = i < order.length - 1 ? `1px dotted ${T.ruleMid}` : "none";
+          const showDesign = compId === "eth_price_ratio";
           if (mobile) {
             return (
               <div key={compId} style={{ padding: "12px 14px", borderBottom: rowBorder }}>
@@ -301,15 +308,31 @@ function ComparisonSection({ data, mobile }) {
                 </div>
                 {peerOrder.map((p) => {
                   const val = peers[p]?.values?.[compId];
+                  const design = showDesign ? designLabel(peers[p]?.design) : null;
+                  const isSubject = p === "kelp-rseth";
+                  const isSuspect = compId === "top_holder_concentration" && p === "etherfi-eeth" && val === 0;
                   return (
-                    <div key={p} style={{ display: "flex", justifyContent: "space-between", fontFamily: T.mono, fontSize: 12, padding: "3px 0", color: T.inkMid }}>
-                      <span style={{ color: T.inkLight }}>{peerLabel(p)}</span>
-                      <span style={{ fontWeight: p === "kelp-rseth" ? 600 : 400, color: p === "kelp-rseth" ? T.ink : T.inkMid }}>
-                        {formatValue(compId, val)}
-                      </span>
+                    <div key={p} style={{ padding: "3px 0", borderBottom: `1px dotted ${T.ruleLight}` }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontFamily: T.mono, fontSize: 12, color: T.inkMid }}>
+                        <span style={{ color: T.inkLight }}>{peerLabel(p)}</span>
+                        <span style={{ fontWeight: isSubject ? 600 : 400, color: isSubject ? T.ink : T.inkMid }}>
+                          {formatValue(compId, val)}
+                          {isSuspect ? " *" : ""}
+                        </span>
+                      </div>
+                      {design && (
+                        <div style={{ fontFamily: T.mono, fontSize: 10, color: T.inkFaint, textAlign: "right", marginTop: 1, letterSpacing: 0.3 }}>
+                          {design}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
+                {compId === "top_holder_concentration" && (
+                  <div style={{ marginTop: 6, fontFamily: T.mono, fontSize: 10, color: T.inkFaint }}>
+                    * eETH 0.00% is a suspected contract-filter bug; see follow-up.
+                  </div>
+                )}
               </div>
             );
           }
@@ -332,9 +355,18 @@ function ComparisonSection({ data, mobile }) {
               {peerOrder.map((p) => {
                 const val = peers[p]?.values?.[compId];
                 const isSubject = p === "kelp-rseth";
+                const design = showDesign ? designLabel(peers[p]?.design) : null;
+                const isSuspect = compId === "top_holder_concentration" && p === "etherfi-eeth" && val === 0;
                 return (
-                  <div key={p} style={{ fontFamily: T.mono, fontSize: 13, fontWeight: isSubject ? 600 : 400, color: isSubject ? T.ink : T.inkMid }}>
-                    {formatValue(compId, val)}
+                  <div key={p}>
+                    <div style={{ fontFamily: T.mono, fontSize: 13, fontWeight: isSubject ? 600 : 400, color: isSubject ? T.ink : T.inkMid }}>
+                      {formatValue(compId, val)}{isSuspect ? " *" : ""}
+                    </div>
+                    {design && (
+                      <div style={{ fontFamily: T.mono, fontSize: 10, color: T.inkFaint, letterSpacing: 0.3, marginTop: 2 }}>
+                        {design}
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -347,6 +379,19 @@ function ComparisonSection({ data, mobile }) {
       </div>
       <div style={{ marginTop: 10, fontFamily: T.mono, fontSize: 10, color: T.inkFaint, lineHeight: 1.5 }}>
         Bold column = rsETH. Static values noted as "static, updated 2026-04-20" reflect the post-incident audit update; see Section 4.
+      </div>
+
+      <div style={{
+        marginTop: 18, padding: "12px 14px",
+        borderLeft: `3px solid ${T.ruleMid}`, background: T.paperWarm,
+        maxWidth: 720,
+      }}>
+        <div style={{ fontFamily: T.mono, fontSize: 10, color: T.inkLight, letterSpacing: 1, textTransform: "uppercase", marginBottom: 6 }}>
+          Methodology note
+        </div>
+        <p style={{ fontFamily: T.sans, fontSize: 13, lineHeight: 1.65, color: T.inkMid, margin: 0 }}>
+          The original Q4 package included <code style={{ fontFamily: T.mono, fontSize: 12 }}>eth_peg_deviation</code> and <code style={{ fontFamily: T.mono, fontSize: 12 }}>dex_pool_depth</code>. Both were removed after verification: <code style={{ fontFamily: T.mono, fontSize: 12 }}>eth_peg_deviation</code> conflates rebasing and reward-bearing LST designs and is not cross-peer comparable; <code style={{ fontFamily: T.mono, fontSize: 12 }}>dex_pool_depth</code> has a known collector wiring gap (follow-up PR). Replaced <code style={{ fontFamily: T.mono, fontSize: 12 }}>eth_peg_deviation</code> with <code style={{ fontFamily: T.mono, fontSize: 12 }}>eth_price_ratio</code>, which shows the raw ETH-denominated price alongside each LST's design type — letting the comparison speak for itself. See <a href="/audits/lsti_rseth_audit_2026-04-20#v1-1-addendum" style={{ color: T.ink, textDecoration: "none", borderBottom: `1px solid ${T.ruleMid}` }}>audit v1.1</a>.
+        </p>
       </div>
     </section>
   );
