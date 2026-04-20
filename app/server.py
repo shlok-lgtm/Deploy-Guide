@@ -9080,6 +9080,15 @@ async def oracle_reading_history(
     return {"readings": [dict(r) for r in (rows or [])], "count": len(rows or [])}
 
 
+def _with_triptych_url(row: dict) -> dict:
+    """Attach triptych_url to a stress-event row so consumers have a
+    one-hop link to the before/during/after artifact."""
+    d = dict(row)
+    if d.get("id") is not None:
+        d["triptych_url"] = f"/api/oracle/stress-events/{d['id']}/triptych"
+    return d
+
+
 @app.get("/api/oracle/stress-events")
 async def oracle_stress_events_list(
     asset_symbol: Optional[str] = None,
@@ -9107,7 +9116,7 @@ async def oracle_stress_events_list(
             ORDER BY event_start DESC""",
         tuple(params),
     )
-    return {"events": [dict(r) for r in (rows or [])], "count": len(rows or [])}
+    return {"events": [_with_triptych_url(r) for r in (rows or [])], "count": len(rows or [])}
 
 
 @app.get("/api/oracle/stress-events/active")
@@ -9118,7 +9127,81 @@ async def oracle_stress_events_active():
            WHERE event_end IS NULL
            ORDER BY event_start DESC"""
     )
-    return {"events": [dict(r) for r in (rows or [])], "count": len(rows or [])}
+    return {"events": [_with_triptych_url(r) for r in (rows or [])], "count": len(rows or [])}
+
+
+@app.get("/api/oracle/stress-events/{event_id}/triptych")
+async def oracle_stress_event_triptych(event_id: int):
+    """Before / during / after readings for a single stress event.
+
+    - pre_stress: readings tagged with this event_id by the pre-stress
+      tagger at event-open time (up to pre_stress_window_hours of context).
+    - during: readings flagged is_stress_event between event_start and
+      event_end (or NOW() if still open).
+    - post_stress: readings in the 72 hours after event_end. Empty if the
+      event is still open.
+    """
+    event = fetch_one(
+        "SELECT * FROM oracle_stress_events WHERE id = %s",
+        (event_id,),
+    )
+    if not event:
+        raise HTTPException(status_code=404, detail="Stress event not found")
+
+    reading_cols = (
+        "id, recorded_at AS reading_timestamp, oracle_price, cex_price, "
+        "deviation_pct, latency_seconds, is_stress_event"
+    )
+
+    pre_rows = fetch_all(
+        f"""SELECT {reading_cols}
+            FROM oracle_price_readings
+            WHERE pre_stress_event_id = %s
+            ORDER BY recorded_at ASC""",
+        (event_id,),
+    ) or []
+
+    during_rows = fetch_all(
+        f"""SELECT {reading_cols}
+            FROM oracle_price_readings
+            WHERE is_stress_event = TRUE
+              AND oracle_address = %s
+              AND chain = %s
+              AND asset_symbol = %s
+              AND recorded_at >= %s
+              AND recorded_at <= COALESCE(%s, NOW())
+            ORDER BY recorded_at ASC""",
+        (event["oracle_address"], event["chain"], event["asset_symbol"],
+         event["event_start"], event.get("event_end")),
+    ) or []
+
+    if event.get("event_end"):
+        post_rows = fetch_all(
+            f"""SELECT {reading_cols}
+                FROM oracle_price_readings
+                WHERE oracle_address = %s
+                  AND chain = %s
+                  AND asset_symbol = %s
+                  AND recorded_at > %s
+                  AND recorded_at <= %s + INTERVAL '72 hours'
+                ORDER BY recorded_at ASC""",
+            (event["oracle_address"], event["chain"], event["asset_symbol"],
+             event["event_end"], event["event_end"]),
+        ) or []
+    else:
+        post_rows = []
+
+    return {
+        "event": _with_triptych_url(event),
+        "pre_stress": [dict(r) for r in pre_rows],
+        "during": [dict(r) for r in during_rows],
+        "post_stress": [dict(r) for r in post_rows],
+        "counts": {
+            "pre_stress": len(pre_rows),
+            "during": len(during_rows),
+            "post_stress": len(post_rows),
+        },
+    }
 
 
 @app.get("/api/oracle/{asset_symbol}/deviation-history")

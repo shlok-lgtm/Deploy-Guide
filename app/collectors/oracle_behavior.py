@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from app.database import fetch_all, fetch_one, execute
+from app.database import fetch_all, fetch_one, execute, get_cursor
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,10 @@ SYMBOL_TO_COINGECKO = {
 DEVIATION_STRESS_THRESHOLD = 0.5   # percent (fallback)
 LATENCY_STRESS_THRESHOLD = 3600    # seconds (fallback — 1 hour)
 HEARTBEAT_BUFFER = 1.1             # 10% buffer past heartbeat before flagging
+
+# Pre-stress context window: readings in this window before a newly-opened
+# event get tagged so the triptych endpoint can render before / during / after.
+PRE_STRESS_WINDOW_HOURS = 72
 
 # Fallback public RPCs
 FALLBACK_RPCS = {
@@ -278,6 +282,53 @@ async def _fetch_cex_prices(client: httpx.AsyncClient, symbols: list[str]) -> di
 # Stress event handling
 # ---------------------------------------------------------------------------
 
+def tag_pre_stress_readings(
+    event_id: int,
+    oracle_address: str,
+    chain: str,
+    asset_symbol: str,
+    event_start,
+    window_hours: int = PRE_STRESS_WINDOW_HOURS,
+) -> int:
+    """Retroactively tag the preceding `window_hours` of readings for a
+    newly-opened stress event. Writes the tagged count back onto the event
+    row so the triptych endpoint can verify completeness without a scan.
+
+    Never raises — tagging failure must not block the stress event from
+    opening. Returns the number of readings tagged, or 0 on any error.
+    Idempotent via `pre_stress_event_id IS NULL` guard (no re-tagging on
+    subsequent updates to the same event).
+    """
+    try:
+        with get_cursor() as cur:
+            cur.execute(
+                """UPDATE oracle_price_readings
+                   SET pre_stress_event_id = %s
+                   WHERE oracle_address = %s
+                     AND chain = %s
+                     AND asset_symbol = %s
+                     AND recorded_at >= %s - (%s || ' hours')::INTERVAL
+                     AND recorded_at < %s
+                     AND pre_stress_event_id IS NULL""",
+                (event_id, oracle_address, chain, asset_symbol,
+                 event_start, str(window_hours), event_start),
+            )
+            tagged = cur.rowcount or 0
+            cur.execute(
+                "UPDATE oracle_stress_events SET pre_stress_readings_tagged = %s WHERE id = %s",
+                (tagged, event_id),
+            )
+        logger.info(
+            f"Pre-stress tagging: event {event_id} ({oracle_address[:10]}.. "
+            f"{asset_symbol}/{chain}) — tagged {tagged} readings in prior "
+            f"{window_hours}h"
+        )
+        return tagged
+    except Exception as e:
+        logger.warning(f"Pre-stress tagging failed for event {event_id}: {e}")
+        return 0
+
+
 def _handle_stress_event(oracle: dict, reading: dict, deviation_pct: float, latency: int):
     """Handle oracle stress event: create or update."""
     oracle_addr = oracle["oracle_address"]
@@ -364,13 +415,15 @@ def _handle_stress_event(oracle: dict, reading: dict, deviation_pct: float, late
         content_data = f"{oracle_addr}{chain}{event_type}{now.isoformat()}"
         content_hash = "0x" + hashlib.sha256(content_data.encode()).hexdigest()
 
-        execute(
+        new_event = fetch_one(
             """INSERT INTO oracle_stress_events
                 (oracle_address, oracle_name, asset_symbol, chain,
                  event_type, event_start, max_deviation_pct, max_latency_seconds,
                  reading_count, concurrent_sii_score, concurrent_psi_scores,
-                 affected_protocols, content_hash, attested_at)
-               VALUES (%s, %s, %s, %s, %s, NOW(), %s, %s, 1, %s, %s, %s, %s, NOW())""",
+                 affected_protocols, content_hash, attested_at,
+                 pre_stress_window_hours)
+               VALUES (%s, %s, %s, %s, %s, NOW(), %s, %s, 1, %s, %s, %s, %s, NOW(), %s)
+               RETURNING id, event_start""",
             (
                 oracle_addr, oracle.get("oracle_name"), asset, chain,
                 event_type, abs_dev, latency,
@@ -378,8 +431,19 @@ def _handle_stress_event(oracle: dict, reading: dict, deviation_pct: float, late
                 json.dumps(concurrent_psi) if concurrent_psi else None,
                 json.dumps(affected) if affected else None,
                 content_hash,
+                PRE_STRESS_WINDOW_HOURS,
             ),
         )
+
+        if new_event and new_event.get("id"):
+            tag_pre_stress_readings(
+                event_id=new_event["id"],
+                oracle_address=oracle_addr,
+                chain=chain,
+                asset_symbol=asset,
+                event_start=new_event["event_start"],
+                window_hours=PRE_STRESS_WINDOW_HOURS,
+            )
 
         try:
             from app.state_attestation import attest_state
