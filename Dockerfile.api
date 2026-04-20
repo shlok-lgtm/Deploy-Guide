@@ -12,6 +12,8 @@ RUN pip install --no-cache-dir -r requirements.txt && pip install --no-cache-dir
 COPY app/ ./app/
 COPY frontend/dist/ ./frontend/dist/
 COPY migrations/ ./migrations/
+COPY audits/ ./audits/
+COPY public/ ./public/
 COPY main.py ./
 
 ENV WORKER_ENABLED=false
