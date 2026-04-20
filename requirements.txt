@@ -22,3 +22,4 @@ dbt-core>=1.7.13
 pillow>=12.1.1
 tornado>=6.5.5
 x402>=2.6.0
+email-validator>=2.0
