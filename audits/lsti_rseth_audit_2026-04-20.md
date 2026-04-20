@@ -325,11 +325,13 @@ The gap between rsETH's observed 0.891 and its reward-bearing baseline tracks th
 
 **Follow-up engineering.** Implement `eth_peg_deviation_vs_exchange_rate` as a live-scored LSTI component that fetches each LST's on-chain exchange rate (from the protocol's own contract) and measures deviation from that reference. That component is the correct long-term replacement. It is a separate PR and will not be manually snapshotted for future incidents — the scoring engine will compute it on every cycle.
 
-### Finding 3 — static_config seeds vs production values
+### Finding 3 — static_config table stale relative to production
 
-The audit's §Q3 defensibility table documents `kelp-rseth` static_config seeds as: `audit_status: 3`, `upgradeability_risk: 50`, `withdrawal_queue_impl: 60`. Inspection of `generic_index_scores.raw_values` for `kelp-rseth` on 2026-04-20 shows different values actually stored: `audit_status: 7`, `upgradeability_risk: 70`, `withdrawal_queue_impl: 60`.
+The audit's §Q3 defensibility table is stale. It documents the static_config **seed** values; production serves the **effective** values after the `max(live, static)` enrichment override. The gap is intentional in code but unsignaled in §Q3 — a delegate comparing the audit to the API will see different numbers.
 
-This is not a bug. The `max(live, static)` override at `lst_collector.py:334-341` intentionally raises the static seed when live contract analysis (Etherscan verification, proxy+implementation detection) returns a higher signal. For Kelp, the live contract is verified and the proxy/implementation pair is detected, so `audit_status` is bumped from the static 3 to the live 7. `upgradeability_risk` follows the same path.
+Concretely, §Q3 documents `kelp-rseth` seeds as `audit_status: 3`, `upgradeability_risk: 50`, `withdrawal_queue_impl: 60`. Inspection of `generic_index_scores.raw_values` for `kelp-rseth` on 2026-04-20 shows stored values `audit_status: 7`, `upgradeability_risk: 70`, `withdrawal_queue_impl: 60`.
+
+The `max(live, static)` override at `lst_collector.py:334-341` intentionally raises the static seed when live contract analysis (Etherscan verification, proxy+implementation detection) returns a higher signal. For Kelp, the live contract is verified and the proxy/implementation pair is detected, so `audit_status` is bumped from the static 3 to the live 7. `upgradeability_risk` follows the same path.
 
 The effect: the audit's §Q3 table accurately documents the **static floor**; the production `raw_values` record the **effective score** after live enrichment. A delegate querying `/api/lsti/scores/kelp-rseth` sees the effective score, not the floor.
 

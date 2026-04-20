@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from datetime import date, datetime, timezone
 
 import requests
@@ -140,27 +141,99 @@ def _cg_headers() -> dict:
     return h
 
 
-def fetch_eth_price_ratio(coingecko_id: str) -> float | None:
+_MAX_ATTEMPTS = 3
+_BACKOFF_SECS = (2, 4, 8)  # waits between attempts; index = attempts already made
+_PER_PEER_SLEEP = 1.5  # honored between successful peer fetches, mirrors
+                       # app/collectors/lst_collector.py:109
+
+
+def _cg_wait_from_retry_after(resp: "requests.Response", fallback: float) -> float:
+    """Honor the Retry-After header if present and numeric; else fallback."""
+    ra = resp.headers.get("Retry-After")
+    if not ra:
+        return fallback
+    try:
+        return max(float(ra), fallback)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def fetch_eth_price_ratio(coingecko_id: str) -> float:
     """Fetch the current LST/ETH price ratio from CoinGecko.
 
     Returns the raw ETH-denominated price (e.g. 0.994 for stETH, 1.158 for
-    rETH). None if the call fails — the snapshot then records null and the
-    page renders an em-dash for that cell rather than fabricating a number.
+    rETH) as a float.
+
+    On transient failure (HTTP 429 or 5xx) retries up to 3 attempts with
+    exponential backoff (2s, 4s, 8s), honoring Retry-After if the server
+    sent one. On final failure — or on any 200 response that does not
+    include the coingecko_id — raises RuntimeError so the caller aborts
+    the DB write instead of committing a silent null.
+
+    Voice: loud. Each attempt prints a single status line so the operator
+    running this in a terminal can see what's happening.
     """
-    try:
-        resp = requests.get(
-            f"{CG_BASE}/simple/price",
-            params={"ids": coingecko_id, "vs_currencies": "eth"},
-            headers=_cg_headers(),
-            timeout=10,
+    url = f"{CG_BASE}/simple/price"
+    params = {"ids": coingecko_id, "vs_currencies": "eth"}
+
+    for attempt in range(1, _MAX_ATTEMPTS + 1):
+        try:
+            resp = requests.get(
+                url, params=params, headers=_cg_headers(), timeout=10
+            )
+        except requests.RequestException as e:
+            wait = _BACKOFF_SECS[min(attempt - 1, len(_BACKOFF_SECS) - 1)]
+            print(
+                f"  [attempt {attempt}/{_MAX_ATTEMPTS}] {coingecko_id}: "
+                f"network error ({e}); waiting {wait}s before retry"
+            )
+            if attempt == _MAX_ATTEMPTS:
+                raise RuntimeError(
+                    f"CoinGecko fetch failed for {coingecko_id} after "
+                    f"{_MAX_ATTEMPTS} attempts (last error: {e})"
+                ) from e
+            time.sleep(wait)
+            continue
+
+        if resp.status_code == 200:
+            data = resp.json()
+            val = (data.get(coingecko_id) or {}).get("eth")
+            if val is None:
+                # 200 but empty payload — treat as a hard failure so the
+                # operator knows CG accepted the id but returned nothing.
+                raise RuntimeError(
+                    f"CoinGecko returned 200 but no eth price for "
+                    f"{coingecko_id}; response: {data!r}"
+                )
+            print(f"  [attempt {attempt}/{_MAX_ATTEMPTS}] {coingecko_id}: OK ({val:.4f})")
+            return float(val)
+
+        # Retryable status
+        if resp.status_code in (429, 500, 502, 503, 504):
+            wait = _cg_wait_from_retry_after(
+                resp, _BACKOFF_SECS[min(attempt - 1, len(_BACKOFF_SECS) - 1)]
+            )
+            print(
+                f"  [attempt {attempt}/{_MAX_ATTEMPTS}] {coingecko_id}: "
+                f"HTTP {resp.status_code}; waiting {wait:g}s before retry"
+            )
+            if attempt == _MAX_ATTEMPTS:
+                raise RuntimeError(
+                    f"CoinGecko fetch failed for {coingecko_id} after "
+                    f"{_MAX_ATTEMPTS} attempts (last status: {resp.status_code})"
+                )
+            time.sleep(wait)
+            continue
+
+        # Non-retryable error — fail immediately so the operator doesn't
+        # wait out a full backoff cycle on a 404/401.
+        raise RuntimeError(
+            f"CoinGecko fetch failed for {coingecko_id}: "
+            f"HTTP {resp.status_code} (non-retryable)"
         )
-        if resp.status_code != 200:
-            return None
-        data = resp.json()
-        val = (data.get(coingecko_id) or {}).get("eth")
-        return float(val) if val is not None else None
-    except Exception:
-        return None
+
+    # Unreachable — loop always returns or raises.
+    raise RuntimeError(f"CoinGecko fetch loop exited unexpectedly for {coingecko_id}")
 
 
 def fetch_live_components(api_base: str, slug: str) -> dict | None:
@@ -182,15 +255,19 @@ def fetch_live_components(api_base: str, slug: str) -> dict | None:
 
 
 def build_row(api_base: str | None) -> dict:
+    """Assemble the per-peer snapshot. Raises RuntimeError if the CoinGecko
+    fetch fails for any peer after 3 attempts — the caller is expected to
+    abort the DB write rather than commit a row with silent nulls."""
     components = {}
-    for peer in PEERS:
+    for idx, peer in enumerate(PEERS):
+        print(f"Fetching {peer['slug']} ({peer['symbol']}):")
         values = None
         if api_base:
             values = fetch_live_components(api_base, peer["slug"])
         if values is None:
             values = dict(FALLBACK_VALUES[peer["slug"]])
-        # Always attempt the CoinGecko ETH-ratio fetch regardless of hub
-        # reachability. Stays null on failure.
+        # eth_price_ratio is always fetched directly from CoinGecko.
+        # Raises on final failure — propagates to main().
         values["eth_price_ratio"] = fetch_eth_price_ratio(peer["coingecko_id"])
         components[peer["slug"]] = {
             "name": peer["name"],
@@ -198,6 +275,10 @@ def build_row(api_base: str | None) -> dict:
             "design": peer["design"],
             "values": values,
         }
+        # Throttle between peers to stay well under CoinGecko's public
+        # rate ceiling. Skip after the last peer.
+        if idx < len(PEERS) - 1:
+            time.sleep(_PER_PEER_SLEEP)
     return {
         "peers": components,
         "component_order": Q4_COMPONENTS,
@@ -207,7 +288,16 @@ def build_row(api_base: str | None) -> dict:
 
 def main() -> None:
     api_base = os.environ.get("BASIS_API_BASE")  # e.g. http://localhost:5000
-    components_json = build_row(api_base)
+    try:
+        components_json = build_row(api_base)
+    except RuntimeError as e:
+        print(
+            "\nAborting DB write — CoinGecko fetch failed for one or more "
+            "peers. No silent nulls. Re-run when rate limit clears.\n"
+            f"Reason: {e}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     metadata = {
         "audit_path": "audits/lsti_rseth_audit_2026-04-20.md",
         "q4_components": Q4_COMPONENTS,

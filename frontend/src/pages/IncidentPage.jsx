@@ -330,7 +330,7 @@ function ComparisonSection({ data, mobile }) {
                 })}
                 {compId === "top_holder_concentration" && (
                   <div style={{ marginTop: 6, fontFamily: T.mono, fontSize: 10, color: T.inkFaint }}>
-                    * eETH 0.00% is a suspected contract-filter bug; see follow-up.
+                    * eETH 0.00% is a suspected contract-filter anomaly in the holder analyzer, under investigation.
                   </div>
                 )}
               </div>
@@ -380,6 +380,11 @@ function ComparisonSection({ data, mobile }) {
       <div style={{ marginTop: 10, fontFamily: T.mono, fontSize: 10, color: T.inkFaint, lineHeight: 1.5 }}>
         Bold column = rsETH. Static values noted as "static, updated 2026-04-20" reflect the post-incident audit update; see Section 4.
       </div>
+      {!mobile && order.includes("top_holder_concentration") && (
+        <div style={{ marginTop: 4, fontFamily: T.mono, fontSize: 10, color: T.inkFaint, lineHeight: 1.5 }}>
+          * eETH 0.00% is a suspected contract-filter anomaly in the holder analyzer, under investigation.
+        </div>
+      )}
 
       <div style={{
         marginTop: 18, padding: "12px 14px",
