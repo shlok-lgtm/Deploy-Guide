@@ -3097,6 +3097,103 @@ function AbmStateBadge({ state }) {
   );
 }
 
+function TrackRecordPanel() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [flash, showFlash] = useFlash();
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const res = await opsFetch("/api/ops/track-record/summary");
+      setData(res);
+    } catch (e) {
+      showFlash(e.message, false);
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, []);
+
+  return (
+    <Section title="TRACK RECORD" actions={
+      <button onClick={load} disabled={loading} style={{ fontSize: 9, fontFamily: T.mono, padding: "2px 6px", border: `1px solid ${T.paper}44`, background: "transparent", color: T.paper, cursor: "pointer", opacity: loading ? 0.5 : 1 }}>
+        {loading ? "Loading..." : "Refresh"}
+      </button>
+    }>
+      <Flash flash={flash} />
+      <div style={{ padding: "0 10px" }}>
+        {!data && !loading && <div style={{ color: T.inkFaint, fontSize: 12 }}>No entries yet. The first entry will appear when the next slow cycle detects a qualifying signal.</div>}
+
+        {data && (
+          <>
+            {/* Summary bar */}
+            <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 12, padding: "8px 0", borderBottom: `1px solid ${T.ruleLight}` }}>
+              <div>
+                <Lbl>Total Entries</Lbl>
+                <div style={{ fontSize: 18, fontFamily: T.mono, fontWeight: 700, color: T.ink }}>{data.total_entries || 0}</div>
+              </div>
+              <div>
+                <Lbl>Featured</Lbl>
+                <div style={{ fontSize: 14, fontFamily: T.mono, color: "#f39c12" }}>{(data.featured || []).length}</div>
+              </div>
+              <div>
+                <Lbl>Pending Followups</Lbl>
+                <div style={{ fontSize: 14, fontFamily: T.mono, color: (data.pending_followups || []).length > 0 ? "#e74c3c" : T.inkFaint }}>{(data.pending_followups || []).length}</div>
+              </div>
+            </div>
+
+            {/* By trigger kind (30 days) */}
+            {data.by_trigger_kind_30d && data.by_trigger_kind_30d.length > 0 && (
+              <div style={{ marginBottom: 10, padding: "6px 0", borderBottom: `1px solid ${T.ruleLight}` }}>
+                <div style={{ fontSize: 10, fontWeight: 600, color: T.inkLight, marginBottom: 4 }}>AUTO ENTRIES (30D)</div>
+                <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 11, fontFamily: T.mono }}>
+                  {data.by_trigger_kind_30d.map(r => (
+                    <div key={r.trigger_kind}>
+                      <span style={{ color: T.inkMid }}>{r.trigger_kind}: </span>
+                      <span style={{ fontWeight: 600 }}>{r.cnt}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Featured entries */}
+            {data.featured && data.featured.length > 0 && (
+              <div style={{ marginBottom: 10, padding: "6px 0", borderBottom: `1px solid ${T.ruleLight}` }}>
+                <div style={{ fontSize: 10, fontWeight: 600, color: T.inkLight, marginBottom: 4 }}>FEATURED CALLS</div>
+                {data.featured.map(f => (
+                  <div key={f.entry_id} style={{ fontSize: 11, fontFamily: T.mono, padding: "2px 0", color: T.inkMid }}>
+                    <span style={{ color: "#f39c12" }}>★</span> {f.entity_slug} ({f.index_name}) — {f.trigger_kind}
+                    {f.narrative_markdown && <div style={{ fontSize: 10, color: T.inkFaint, marginLeft: 14 }}>{f.narrative_markdown.substring(0, 100)}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Calibration */}
+            {data.calibration && data.calibration.length > 0 && (
+              <div style={{ marginBottom: 10, padding: "6px 0" }}>
+                <div style={{ fontSize: 10, fontWeight: 600, color: T.inkLight, marginBottom: 4 }}>CALIBRATION</div>
+                <div style={{ display: "grid", gridTemplateColumns: "auto auto auto", gap: "2px 12px", fontSize: 11, fontFamily: T.mono }}>
+                  {data.calibration.map((c, i) => (
+                    <div key={i} style={{ display: "contents" }}>
+                      <span style={{ color: T.inkMid }}>{c.trigger_kind}</span>
+                      <span style={{ color: c.outcome_category === "validated" ? "#27ae60" : c.outcome_category === "not_borne_out" ? "#e74c3c" : T.inkFaint }}>{c.outcome_category}</span>
+                      <span>{c.cnt}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </Section>
+  );
+}
+
+
 function ABMPanel() {
   const [campaigns, setCampaigns] = useState([]);
   const [config, setConfig] = useState(null);
@@ -4369,6 +4466,7 @@ export default function OpsDashboard() {
                 <GraphPanel />
                 <BacktestPanel />
                 <ABMPanel />
+                <TrackRecordPanel />
               </div>
             )}
             {tab === "playground" && (

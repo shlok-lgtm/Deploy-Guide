@@ -5,7 +5,7 @@ Protected by X-Admin-Key (same pattern as existing admin endpoints).
 import os
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 import traceback as _traceback_mod
 from fastapi import APIRouter, BackgroundTasks, Request, HTTPException, Query
 from fastapi.responses import JSONResponse
@@ -2958,6 +2958,7 @@ async def data_catalog_endpoint(request: Request):
 
 
 # =============================================================================
+# =============================================================================
 # Composition Playground — ops-auth gated v1
 # =============================================================================
 
@@ -3114,6 +3115,247 @@ async def playground_submissions(
         } for r in (rows or [])],
         "count": len(rows or []),
     }
+
+
+# =============================================================================
+# Track Record — internal ops ledger
+# =============================================================================
+
+@router.get("/track-record/entries")
+async def track_record_entries(
+    request: Request,
+    entity: Optional[str] = None,
+    trigger_kind: Optional[str] = None,
+    featured: Optional[bool] = None,
+    since: Optional[str] = None,
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    """List track record entries with filtering."""
+    _check_admin_key(request)
+    try:
+        conditions = []
+        params = []
+
+        if entity:
+            conditions.append("entity_slug = %s")
+            params.append(entity)
+        if trigger_kind:
+            conditions.append("trigger_kind = %s")
+            params.append(trigger_kind)
+        if featured is not None:
+            conditions.append("featured = %s")
+            params.append(featured)
+        if since:
+            conditions.append("triggered_at >= %s")
+            params.append(since)
+
+        where = "WHERE " + " AND ".join(conditions) if conditions else ""
+        params.append(limit)
+
+        rows = fetch_all(
+            f"""SELECT entry_id, entry_type, entity_slug, index_name,
+                       trigger_kind, trigger_detail, triggered_at,
+                       featured, featured_by, featured_at,
+                       narrative_markdown, content_hash, created_at
+                FROM track_record_entries
+                {where}
+                ORDER BY triggered_at DESC LIMIT %s""",
+            tuple(params),
+        )
+
+        # Add followup status for each entry
+        entries = []
+        for row in (rows or []):
+            entry = dict(row)
+            followups = fetch_all(
+                "SELECT checkpoint, outcome_category FROM track_record_followups WHERE entry_id = %s",
+                (str(row["entry_id"]),),
+            )
+            entry["followups"] = [dict(f) for f in followups] if followups else []
+            entries.append(entry)
+
+        return {"entries": entries, "count": len(entries)}
+    except Exception as e:
+        logger.warning(f"Track record entries failed: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.get("/track-record/entries/{entry_id}")
+async def track_record_entry_detail(entry_id: str, request: Request):
+    """Single entry with full detail + all followups."""
+    _check_admin_key(request)
+    try:
+        entry = fetch_one(
+            "SELECT * FROM track_record_entries WHERE entry_id = %s::uuid",
+            (entry_id,),
+        )
+        if not entry:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="Entry not found")
+
+        followups = fetch_all(
+            "SELECT * FROM track_record_followups WHERE entry_id = %s::uuid ORDER BY checkpoint",
+            (entry_id,),
+        )
+
+        result = dict(entry)
+        result["followups"] = [dict(f) for f in followups] if followups else []
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.post("/track-record/entries/{entry_id}/feature")
+async def track_record_feature(entry_id: str, request: Request):
+    """Promote an auto entry to featured with narrative."""
+    _check_admin_key(request)
+    try:
+        body = await request.json()
+        narrative = body.get("narrative_markdown", "")
+        featured_by = body.get("featured_by", "admin")
+
+        execute(
+            """UPDATE track_record_entries
+               SET featured = TRUE, featured_by = %s, featured_at = NOW(),
+                   narrative_markdown = %s
+               WHERE entry_id = %s::uuid""",
+            (featured_by, narrative, entry_id),
+        )
+        return {"status": "featured", "entry_id": entry_id}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.post("/track-record/entries")
+async def track_record_create_manual(request: Request):
+    """Create a manual featured entry."""
+    _check_admin_key(request)
+    try:
+        body = await request.json()
+        from app.track_record import _get_entity_baseline, _compute_content_hash, _get_state_root
+
+        entity_slug = body["entity_slug"]
+        index_name = body.get("index_name", "sii")
+        narrative = body.get("narrative_markdown", "")
+        featured_by = body.get("featured_by", "admin")
+
+        baseline = _get_entity_baseline(entity_slug, index_name)
+        trigger_detail = body.get("trigger_detail", {"source": "manual"})
+        now = datetime.now(timezone.utc)
+        content_hash = _compute_content_hash(
+            entity_slug, "manual", trigger_detail, now.isoformat(), baseline,
+        )
+
+        import json
+        execute(
+            """INSERT INTO track_record_entries
+               (entry_type, entity_slug, index_name, trigger_kind,
+                trigger_detail, triggered_at, state_root_at_trigger,
+                baseline_snapshot, narrative_markdown,
+                featured, featured_by, featured_at,
+                content_hash)
+               VALUES ('featured', %s, %s, 'manual', %s, NOW(), %s, %s, %s,
+                       TRUE, %s, NOW(), %s)""",
+            (
+                entity_slug, index_name,
+                json.dumps(trigger_detail),
+                _get_state_root(),
+                json.dumps(baseline, default=str),
+                narrative,
+                featured_by,
+                content_hash,
+            ),
+        )
+        return {"status": "created", "content_hash": content_hash}
+    except Exception as e:
+        import traceback
+        return JSONResponse({"error": str(e), "traceback": traceback.format_exc()}, status_code=500)
+
+
+@router.post("/track-record/followups/{followup_id}/narrative")
+async def track_record_followup_narrative(followup_id: str, request: Request):
+    """Add human narrative to a computed followup."""
+    _check_admin_key(request)
+    try:
+        body = await request.json()
+        execute(
+            "UPDATE track_record_followups SET narrative_markdown = %s WHERE followup_id = %s::uuid",
+            (body.get("narrative_markdown", ""), followup_id),
+        )
+        return {"status": "updated"}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.get("/track-record/summary")
+async def track_record_summary(request: Request):
+    """Summary for the ops dashboard section."""
+    _check_admin_key(request)
+    try:
+        # Total entries
+        total = fetch_one("SELECT COUNT(*) as cnt FROM track_record_entries")
+
+        # By trigger kind in last 30 days
+        by_kind = fetch_all("""
+            SELECT trigger_kind, COUNT(*) as cnt
+            FROM track_record_entries
+            WHERE triggered_at >= NOW() - INTERVAL '30 days'
+            GROUP BY trigger_kind ORDER BY cnt DESC
+        """)
+
+        # Featured entries
+        featured = fetch_all("""
+            SELECT entry_id, entity_slug, index_name, trigger_kind,
+                   narrative_markdown, featured_at
+            FROM track_record_entries
+            WHERE featured = TRUE
+            ORDER BY featured_at DESC LIMIT 10
+        """)
+
+        # Pending followups this week
+        pending = fetch_all("""
+            SELECT e.entry_id, e.entity_slug, e.trigger_kind, e.triggered_at,
+                   CASE
+                     WHEN e.triggered_at <= NOW() - INTERVAL '90 days' THEN '90d'
+                     WHEN e.triggered_at <= NOW() - INTERVAL '60 days' THEN '60d'
+                     ELSE '30d'
+                   END as next_checkpoint
+            FROM track_record_entries e
+            WHERE (
+                (e.triggered_at <= NOW() - INTERVAL '30 days'
+                 AND NOT EXISTS (SELECT 1 FROM track_record_followups f WHERE f.entry_id = e.entry_id AND f.checkpoint = '30d'))
+                OR
+                (e.triggered_at <= NOW() - INTERVAL '60 days'
+                 AND NOT EXISTS (SELECT 1 FROM track_record_followups f WHERE f.entry_id = e.entry_id AND f.checkpoint = '60d'))
+                OR
+                (e.triggered_at <= NOW() - INTERVAL '90 days'
+                 AND NOT EXISTS (SELECT 1 FROM track_record_followups f WHERE f.entry_id = e.entry_id AND f.checkpoint = '90d'))
+            )
+            ORDER BY e.triggered_at LIMIT 20
+        """)
+
+        # Calibration: outcome distribution
+        calibration = fetch_all("""
+            SELECT e.trigger_kind, f.outcome_category, COUNT(*) as cnt
+            FROM track_record_followups f
+            JOIN track_record_entries e ON f.entry_id = e.entry_id
+            WHERE f.outcome_category != 'insufficient_data'
+            GROUP BY e.trigger_kind, f.outcome_category
+            ORDER BY e.trigger_kind, f.outcome_category
+        """)
+
+        return {
+            "total_entries": total["cnt"] if total else 0,
+            "by_trigger_kind_30d": [dict(r) for r in by_kind] if by_kind else [],
+            "featured": [dict(r) for r in featured] if featured else [],
+            "pending_followups": [dict(r) for r in pending] if pending else [],
+            "calibration": [dict(r) for r in calibration] if calibration else [],
+        }
+    except Exception as e:
+        logger.warning(f"Track record summary failed: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 def register_ops_routes(app):

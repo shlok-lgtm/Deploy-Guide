@@ -2487,6 +2487,22 @@ async def run_slow_cycle_parallel():
     except Exception as e:
         logger.warning(f"Provenance recheck failed: {e}")
 
+    # Track record: auto-log qualifying entries from this cycle's signals
+    try:
+        from app.track_record import detect_and_log_entries
+        tr_result = detect_and_log_entries()
+        logger.info(f"Track record: {tr_result.get('entries_logged', 0)} entries logged")
+    except Exception as e:
+        logger.error(f"track_record auto-log failed: {e}", exc_info=True)
+
+    # Track record: evaluate pending followups (daily)
+    try:
+        from app.track_record_followups import evaluate_pending_followups
+        fu_result = evaluate_pending_followups()
+        logger.info(f"Track record followups: {fu_result.get('evaluated', 0)} evaluated")
+    except Exception as e:
+        logger.error(f"track_record followup eval failed: {e}", exc_info=True)
+
     # Flush API usage tracker
     try:
         from app.api_usage_tracker import flush

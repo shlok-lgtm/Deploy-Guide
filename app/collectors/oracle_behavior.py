@@ -44,9 +44,10 @@ SYMBOL_TO_COINGECKO = {
     "stETH": "staked-ether",
 }
 
-# Stress thresholds
-DEVIATION_STRESS_THRESHOLD = 0.5   # percent
-LATENCY_STRESS_THRESHOLD = 3600    # seconds (1 hour)
+# Stress thresholds — FALLBACK defaults when per-feed config is missing
+DEVIATION_STRESS_THRESHOLD = 0.5   # percent (fallback)
+LATENCY_STRESS_THRESHOLD = 3600    # seconds (fallback — 1 hour)
+HEARTBEAT_BUFFER = 1.1             # 10% buffer past heartbeat before flagging
 
 # Fallback public RPCs
 FALLBACK_RPCS = {
@@ -283,13 +284,17 @@ def _handle_stress_event(oracle: dict, reading: dict, deviation_pct: float, late
     asset = oracle["asset_symbol"]
     chain = oracle["chain"]
 
-    # Classify event type
+    # Classify event type using per-feed thresholds
     abs_dev = abs(deviation_pct)
-    if latency > LATENCY_STRESS_THRESHOLD and abs_dev < DEVIATION_STRESS_THRESHOLD:
+    feed_dev = float(oracle.get("deviation_threshold_pct") or DEVIATION_STRESS_THRESHOLD)
+    feed_hb = oracle.get("heartbeat_seconds")
+    lat_thresh = int(float(feed_hb) * HEARTBEAT_BUFFER) if feed_hb else LATENCY_STRESS_THRESHOLD
+
+    if latency > lat_thresh and abs_dev < feed_dev:
         event_type = "stale_price"
     elif abs_dev > 5.0:
         event_type = "flash_deviation"
-    elif abs_dev > DEVIATION_STRESS_THRESHOLD:
+    elif abs_dev > feed_dev:
         event_type = "high_deviation"
     else:
         event_type = "stale_price"
@@ -460,6 +465,7 @@ async def collect_oracle_readings() -> dict:
             try:
                 reading = await _read_oracle(client, oracle)
                 if not reading:
+                    logger.error(f"[oracle] {oracle.get('oracle_name', '?')}: read returned None (no RPC or bad response)")
                     return None
 
                 oracle_price = reading["oracle_price"]
@@ -482,9 +488,15 @@ async def collect_oracle_readings() -> dict:
                     deviation_pct = ((oracle_price - cex_price) / cex_price) * 100
                     deviation_abs = abs(oracle_price - cex_price)
 
+                # Per-feed stress thresholds from oracle_registry
+                feed_dev_threshold = oracle.get("deviation_threshold_pct")
+                feed_heartbeat = oracle.get("heartbeat_seconds")
+                dev_thresh = float(feed_dev_threshold) if feed_dev_threshold else DEVIATION_STRESS_THRESHOLD
+                lat_thresh = int(float(feed_heartbeat) * HEARTBEAT_BUFFER) if feed_heartbeat else LATENCY_STRESS_THRESHOLD
+
                 is_stress = (
-                    abs(deviation_pct) > DEVIATION_STRESS_THRESHOLD
-                    or latency > LATENCY_STRESS_THRESHOLD
+                    abs(deviation_pct) > dev_thresh
+                    or latency > lat_thresh
                 )
 
                 now = datetime.now(timezone.utc)
@@ -549,10 +561,10 @@ async def collect_oracle_readings() -> dict:
             else:
                 results["errors"].append(oracles[i].get("oracle_name", "unknown"))
 
-    logger.info(
-        f"Oracle readings: read={results['oracles_read']} "
+    logger.error(
+        f"[oracle] summary: read={results['oracles_read']} "
         f"stored={results['readings_stored']} "
         f"stress={results['stress_events_detected']} "
-        f"errors={len(results['errors'])}"
+        f"errors={results['errors']}"
     )
     return results

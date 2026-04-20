@@ -731,7 +731,11 @@ async def well_known_agent_card():
 async def robots_txt():
     from fastapi.responses import PlainTextResponse
     return PlainTextResponse(
-        content="User-agent: *\nAllow: /\n\n"
+        content="# Machine-readable alternates available at {path}.md\n"
+        "# Full sitemap: https://basisprotocol.xyz/sitemap.xml\n"
+        "# Markdown sitemap: https://basisprotocol.xyz/sitemap-markdown.xml\n"
+        "# LLM manifest: https://basisprotocol.xyz/llms.txt\n\n"
+        "User-agent: *\nAllow: /\n\n"
         "User-agent: GPTBot\nAllow: /\n\n"
         "User-agent: ClaudeBot\nAllow: /\n\n"
         "User-agent: Claude-SearchBot\nAllow: /\n\n"
@@ -740,9 +744,68 @@ async def robots_txt():
         "User-agent: CCBot\nAllow: /\n\n"
         "User-agent: Googlebot\nAllow: /\n\n"
         "User-agent: Bingbot\nAllow: /\n\n"
-        "Sitemap: https://basisprotocol.xyz/sitemap.xml\n",
+        "Sitemap: https://basisprotocol.xyz/sitemap.xml\n"
+        "Sitemap: https://basisprotocol.xyz/sitemap-markdown.xml\n",
         media_type="text/plain",
     )
+
+
+@app.get("/llms.txt")
+async def llms_txt():
+    """LLM-readable site manifest per llmstxt.org spec."""
+    from fastapi.responses import PlainTextResponse
+    import os
+    llms_path = os.path.join(os.path.dirname(__file__), "templates", "llms_txt.md")
+    try:
+        with open(llms_path) as f:
+            content = f.read()
+    except FileNotFoundError:
+        content = "# Basis Protocol\n\nLLM manifest not found."
+    return PlainTextResponse(
+        content=content,
+        media_type="text/markdown",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+# =============================================================================
+# Markdown alternates (.md suffix)
+# =============================================================================
+
+@app.get("/entity/{slug}.md")
+async def entity_markdown(slug: str):
+    """Markdown alternate for entity pages."""
+    from fastapi.responses import PlainTextResponse
+    from app.rendering.markdown_alternate import render_entity_markdown
+    content = render_entity_markdown(slug.lower())
+    return PlainTextResponse(content=content, media_type="text/markdown")
+
+
+@app.get("/rankings.md")
+async def rankings_markdown():
+    """Markdown alternate for rankings page."""
+    from fastapi.responses import PlainTextResponse
+    from app.rendering.markdown_alternate import render_rankings_markdown
+    content = render_rankings_markdown()
+    return PlainTextResponse(content=content, media_type="text/markdown")
+
+
+@app.get("/proof/{index_name}/{slug}.md")
+async def proof_markdown(index_name: str, slug: str):
+    """Markdown alternate for proof pages."""
+    from fastapi.responses import PlainTextResponse
+    from app.rendering.markdown_alternate import render_proof_markdown
+    content = render_proof_markdown(index_name.lower(), slug.lower())
+    return PlainTextResponse(content=content, media_type="text/markdown")
+
+
+@app.get("/methodology.md")
+async def methodology_markdown():
+    """Markdown alternate for methodology page."""
+    from fastapi.responses import PlainTextResponse
+    from app.rendering.markdown_alternate import render_methodology_markdown
+    content = render_methodology_markdown()
+    return PlainTextResponse(content=content, media_type="text/markdown")
 
 
 # =============================================================================
@@ -1030,7 +1093,44 @@ async def sitemap_xml():
             continue
         seen.add(slug)
         lastmod = ts.strftime("%Y-%m-%d") if hasattr(ts, "strftime") else str(ts)[:10] if ts else ""
-        xml_parts.append(f"<url><loc>https://basisprotocol.xyz/entity/{slug}</loc><lastmod>{lastmod}</lastmod></url>")
+        xml_parts.append(
+            f'<url><loc>https://basisprotocol.xyz/entity/{slug}</loc>'
+            f'<lastmod>{lastmod}</lastmod>'
+            f'<xhtml:link rel="alternate" type="text/markdown" '
+            f'href="https://basisprotocol.xyz/entity/{slug}.md" />'
+            f'</url>'
+        )
+    xml_parts.append("</urlset>")
+
+    return Response(content="\n".join(xml_parts), media_type="application/xml",
+                    headers={"Cache-Control": "public, max-age=3600"})
+
+
+@app.get("/sitemap-markdown.xml")
+async def sitemap_markdown_xml():
+    """Sitemap listing only .md alternate URLs."""
+    from starlette.concurrency import run_in_threadpool
+    from fastapi.responses import Response
+
+    def _build():
+        urls = []
+        rows = fetch_all("SELECT st.symbol, s.computed_at FROM scores s JOIN stablecoins st ON st.id=s.stablecoin_id")
+        for r in (rows or []):
+            urls.append((r["symbol"].lower(), r["computed_at"]))
+        rows = fetch_all("SELECT DISTINCT ON (protocol_slug) protocol_slug, computed_at FROM psi_scores ORDER BY protocol_slug, computed_at DESC")
+        for r in (rows or []):
+            urls.append((r["protocol_slug"], r["computed_at"]))
+        return urls
+
+    entities = await run_in_threadpool(_build)
+    seen = set()
+    xml_parts = ['<?xml version="1.0" encoding="UTF-8"?>', '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
+    for slug, ts in entities:
+        if slug in seen:
+            continue
+        seen.add(slug)
+        lastmod = ts.strftime("%Y-%m-%d") if hasattr(ts, "strftime") else str(ts)[:10] if ts else ""
+        xml_parts.append(f"<url><loc>https://basisprotocol.xyz/entity/{slug}.md</loc><lastmod>{lastmod}</lastmod></url>")
     xml_parts.append("</urlset>")
 
     return Response(content="\n".join(xml_parts), media_type="application/xml",
@@ -7814,8 +7914,10 @@ def _normalize_source_domain(raw_domain: str, endpoint: str = "") -> str:
         if "getsourcecode" in path or "getabi" in path: return "etherscan_sourcecode"
         return "etherscan_holders"
 
-    # GeckoTerminal (separate from CoinGecko Pro API)
+    # GeckoTerminal (separate domain or via CoinGecko onchain API)
     if "geckoterminal" in host:
+        return "geckoterminal_dex"
+    if "gecko-terminal" in host:
         return "geckoterminal_dex"
 
     # CoinGecko — split by endpoint
