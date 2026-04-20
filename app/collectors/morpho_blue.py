@@ -231,7 +231,12 @@ def _batch_upsert_markets(rows: list[dict[str, Any]]) -> int:
     """Batch upsert into morpho_markets using execute_values (one round trip)."""
     if not rows:
         return 0
-    tuples = [tuple(r[c] for c in _MARKET_COLUMNS) for r in rows]
+    # Dedup by market_id (ON CONFLICT target) — last-write-wins
+    seen = {}
+    for r in rows:
+        seen[r.get("market_id", "")] = r
+    deduped = list(seen.values())
+    tuples = [tuple(r[c] for c in _MARKET_COLUMNS) for r in deduped]
     sql = """
         INSERT INTO morpho_markets
             (market_id, chain, loan_token, loan_token_symbol, loan_token_decimals,

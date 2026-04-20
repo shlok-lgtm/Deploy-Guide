@@ -7865,8 +7865,10 @@ def _normalize_source_domain(raw_domain: str, endpoint: str = "") -> str:
         if "getsourcecode" in path or "getabi" in path: return "etherscan_sourcecode"
         return "etherscan_holders"
 
-    # GeckoTerminal (separate from CoinGecko Pro API)
+    # GeckoTerminal (separate domain or via CoinGecko onchain API)
     if "geckoterminal" in host:
+        return "geckoterminal_dex"
+    if "gecko-terminal" in host:
         return "geckoterminal_dex"
 
     # CoinGecko — split by endpoint

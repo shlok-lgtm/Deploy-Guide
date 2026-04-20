@@ -465,6 +465,7 @@ async def collect_oracle_readings() -> dict:
             try:
                 reading = await _read_oracle(client, oracle)
                 if not reading:
+                    logger.error(f"[oracle] {oracle.get('oracle_name', '?')}: read returned None (no RPC or bad response)")
                     return None
 
                 oracle_price = reading["oracle_price"]
@@ -560,10 +561,10 @@ async def collect_oracle_readings() -> dict:
             else:
                 results["errors"].append(oracles[i].get("oracle_name", "unknown"))
 
-    logger.info(
-        f"Oracle readings: read={results['oracles_read']} "
+    logger.error(
+        f"[oracle] summary: read={results['oracles_read']} "
         f"stored={results['readings_stored']} "
         f"stress={results['stress_events_detected']} "
-        f"errors={len(results['errors'])}"
+        f"errors={results['errors']}"
     )
     return results
