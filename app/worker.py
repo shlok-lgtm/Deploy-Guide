@@ -2406,12 +2406,12 @@ async def run_slow_cycle_parallel():
                     ('0xF4030086522a5bEEa4988F8cA5B36dbC97BeE88c', 'Chainlink BTC/USD', 'chainlink',
                      'ethereum', 'BTC', 'usd', 8, 'latestRoundData', NULL, NULL),
                     ('0x86392dC19c0b719886221c78AB11eb8Cf5c52812', 'Chainlink stETH/ETH', 'chainlink',
-                     'ethereum', 'stETH', 'eth', 18, 'latestRoundData', 'stablecoin', 'steth'),
-                    ('0x8250f4aF4B972684F7b336503E2D6dFeDeB1487a', 'Pyth USDC/USD', 'pyth',
-                     'base', 'USDC', 'usd', 6, 'getPrice', 'stablecoin', 'usdc')
+                     'ethereum', 'stETH', 'eth', 18, 'latestRoundData', 'stablecoin', 'steth')
                 ON CONFLICT (oracle_address, chain, asset_symbol) DO NOTHING
             """)
-            logger.error("=== ORACLE: seeded 7 oracle feeds into oracle_registry ===")
+            # Remove Pyth — pull-oracle ABI incompatible with Chainlink read path
+            _exec_mig("DELETE FROM oracle_registry WHERE oracle_provider = 'pyth'")
+            logger.error("=== ORACLE: seeded 6 oracle feeds into oracle_registry ===")
     except Exception as e:
         logger.warning(f"Oracle table creation/seeding failed (non-critical): {e}")
 
@@ -2736,12 +2736,11 @@ async def main():
                     ('0xF4030086522a5bEEa4988F8cA5B36dbC97BeE88c', 'Chainlink BTC/USD', 'chainlink',
                      'ethereum', 'BTC', 'usd', 8, 'latestRoundData', NULL, NULL),
                     ('0x86392dC19c0b719886221c78AB11eb8Cf5c52812', 'Chainlink stETH/ETH', 'chainlink',
-                     'ethereum', 'stETH', 'eth', 18, 'latestRoundData', 'stablecoin', 'steth'),
-                    ('0x8250f4aF4B972684F7b336503E2D6dFeDeB1487a', 'Pyth USDC/USD', 'pyth',
-                     'base', 'USDC', 'usd', 6, 'getPrice', 'stablecoin', 'usdc')
+                     'ethereum', 'stETH', 'eth', 18, 'latestRoundData', 'stablecoin', 'steth')
                 ON CONFLICT (oracle_address, chain, asset_symbol) DO NOTHING
             """)
-            logger.info("Oracle registry seeded with 7 feeds at startup")
+            execute("DELETE FROM oracle_registry WHERE oracle_provider = 'pyth'")
+            logger.info("Oracle registry seeded with 6 Chainlink feeds at startup")
     except Exception as e:
         logger.error(f"[startup] Oracle table creation failed: {e}")
 
