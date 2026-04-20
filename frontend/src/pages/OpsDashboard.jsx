@@ -3944,6 +3944,153 @@ function AbmLogSection({ campaignId, log, onAddLog, busy }) {
   );
 }
 
+function PlaygroundPanel() {
+  const [portfolio, setPortfolio] = useState('[{"asset_symbol":"USDC","amount":500000},{"asset_symbol":"USDT","amount":300000},{"asset_symbol":"DAI","amount":200000}]');
+  const [result, setResult] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [email, setEmail] = useState("");
+  const [emailSent, setEmailSent] = useState(false);
+  const [submissions, setSubmissions] = useState([]);
+  const [flash, showFlash] = useFlash();
+
+  const compute = async () => {
+    setLoading(true);
+    setResult(null);
+    setEmailSent(false);
+    try {
+      let parsed;
+      try { parsed = JSON.parse(portfolio); } catch { showFlash("Invalid JSON", false); setLoading(false); return; }
+      const res = await opsFetch("/api/ops/playground/compute", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ portfolio: parsed }),
+      });
+      setResult(res);
+      loadSubmissions();
+    } catch (e) { showFlash(e.message, false); }
+    setLoading(false);
+  };
+
+  const requestReport = async () => {
+    if (!result?.submission_id || !email) return;
+    try {
+      await opsFetch("/api/ops/playground/request-report", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ submission_id: result.submission_id, email }),
+      });
+      setEmailSent(true);
+      showFlash(`Report link sent to ${email}`, true);
+    } catch (e) { showFlash(e.message, false); }
+  };
+
+  const loadSubmissions = async () => {
+    try {
+      const res = await opsFetch("/api/ops/playground/submissions?limit=20");
+      setSubmissions(res.submissions || []);
+    } catch {}
+  };
+
+  useEffect(() => { loadSubmissions(); }, []);
+
+  const cqi = result?.cqi;
+  const stress = result?.stress;
+
+  return (
+    <>
+      <Section title="COMPOSITION PLAYGROUND">
+        <Flash flash={flash} />
+        <div style={{ padding: "0 10px" }}>
+          <Lbl>Portfolio (JSON array)</Lbl>
+          <textarea value={portfolio} onChange={e => setPortfolio(e.target.value)}
+            style={{ width: "100%", height: 100, fontFamily: T.mono, fontSize: 11, padding: 8,
+              border: `1px solid ${T.ruleMid}`, background: T.paper, resize: "vertical" }} />
+          <div style={{ margin: "8px 0" }}>
+            <button onClick={compute} disabled={loading}
+              style={{ fontSize: 11, fontFamily: T.mono, padding: "4px 16px", border: `1px solid ${T.ink}`,
+                background: T.ink, color: T.paper, cursor: "pointer", opacity: loading ? 0.5 : 1 }}>
+              {loading ? "Computing..." : "Compute CQI + Stress"}
+            </button>
+          </div>
+          <p style={{ fontSize: 9, color: T.inkFaint, fontFamily: T.mono }}>
+            We'll send you one email with a link to your report. We won't use your email for anything else.
+            Your portfolio data is retained for product analytics; to delete it, email shlok@basisprotocol.xyz.
+          </p>
+
+          {cqi && (
+            <div style={{ marginTop: 12, borderTop: `1px solid ${T.ruleLight}`, paddingTop: 12 }}>
+              <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 8 }}>
+                <div><Lbl>Aggregate CQI</Lbl><div style={{ fontSize: 24, fontFamily: T.mono, fontWeight: 700 }}>{cqi.aggregate_cqi?.toFixed(1)}</div></div>
+                <div><Lbl>Grade</Lbl><div style={{ fontSize: 18, fontFamily: T.mono }}>{cqi.grade}</div></div>
+                <div><Lbl>Positions</Lbl><div style={{ fontSize: 14, fontFamily: T.mono }}>{cqi.position_count}</div></div>
+              </div>
+              {stress && (
+                <div style={{ marginBottom: 8 }}>
+                  <Lbl>Stress Scenarios</Lbl>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {stress.scenarios?.map((s, i) => (
+                      <div key={i} style={{ fontSize: 10, fontFamily: T.mono, padding: "2px 8px",
+                        background: s.pass ? "rgba(45,107,69,0.1)" : "rgba(192,57,43,0.1)",
+                        color: s.pass ? "#2d6b45" : "#c0392b", borderRadius: 2 }}>
+                        {s.name}: {s.pass ? "PASS" : "FAIL"} ({s.post_shock_cqi?.toFixed(1)})
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {result?.preview_markdown && (
+                <details style={{ marginTop: 8 }}>
+                  <summary style={{ fontSize: 10, color: T.inkFaint, cursor: "pointer" }}>Basel SCO60 Preview</summary>
+                  <pre style={{ fontSize: 10, fontFamily: T.mono, whiteSpace: "pre-wrap", marginTop: 4,
+                    background: T.paperWarm, padding: 8, maxHeight: 300, overflow: "auto" }}>
+                    {result.preview_markdown}
+                  </pre>
+                </details>
+              )}
+              {!emailSent && (
+                <div style={{ marginTop: 12, display: "flex", gap: 8, alignItems: "center" }}>
+                  <input type="email" placeholder="Email for full report" value={email}
+                    onChange={e => setEmail(e.target.value)}
+                    style={{ fontFamily: T.mono, fontSize: 11, padding: "4px 8px", border: `1px solid ${T.ruleMid}`,
+                      background: T.paper, width: 250 }} />
+                  <button onClick={requestReport} disabled={!email}
+                    style={{ fontSize: 11, fontFamily: T.mono, padding: "4px 12px", border: `1px solid ${T.ink}`,
+                      background: "transparent", cursor: "pointer" }}>
+                    Get Full Report
+                  </button>
+                </div>
+              )}
+              {emailSent && <p style={{ fontSize: 11, color: "#2d6b45", fontFamily: T.mono, marginTop: 8 }}>Report link sent to {email}. Check your inbox.</p>}
+            </div>
+          )}
+        </div>
+      </Section>
+
+      {submissions.length > 0 && (
+        <Section title="RECENT SUBMISSIONS">
+          <div style={{ padding: "0 10px" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "auto auto auto auto auto", gap: "2px 10px", fontSize: 10, fontFamily: T.mono }}>
+              <span style={{ fontWeight: 600, color: T.inkLight }}>Time</span>
+              <span style={{ fontWeight: 600, color: T.inkLight, textAlign: "right" }}>Positions</span>
+              <span style={{ fontWeight: 600, color: T.inkLight, textAlign: "right" }}>CQI</span>
+              <span style={{ fontWeight: 600, color: T.inkLight }}>Report</span>
+              <span style={{ fontWeight: 600, color: T.inkLight, textAlign: "right" }}>Views</span>
+              {submissions.map(s => (
+                <div key={s.id} style={{ display: "contents" }}>
+                  <span style={{ color: T.inkMid }}>{(s.submitted_at || "").slice(5, 16)}</span>
+                  <span style={{ textAlign: "right" }}>{s.position_count}</span>
+                  <span style={{ textAlign: "right" }}>{s.aggregate_cqi?.toFixed(1) || "—"}</span>
+                  <span style={{ color: s.report_requested ? "#2d6b45" : T.inkFaint }}>{s.report_requested ? "sent" : "—"}</span>
+                  <span style={{ textAlign: "right" }}>{s.access_count || 0}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </Section>
+      )}
+    </>
+  );
+}
+
+
 export default function OpsDashboard() {
   // Check for protocol deep-dive route
   const pathMatch = window.location.pathname.match(/^\/ops\/protocol\/([^/]+)/);
@@ -4056,6 +4203,7 @@ export default function OpsDashboard() {
     { id: "metrics", label: "Metrics" },
     { id: "reports", label: "Reports" },
     { id: "tools", label: "Tools" },
+    { id: "playground", label: "Playground" },
   ];
 
   return (
@@ -4221,6 +4369,11 @@ export default function OpsDashboard() {
                 <GraphPanel />
                 <BacktestPanel />
                 <ABMPanel />
+              </div>
+            )}
+            {tab === "playground" && (
+              <div style={{ animation: "fadeIn 0.3s ease" }}>
+                <PlaygroundPanel />
               </div>
             )}
           </div>

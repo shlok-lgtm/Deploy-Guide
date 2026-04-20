@@ -1037,6 +1037,55 @@ async def sitemap_xml():
                     headers={"Cache-Control": "public, max-age=3600"})
 
 
+@app.get("/playground/report/{token}")
+async def playground_report(token: str):
+    """Public email-gated report link. noindex, nofollow."""
+    from starlette.concurrency import run_in_threadpool
+    from fastapi.responses import HTMLResponse
+
+    def _get_and_render():
+        sub = fetch_one(
+            "SELECT * FROM playground_submissions WHERE report_link_token = %s",
+            (token,),
+        )
+        if not sub:
+            return None, "not_found"
+        from datetime import datetime, timezone
+        if sub.get("report_link_expires") and sub["report_link_expires"] < datetime.now(timezone.utc):
+            return None, "expired"
+
+        # Update access tracking
+        is_first = sub.get("email_verified_at") is None
+        execute("""
+            UPDATE playground_submissions SET
+                report_access_count = report_access_count + 1,
+                report_accessed_at = NOW()
+                %s
+            WHERE submission_id = %%s
+        """ % (", email_verified_at = NOW()" if is_first else ""), (sub["submission_id"],))
+
+        portfolio = sub.get("portfolio") or []
+        cqi = sub.get("computed_cqi") or {}
+
+        from app.playground import render_basel_sco60_full
+        return render_basel_sco60_full(portfolio, cqi), None
+
+    result = await run_in_threadpool(_get_and_render)
+    html, error = result
+
+    if error == "not_found":
+        raise HTTPException(status_code=404, detail="Report not found or link invalid")
+    if error == "expired":
+        raise HTTPException(status_code=404, detail="This report link has expired")
+
+    # Add noindex meta tag
+    if html and "<head>" in html:
+        html = html.replace("<head>", '<head>\n<meta name="robots" content="noindex, nofollow">')
+
+    return HTMLResponse(content=html or "Report generation failed",
+                        headers={"Cache-Control": "private, no-store"})
+
+
 # =============================================================================
 # 1. GET /api/health
 # =============================================================================

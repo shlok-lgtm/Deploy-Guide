@@ -2957,6 +2957,165 @@ async def data_catalog_endpoint(request: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+# =============================================================================
+# Composition Playground — ops-auth gated v1
+# =============================================================================
+
+@router.post("/playground/compute")
+async def playground_compute(request: Request):
+    """Compute CQI, stress, and Basel preview for a portfolio."""
+    _check_admin_key(request)
+    import hashlib as _ph
+    from datetime import datetime as _pdt, timezone as _ptz
+
+    body = await request.json()
+    portfolio = body.get("portfolio", [])
+
+    from app.playground import validate_portfolio, compute_aggregate_cqi, compute_stress_scenarios, render_basel_sco60_preview, compute_content_hash
+
+    errors = validate_portfolio(portfolio)
+    if errors:
+        return JSONResponse({"errors": [{"field": e.field, "message": e.message} for e in errors]}, status_code=400)
+
+    # Rate limit: 10 per IP per hour
+    ip = request.client.host if request.client else "unknown"
+    ip_hash = _ph.sha256(ip.encode()).hexdigest()
+    try:
+        recent = fetch_one(
+            "SELECT COUNT(*) as cnt FROM playground_submissions WHERE submitter_ip_hash = %s AND submitted_at > NOW() - INTERVAL '1 hour'",
+            (ip_hash,),
+        )
+        if recent and recent["cnt"] >= 10:
+            return JSONResponse({"error": "Rate limit exceeded (10 submissions per hour)"}, status_code=429)
+    except Exception:
+        pass
+
+    cqi = compute_aggregate_cqi(portfolio)
+    stress = compute_stress_scenarios(portfolio)
+    preview = render_basel_sco60_preview(portfolio, cqi)
+
+    now = _pdt.now(_ptz.utc)
+    content_hash = compute_content_hash(portfolio, now.isoformat())
+
+    # Store submission
+    try:
+        row = fetch_one("""
+            INSERT INTO playground_submissions
+                (submitter_ip_hash, portfolio, computed_cqi, computed_stress, content_hash)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING submission_id
+        """, (ip_hash, json.dumps(portfolio), json.dumps(cqi, default=str), json.dumps(stress, default=str), content_hash))
+        submission_id = str(row["submission_id"]) if row else None
+    except Exception as e:
+        logger.warning(f"Playground submission store failed: {e}")
+        submission_id = None
+
+    return {
+        "submission_id": submission_id,
+        "cqi": cqi,
+        "stress": stress,
+        "preview_markdown": preview,
+    }
+
+
+@router.post("/playground/request-report")
+async def playground_request_report(request: Request):
+    """Request full Basel SCO60 report via email link."""
+    _check_admin_key(request)
+    import secrets
+    import re as _re
+
+    body = await request.json()
+    submission_id = body.get("submission_id")
+    email = body.get("email", "").strip()
+
+    if not submission_id:
+        return JSONResponse({"error": "submission_id required"}, status_code=400)
+    if not email or not _re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', email):
+        return JSONResponse({"error": "Valid email address required"}, status_code=400)
+
+    sub = fetch_one("SELECT * FROM playground_submissions WHERE submission_id = %s", (submission_id,))
+    if not sub:
+        return JSONResponse({"error": "Submission not found"}, status_code=404)
+    if sub.get("report_requested"):
+        return JSONResponse({"error": "Report already requested for this submission"}, status_code=400)
+
+    token = secrets.token_urlsafe(32)
+
+    execute("""
+        UPDATE playground_submissions SET
+            report_requested = TRUE,
+            submitter_email = %s,
+            report_request_at = NOW(),
+            report_link_token = %s,
+            report_link_expires = NOW() + INTERVAL '7 days'
+        WHERE submission_id = %s
+    """, (email, token, submission_id))
+
+    # Send email via Resend
+    report_url = f"https://basisprotocol.xyz/playground/report/{token}"
+    try:
+        import httpx
+        resend_key = os.environ.get("RESEND_API_KEY")
+        if resend_key:
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    "https://api.resend.com/emails",
+                    headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
+                    json={
+                        "from": "Basis Protocol <noreply@basisprotocol.xyz>",
+                        "to": [email],
+                        "subject": "Your Basel SCO60 report for the portfolio you submitted",
+                        "text": (
+                            f"Thanks for submitting a portfolio to the Basis composition playground.\n\n"
+                            f"Your full Basel SCO60 report is ready. View it here:\n"
+                            f"{report_url}\n\n"
+                            f"This link expires in 7 days. You received this because you requested "
+                            f"this report. We will not use your email for anything else. To delete "
+                            f"your email from our records, reply to this email.\n"
+                        ),
+                    },
+                )
+            execute("UPDATE playground_submissions SET email_sent_at = NOW() WHERE submission_id = %s", (submission_id,))
+        else:
+            logger.warning("RESEND_API_KEY not set — email not sent")
+    except Exception as e:
+        logger.warning(f"Playground email send failed: {e}")
+
+    return {"status": "report_requested", "report_url": report_url}
+
+
+@router.get("/playground/submissions")
+async def playground_submissions(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+    since: Optional[str] = None,
+):
+    """List recent playground submissions."""
+    _check_admin_key(request)
+
+    sql = "SELECT submission_id, submitted_at, portfolio, computed_cqi, report_requested, report_access_count FROM playground_submissions"
+    params = []
+    if since:
+        sql += " WHERE submitted_at >= %s"
+        params.append(since)
+    sql += " ORDER BY submitted_at DESC LIMIT %s"
+    params.append(limit)
+
+    rows = fetch_all(sql, tuple(params))
+    return {
+        "submissions": [{
+            "id": str(r["submission_id"]),
+            "submitted_at": r["submitted_at"].isoformat() if r.get("submitted_at") else None,
+            "position_count": len(r["portfolio"]) if isinstance(r.get("portfolio"), list) else 0,
+            "aggregate_cqi": (r.get("computed_cqi") or {}).get("aggregate_cqi"),
+            "report_requested": r.get("report_requested", False),
+            "access_count": r.get("report_access_count", 0),
+        } for r in (rows or [])],
+        "count": len(rows or []),
+    }
+
+
 def register_ops_routes(app):
     """Register the ops router with the main FastAPI app."""
     app.include_router(router)
