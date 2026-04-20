@@ -97,6 +97,17 @@ async def run_wallet_graph_expansion(
     _api_empty = 0
     _api_ok = 0
 
+    # Early diagnostic: edge wallets are already in the graph (they must be — that's where we got them).
+    # New wallets come from their COUNTERPARTIES in token transfers.
+    # If all counterparties are already tracked, discovered=0 and the graph is closed.
+    edge_addrs = {w["address"].lower() for w in edge_wallets}
+    overlap = edge_addrs & existing_set
+    logger.error(
+        f"[wallet_expansion] DEDUP: edge_wallets={len(edge_wallets)}, "
+        f"existing={len(existing_set)}, edge_in_existing={len(overlap)}/{len(edge_addrs)} "
+        f"(new wallets come from counterparties, not edge wallets themselves)"
+    )
+
     # 2. Define producer function (fetch tokentx)
     async def fetch_tokentx(client: httpx.AsyncClient, wallet: dict) -> dict:
         nonlocal _api_errors

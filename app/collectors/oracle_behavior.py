@@ -212,18 +212,33 @@ async def _read_oracle(client: httpx.AsyncClient, oracle: dict) -> dict | None:
     chain = oracle["chain"]
     rpc_url = _get_rpc_url(chain)
     if not rpc_url:
-        logger.debug(f"No RPC for {chain}, skipping {oracle['oracle_name']}")
+        logger.error(f"[oracle] {oracle.get('oracle_name', '?')}: NO RPC URL for chain={chain}")
         return None
 
-    block_ts = await _async_get_block_timestamp(client, rpc_url)
     provider = oracle.get("oracle_provider", "").lower()
+    name = oracle.get("oracle_name", oracle.get("oracle_address", "?"))
 
-    if provider == "chainlink":
-        return await _read_chainlink_oracle(client, oracle, rpc_url, block_ts)
-    elif provider == "pyth":
-        return await _read_pyth_oracle(client, oracle, rpc_url, block_ts)
-    else:
-        logger.debug(f"Unknown oracle provider: {provider}")
+    try:
+        block_ts = await _async_get_block_timestamp(client, rpc_url)
+
+        if provider == "chainlink":
+            result = await _read_chainlink_oracle(client, oracle, rpc_url, block_ts)
+        elif provider == "pyth":
+            result = await _read_pyth_oracle(client, oracle, rpc_url, block_ts)
+        else:
+            logger.error(f"[oracle] {name}: unknown provider '{provider}'")
+            return None
+
+        if result is None:
+            logger.error(
+                f"[oracle] {name}: read returned None — "
+                f"rpc={rpc_url[:40]}..., address={oracle['oracle_address']}, "
+                f"provider={provider}, chain={chain}"
+            )
+        return result
+
+    except Exception as e:
+        logger.error(f"[oracle] {name}: exception during read: {type(e).__name__} — {e}")
         return None
 
 
@@ -450,8 +465,20 @@ async def collect_oracle_readings() -> dict:
     # Load active oracles
     oracles = fetch_all("SELECT * FROM oracle_registry WHERE is_active = TRUE")
     if not oracles:
-        logger.info("Oracle behavior: no active oracles in registry")
+        logger.error("[oracle] no active oracles in oracle_registry table")
         return results
+
+    # Log RPC config for each chain
+    chains_seen = set()
+    for o in oracles:
+        c = o["chain"]
+        if c not in chains_seen:
+            chains_seen.add(c)
+            rpc = _get_rpc_url(c)
+            if rpc:
+                logger.error(f"[oracle] RPC for {c}: {rpc[:50]}...")
+            else:
+                logger.error(f"[oracle] RPC for {c}: NOT CONFIGURED")
 
     # Collect distinct asset symbols for CEX price fetch
     symbols = list({o["asset_symbol"] for o in oracles})
