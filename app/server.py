@@ -1039,6 +1039,7 @@ async def entity_page(slug: str, request: Request):
 <title>{title} | Basis Protocol</title>
 <meta name="description" content="{meta_desc}">
 <link rel="canonical" href="https://basisprotocol.xyz/entity/{slug}">
+<link rel="alternate" type="text/markdown" href="/entity/{slug}.md">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=IBM+Plex+Sans:wght@400;600;700&display=swap" rel="stylesheet">
 <style>{CSS}</style>
@@ -1076,6 +1077,7 @@ async def entity_page(slug: str, request: Request):
     return HTMLResponse(content=html, headers={
         "Cache-Control": "public, max-age=300",
         "Basis-URL-Stability": "permanent",
+        "Basis-Protocol-Version": "v1.0.0",
     })
 
 
