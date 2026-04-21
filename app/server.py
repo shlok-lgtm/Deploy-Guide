@@ -1414,8 +1414,9 @@ async def get_scores(response: Response, methodology_version: Optional[str] = Qu
         JOIN stablecoins st ON st.id = s.stablecoin_id
         ORDER BY s.overall_score DESC
     """)
-    
+
     from app.scoring_engine import compute_confidence_tag
+    from app.confidence_tier_codes import tag_to_code as _tag_to_code
     SII_COMPONENTS_TOTAL = len(COMPONENT_NORMALIZATIONS)
 
     results = []
@@ -1466,6 +1467,7 @@ async def get_scores(response: Response, methodology_version: Optional[str] = Qu
             "issuer": row["issuer"],
             "token_contract": row.get("token_contract"),
             "score": float(row["overall_score"]),
+            "grade": _tag_to_code(conf_tag),
             "confidence": conf_level,
             "confidence_tag": conf_tag,
             "missing_categories": missing,
@@ -4589,6 +4591,7 @@ async def psi_scores():
     """)
     from app.index_definitions.psi_v01 import PSI_V01_DEFINITION
     from app.scoring_engine import compute_confidence_tag
+    from app.confidence_tier_codes import tag_to_code as _psi_tag_to_code
     psi_cats_total = len(PSI_V01_DEFINITION["categories"])
     psi_comps_total_def = len(PSI_V01_DEFINITION["components"])
 
@@ -4636,6 +4639,7 @@ async def psi_scores():
             "protocol_slug": slug,
             "protocol_name": row["protocol_name"],
             "score": float(row["overall_score"]) if row.get("overall_score") else None,
+            "grade": _psi_tag_to_code(psi_conf["tag"]),
             "confidence": psi_conf["confidence"],
             "confidence_tag": psi_conf["tag"],
             "missing_categories": psi_conf.get("missing_categories") or psi_missing,
