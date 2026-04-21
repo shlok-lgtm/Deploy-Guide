@@ -2608,6 +2608,25 @@ async def main():
             execute(_ddl)
         except Exception as _de:
             logger.error(f"[startup] DDL failed: {str(_de)[:100]}")
+
+    # Ensure incident_events table exists
+    try:
+        execute("""CREATE TABLE IF NOT EXISTS incident_events (
+            id SERIAL PRIMARY KEY, entity_id TEXT NOT NULL, entity_type TEXT,
+            incident_type TEXT NOT NULL, severity TEXT, title TEXT, description TEXT,
+            started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), ended_at TIMESTAMPTZ,
+            detection_method TEXT DEFAULT 'automated', raw_data JSONB,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            UNIQUE(entity_id, incident_type, started_at))""")
+    except Exception as _ie:
+        logger.error(f"[startup] incident_events DDL failed: {_ie}")
+
+    # Ensure wallet_graph.wallets has a unique constraint on address
+    try:
+        execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_wallets_address_unique ON wallet_graph.wallets (address)")
+    except Exception as _we:
+        logger.error(f"[startup] wallets unique index failed: {_we}")
+
     for _alt in _data_layer_alters:
         try:
             execute(_alt)

@@ -106,6 +106,15 @@ EXPECTED_COLUMNS = {
         "trade_volume_24h_btc", "year_established", "country",
         "trading_pairs", "snapshot_at",
     ],
+    "incident_events": [
+        "id", "entity_id", "entity_type", "incident_type", "severity",
+        "title", "description", "started_at", "detection_method",
+        "raw_data", "created_at",
+    ],
+    "wallet_graph.wallets": [
+        "address", "first_seen_at", "last_indexed_at", "total_stablecoin_value",
+        "size_tier", "source", "is_contract", "label", "created_at",
+    ],
 }
 
 
