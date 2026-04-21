@@ -30,4 +30,4 @@ CREATE TABLE ops.api_budget (
     UNIQUE(budget_date, provider)
 );
 
-CREATE INDEX idx_api_budget_date ON ops.api_budget(budget_date);
+CREATE INDEX IF NOT EXISTS idx_api_budget_date ON ops.api_budget(budget_date);

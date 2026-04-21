@@ -19,7 +19,7 @@ CREATE UNIQUE INDEX idx_holdings_unique_per_day
     ON wallet_graph.wallet_holdings (wallet_address, token_address, chain, immutable_date(indexed_at));
 
 DROP INDEX IF EXISTS wallet_graph.idx_holdings_wallet;
-CREATE INDEX idx_holdings_wallet ON wallet_graph.wallet_holdings(wallet_address, chain);
+CREATE INDEX IF NOT EXISTS idx_holdings_wallet ON wallet_graph.wallet_holdings(wallet_address, chain);
 
 -- Unified cross-chain profile table
 CREATE TABLE IF NOT EXISTS wallet_graph.wallet_profiles (

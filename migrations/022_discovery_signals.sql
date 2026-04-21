@@ -32,11 +32,11 @@ CREATE TABLE IF NOT EXISTS discovery_signals (
     content_url VARCHAR(255)
 );
 
-CREATE INDEX idx_ds_type ON discovery_signals(signal_type);
-CREATE INDEX idx_ds_domain ON discovery_signals(domain);
-CREATE INDEX idx_ds_novelty ON discovery_signals(novelty_score DESC);
-CREATE INDEX idx_ds_detected ON discovery_signals(detected_at DESC);
-CREATE INDEX idx_ds_unacked ON discovery_signals(acknowledged, detected_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ds_type ON discovery_signals(signal_type);
+CREATE INDEX IF NOT EXISTS idx_ds_domain ON discovery_signals(domain);
+CREATE INDEX IF NOT EXISTS idx_ds_novelty ON discovery_signals(novelty_score DESC);
+CREATE INDEX IF NOT EXISTS idx_ds_detected ON discovery_signals(detected_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ds_unacked ON discovery_signals(acknowledged, detected_at DESC);
 
 INSERT INTO migrations (name) VALUES ('022_discovery_signals') ON CONFLICT DO NOTHING;
 
