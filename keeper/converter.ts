@@ -59,20 +59,15 @@ export function tokenIdToAddress(id: string): string | undefined {
 // Grade→bytes2 lookup table (for reference/validation)
 // ============================================================
 
-export const GRADE_BYTES2: Record<string, string> = {
-  "A+": "0x412b",
-  "A":  "0x4100",
-  "A-": "0x412d",
-  "B+": "0x422b",
-  "B":  "0x4200",
-  "B-": "0x422d",
-  "C+": "0x432b",
-  "C":  "0x4300",
-  "C-": "0x432d",
-  "D":  "0x4400",
-  "F":  "0x4600",
+// Confidence tier codes — the bytes2 "grade" slot now carries a
+// methodological confidence tier, not a credit rating.
+export const CONFIDENCE_TIER_BYTES2: Record<string, string> = {
+  "HI": "0x4849",  // High confidence (>=80% coverage)
+  "ST": "0x5354",  // Standard confidence (>=60% coverage)
+  "LD": "0x4c44",  // Limited Data (<60% coverage)
+  "XX": "0x5858",  // Unknown / fallback
 };
 
-export function validateGrade(grade: string): boolean {
-  return grade in GRADE_BYTES2;
+export function validateTierCode(code: string): boolean {
+  return code in CONFIDENCE_TIER_BYTES2;
 }
