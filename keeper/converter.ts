@@ -44,11 +44,11 @@ export const TOKEN_ADDRESSES: Record<string, string> = {
   dai:   "0x6b175474e89094c44da98b954eedeac495271d0f",
   frax:  "0x853d955acef822db058eb8505911ed77f175b99e",
   pyusd: "0x6c3ea9036406852006290770bedfcaba0e23a0e8",
-  fdusd: "0xc5f0f7b66764F6ec8C8Dff7BA683102295E16409",
-  tusd:  "0x0000000000085d4780B73119b644AE5ecd22b376",
-  usdd:  "0x0C10bF8FcB7Bf5412187A595ab97a3609160b5c6",
-  usde:  "0x4c9EDD5852cd905f086C759E8383e09bff1E68B3",
-  usd1:  "0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d",
+  fdusd: "0xc5f0f7b66764f6ec8c8dff7ba683102295e16409",
+  tusd:  "0x0000000000085d4780b73119b644ae5ecd22b376",
+  usdd:  "0x0c10bf8fcb7bf5412187a595ab97a3609160b5c6",
+  usde:  "0x4c9edd5852cd905f086c759e8383e09bff1e68b3",
+  usd1:  "0x8d0d000ee44948fc98c9b98a4fa4921476f08b0d",
 };
 
 export function tokenIdToAddress(id: string): string | undefined {
