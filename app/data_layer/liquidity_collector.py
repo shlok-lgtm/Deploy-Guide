@@ -320,8 +320,10 @@ async def run_liquidity_collection() -> dict:
            FROM stablecoins WHERE scoring_enabled = TRUE"""
     )
     if not rows:
+        logger.error("[liquidity_depth] no stablecoins found")
         return {"error": "no stablecoins found"}
 
+    logger.error(f"[liquidity_depth] starting: {len(rows)} stablecoins to collect")
     total_records = 0
     total_cex = 0
     total_dex = 0
@@ -345,7 +347,7 @@ async def run_liquidity_collection() -> dict:
                     total_cex += len(cex_records)
                     total_records += len(cex_records)
             except Exception as e:
-                logger.warning(f"CEX ticker collection failed for {asset_id}: {e}")
+                logger.error(f"[liquidity_depth] CEX tickers failed for {asset_id}: {e}")
 
             # DEX pools on each chain — use per-chain contract addresses
             for chain, _ in DEX_CHAINS.items():
@@ -365,7 +367,7 @@ async def run_liquidity_collection() -> dict:
                         total_dex += len(dex_records)
                         total_records += len(dex_records)
                 except Exception as e:
-                    logger.warning(f"DEX pool collection failed for {asset_id} on {chain}: {e}")
+                    logger.error(f"[liquidity_depth] DEX pools failed for {asset_id} on {chain}: {e}")
 
             stablecoins_processed += 1
 
@@ -378,6 +380,10 @@ async def run_liquidity_collection() -> dict:
     except Exception as e:
         logger.debug(f"Liquidity provenance failed: {e}")
 
+    logger.error(
+        f"[liquidity_depth] SUMMARY: stablecoins={stablecoins_processed}, "
+        f"records={total_records} (cex={total_cex}, dex={total_dex})"
+    )
     logger.info(
         f"Liquidity collection complete: {total_records} records "
         f"({total_cex} CEX, {total_dex} DEX) across {stablecoins_processed} stablecoins"

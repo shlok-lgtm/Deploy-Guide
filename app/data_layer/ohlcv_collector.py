@@ -203,7 +203,13 @@ async def run_ohlcv_collection() -> dict:
     top_pools, other_pools = _get_tracked_pools_tiered()
     all_pools = len(top_pools) + len(other_pools)
 
+    logger.error(
+        f"[dex_pool_ohlcv] starting: top_pools={len(top_pools)}, other_pools={len(other_pools)}, "
+        f"total={all_pools} (sourced from liquidity_depth WHERE venue_type='dex')"
+    )
+
     if all_pools == 0:
+        logger.error("[dex_pool_ohlcv] ZERO pools found — liquidity_depth has no DEX rows. OHLCV depends on liquidity collector producing pool data first.")
         return {"pools_found": 0, "records_stored": 0}
 
     total_records = 0
@@ -263,6 +269,10 @@ async def run_ohlcv_collection() -> dict:
     except Exception:
         pass
 
+    logger.error(
+        f"[dex_pool_ohlcv] SUMMARY: pools_queried={pools_processed}, bars_received={total_records}, "
+        f"top_pools_processed={top_processed}"
+    )
     logger.info(
         f"OHLCV collection complete: {total_records} candles from "
         f"{pools_processed}/{all_pools} pools ({top_processed} at 15-min resolution)"
