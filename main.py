@@ -744,6 +744,15 @@ def run_migrations():
         else:
             logger.warning(f"Migration {name} failed (objects may already exist — recorded anyway)")
 
+    # Summary: count files vs applied
+    try:
+        total_files = len(sql_files)
+        applied_row = fetch_one("SELECT COUNT(*) as cnt FROM migrations")
+        applied_count = applied_row["cnt"] if applied_row else 0
+        logger.error(f"[migrations] {total_files} migration files, {applied_count} recorded in DB")
+    except Exception:
+        pass
+
 
 def main():
     # 1. Initialize database
