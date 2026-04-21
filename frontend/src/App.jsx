@@ -3182,7 +3182,7 @@ export default function App() {
               position: "absolute",
               left: "-4%",
               right: "-4%",
-              top: "62%",
+              top: 0,
               height: mobile ? 56 : 64,
               transform: mobile ? "rotate(0deg)" : "rotate(-3deg)",
               transformOrigin: "center center",
@@ -3210,6 +3210,18 @@ export default function App() {
             boxShadow: mobile ? "none" : `6px 6px 0 0 ${T.ruleMid}`,
             background: T.paper,
           }}>
+          {/* Tagline strip — reads as a subtitle for the whole box, sits
+              above the nav row with a hairline separator. Not uppercased. */}
+          <div style={{
+            padding: mobile ? "6px 12px 4px" : "8px 24px 5px",
+            borderBottom: `1px solid ${T.ruleLight}`,
+            fontFamily: T.mono,
+            fontSize: 11,
+            letterSpacing: 0.5,
+            color: T.inkMid,
+          }}>
+            Continuous risk measurement across stablecoins + protocols + exchanges + treasuries + bridges +++
+          </div>
           <div style={{ padding: mobile ? "10px 12px" : "12px 24px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <nav style={{ display: "flex", gap: mobile ? 12 : 16, overflowX: mobile ? "auto" : "visible", WebkitOverflowScrolling: "touch" }}>
               {[
