@@ -42,13 +42,13 @@ from app.composition import AGGREGATION_FORMULAS, aggregate  # noqa: E402
 # =============================================================================
 
 # Indices with their (definition module, DB source) pairs. SII is on a
-# separate scoring path and is analyzed from the `scores` table directly.
+# separate scoring path; its query pulls only entity metadata and overall,
+# and the per-entity component replay happens in analyze_sii() which joins
+# component_readings to reconstruct the score_entity input dict.
 INDEX_SOURCES = [
     ("sii",  "app.index_definitions.sii_v1",  "SII_V1_DEFINITION",
-     "SELECT st.symbol AS entity_slug, st.name AS entity_name, s.overall_score, "
-     "s.component_count AS components_available, s.computed_at, "
-     "s.reserve_score, s.smart_contract_score, s.oracle_score, "
-     "s.governance_score, s.network_score "
+     "SELECT st.id AS stablecoin_id, st.symbol AS entity_slug, "
+     "st.name AS entity_name, s.overall_score, s.computed_at "
      "FROM scores s JOIN stablecoins st ON st.id = s.stablecoin_id "
      "ORDER BY s.computed_at DESC"),
     ("psi",  "app.index_definitions.psi_v01", "PSI_V01_DEFINITION",
@@ -204,22 +204,108 @@ def analyze_psi_rpi(index_id: str, query: str, module_path: str, symbol: str) ->
     return out
 
 
-def analyze_sii() -> list[dict]:
-    """SII analysis — SII uses its own scoring path (app/scoring.py), not
-    the generic engine. Its re-scoring under alternate formulas requires
-    re-playing raw component readings through aggregate_legacy_sii_v1 and
-    variants. For v1 of this analyzer we report current SII overalls only
-    and flag SII as 'SII-specific migration requires component_replay run'.
+# Legacy category names declared on SII components (inherited from
+# COMPONENT_NORMALIZATIONS) → SII v1 category names declared on
+# SII_V1_DEFINITION["categories"]. Canonical source: app/scoring_engine.py's
+# is_sii_category_complete_legacy(). Duplicated here so the analyzer is
+# self-contained and the aggregation-registry replay activates all five v1
+# categories. Without this remap, only peg_stability and holder_distribution
+# would contribute (those are the two cat names that happen to overlap
+# between the legacy and v1 vocabularies), and every formula would score
+# SII entities on 40% of the definition, producing results uncomparable
+# across formulas.
+_SII_LEGACY_TO_V1_CATEGORY = {
+    "peg_stability": "peg_stability",
+    "liquidity": "liquidity_depth",
+    "market_activity": "mint_burn_dynamics",
+    "flows": "mint_burn_dynamics",
+    "holder_distribution": "holder_distribution",
+    "smart_contract": "structural_risk_composite",
+    "governance": "structural_risk_composite",
+    "transparency": "structural_risk_composite",
+    "regulatory": "structural_risk_composite",
+    "network": "structural_risk_composite",
+    "reserves": "structural_risk_composite",
+    "oracle": "structural_risk_composite",
+}
+
+
+def _sii_definition_with_v1_categories(definition: dict) -> dict:
+    """Return a shallow-cloned SII definition whose components' `category`
+    field uses v1 category names (matching `definition["categories"]` keys).
+
+    Non-destructive: never mutates the shared SII_V1_DEFINITION object.
     """
-    rows = _fetch_all(INDEX_SOURCES[0][3])  # SII query above
+    new_components = {}
+    for cid, cdef in definition["components"].items():
+        new_cdef = dict(cdef)
+        legacy_cat = cdef.get("category")
+        new_cdef["category"] = _SII_LEGACY_TO_V1_CATEGORY.get(legacy_cat, legacy_cat)
+        new_components[cid] = new_cdef
+    out = dict(definition)
+    out["components"] = new_components
+    return out
+
+
+def analyze_sii() -> list[dict]:
+    """Re-score every SII stablecoin under every registered aggregation formula.
+
+    For each stablecoin in `scores`, pulls its most recent reading per
+    component_id from `component_readings` and feeds the (component_scores,
+    raw_values) pair through rescore_entity_under_formulas() — the same
+    replay path the PSI/RPI/generic-index analyzers use.
+
+    Coverage is computed against SII_V1_DEFINITION's 56 canonical components.
+    The collector writes additional component_ids (e.g., Solana-chain-specific
+    variants) that are not in the scorer's canonical list; those are ignored
+    by this replay, which matches production SII scoring behavior — the
+    definition is the canonical component universe.
+
+    Note on category semantics: SII_V1_DEFINITION declares 5 v1 categories
+    (peg_stability, liquidity_depth, mint_burn_dynamics, holder_distribution,
+    structural_risk_composite) but its components inherit the 8-way legacy
+    category vocabulary from COMPONENT_NORMALIZATIONS. This analyzer applies
+    the canonical legacy→v1 remapping (see _SII_LEGACY_TO_V1_CATEGORY) to a
+    local copy of the definition so that every v1 category receives its
+    fair share of components during aggregation. Production's SII scorer in
+    app/worker.py::compute_sii_from_components applies the equivalent
+    mapping via aggregate_legacy_to_v1 / DB_TO_STRUCTURAL_MAPPING. Follow-up
+    ticket `sii-component-gap` covers full reconciliation between the
+    collector's 80 component_ids, the scorer's 56 declared components, and
+    the ~37 that overlap end-to-end.
+    """
+    from app.index_definitions.sii_v1 import SII_V1_DEFINITION
+
+    sii_definition = _sii_definition_with_v1_categories(SII_V1_DEFINITION)
+
+    entities = _fetch_all(INDEX_SOURCES[0][3])
+
     out = []
-    for r in rows:
+    for e in entities:
+        stablecoin_id = e.get("stablecoin_id")
+        readings = _fetch_all(
+            "SELECT DISTINCT ON (component_id) "
+            "       component_id, raw_value, normalized_score "
+            "FROM component_readings "
+            "WHERE stablecoin_id = %s AND raw_value IS NOT NULL "
+            "ORDER BY component_id, collected_at DESC",
+            (stablecoin_id,),
+        )
+        raw_values = {r["component_id"]: r["raw_value"] for r in readings}
+        component_scores = {
+            r["component_id"]: float(r["normalized_score"])
+            for r in readings
+            if r.get("normalized_score") is not None
+        }
+        rescored = rescore_entity_under_formulas(
+            sii_definition, component_scores, raw_values
+        )
         out.append({
             "index": "sii",
-            "entity": r.get("entity_slug"),
-            "entity_name": r.get("entity_name"),
-            "current_overall": float(r["overall_score"]) if r.get("overall_score") is not None else None,
-            "rescored": {"_note": "SII scoring path predates registry; follow-up analyzer required"},
+            "entity": e.get("entity_slug"),
+            "entity_name": e.get("entity_name"),
+            "current_overall": float(e["overall_score"]) if e.get("overall_score") is not None else None,
+            "rescored": rescored,
         })
     return out
 
