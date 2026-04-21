@@ -2,11 +2,15 @@
 Generic Scoring Engine
 =======================
 Scores any entity using an index definition dict.
-Reuses normalization functions from app/scoring.py — no duplication.
+Reuses normalization functions from app/scoring.py and aggregation formulas
+from app/composition.py — no duplication. Aggregation dispatches through
+the named-formula registry so an index's aggregation behavior is a
+declaration, not a code path.
 
-Pattern: raw values -> normalize per component -> aggregate by category -> weighted sum = score.
+Pattern: raw values -> normalize per component -> aggregate() -> score.
 """
 
+from app.composition import aggregate
 from app.scoring import (
     normalize_inverse_linear, normalize_linear, normalize_log,
     normalize_centered, normalize_exponential_penalty, normalize_direct,
@@ -26,13 +30,16 @@ def score_entity(definition, raw_values):
     """
     Score an entity using an index definition.
 
-    Args:
-        definition: An index definition dict (see app/index_definitions/schema.py)
-        raw_values: Dict of component_id -> raw numeric value
+    Dispatches category + overall aggregation through the registry defined
+    in app.composition.AGGREGATION_FORMULAS. If the definition has no
+    `aggregation` block, the registry defaults to `legacy_renormalize`,
+    which preserves pre-registry output byte-for-byte.
 
-    Returns dict with: index_id, version, overall_score,
-        category_scores, component_scores, components_available,
-        components_total, coverage
+    Returns dict with: index_id, version, overall_score, category_scores,
+      component_scores, components_available, components_total, coverage,
+      effective_category_weights, withheld, aggregation_method,
+      aggregation_formula_version, confidence, confidence_tag,
+      missing_categories.
     """
     # Step 1: Normalize each component
     component_scores = {}
@@ -47,40 +54,17 @@ def score_entity(definition, raw_values):
                 except Exception:
                     pass
 
-    # Step 2: Aggregate by category (weighted average within category)
-    category_scores = {}
-    for cat_id, cat_def in definition["categories"].items():
-        cat_components = {
-            cid: cdef for cid, cdef in definition["components"].items()
-            if cdef["category"] == cat_id
-        }
-        total = 0.0
-        weight_used = 0.0
-        for cid, cdef in cat_components.items():
-            if cid in component_scores:
-                total += component_scores[cid] * cdef["weight"]
-                weight_used += cdef["weight"]
-        if weight_used > 0:
-            category_scores[cat_id] = round(total / weight_used, 2)
+    # Step 2+3: Aggregate via the named formula. Default path is
+    # legacy_renormalize which is byte-for-byte identical to the previous
+    # inline implementation.
+    agg_result = aggregate(definition, component_scores, raw_values)
 
-    # Step 3: Weighted sum across categories
-    overall = 0.0
-    cat_weight_used = 0.0
-    for cat_id, cat_def in definition["categories"].items():
-        weight = cat_def["weight"] if isinstance(cat_def, dict) else 0
-        if cat_id in category_scores:
-            overall += category_scores[cat_id] * weight
-            cat_weight_used += weight
-
-    if cat_weight_used > 0 and cat_weight_used < 1.0:
-        overall = overall / cat_weight_used
-
-    overall = round(overall, 2)
+    category_scores = agg_result["category_scores"]
 
     # Confidence tagging based on coverage
     components_available = len(component_scores)
     components_total = len(definition["components"])
-    coverage = round(components_available / max(components_total, 1), 2)
+    coverage = agg_result["coverage"]
 
     # Identify categories with zero populated components
     all_categories = set(definition["categories"].keys())
@@ -93,12 +77,21 @@ def score_entity(definition, raw_values):
     return {
         "index_id": definition["index_id"],
         "version": definition["version"],
-        "overall_score": overall,
+        "overall_score": agg_result["overall_score"],
         "category_scores": category_scores,
         "component_scores": component_scores,
         "components_available": components_available,
         "components_total": components_total,
         "coverage": coverage,
+        # V7.3 canonical names — aliases of components_available / coverage.
+        # TODO(basis-hub#confidence-rename): collapse to a single name in a
+        # later migration; two names for one field compounds if left.
+        "components_populated": components_available,
+        "component_coverage": coverage,
+        "effective_category_weights": agg_result["effective_category_weights"],
+        "withheld": agg_result["withheld"],
+        "aggregation_method": agg_result["method"],
+        "aggregation_formula_version": agg_result["formula_version"],
         "confidence": confidence_meta["confidence"],
         "confidence_tag": confidence_meta["tag"],
         "missing_categories": confidence_meta["missing_categories"],

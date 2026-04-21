@@ -5,10 +5,30 @@ Single source of truth for SII score calculation.
 
 Formula (v1.0.0):
   SII = 0.30×Peg + 0.25×Liquidity + 0.15×MintBurn + 0.10×Distribution + 0.20×Structural
-  
+
   Structural = 0.30×Reserves + 0.20×SmartContract + 0.15×Oracle + 0.20×Governance + 0.15×Network
 
 All normalization functions preserved exactly from the original codebase.
+
+Aggregation-registry note
+-------------------------
+SII predates the generic scoring engine (`app.scoring_engine.score_entity`)
+and its named-formula aggregation registry (`app.composition.aggregate`).
+The weighted-sum renormalization in `calculate_sii` and
+`calculate_structural_composite` is the SII-v1.0.0 equivalent of
+`aggregate_legacy_renormalize`, but with subtly different rounding —
+intermediate categories are not rounded here, whereas
+`aggregate_legacy_renormalize` rounds to 2 decimals per category.
+
+The `legacy_sii_v1` formula in `app.composition.AGGREGATION_FORMULAS`
+reserves SII's slot and preserves this rounding semantics. Wiring SII's
+call sites to dispatch through that formula is deferred to a follow-up PR
+so this infrastructure PR carries zero risk of shifting stored SII values.
+
+Until that follow-up lands, `calculate_sii` and
+`calculate_structural_composite` remain the canonical SII overall
+computation paths. Callers are `app.worker.compute_sii_for_coin` (line 190)
+and `app.data_layer.component_replay` (line 127).
 """
 
 import math
@@ -129,11 +149,19 @@ def score_to_grade(score: float) -> str:
 def calculate_structural_composite(subscores: Dict[str, Optional[float]]) -> Optional[float]:
     """
     Calculate Structural Risk Composite from its 5 subcategories.
-    
+
     Formula:
       Structural = 0.30×Reserves + 0.20×SmartContract + 0.15×Oracle + 0.20×Governance + 0.15×Network
-    
+
     Returns None if no subcategory data is available.
+
+    TODO(aggregation-migration): route through
+      app.composition.aggregate(definition, component_scores,
+                                 raw_values=..., params={})
+    with formula=legacy_sii_v1 once a synthetic structural-composite
+    definition is wired into the dispatch path. Preserved verbatim here to
+    avoid shifting stored SII values during the aggregation-infrastructure
+    PR. See the module docstring for context.
     """
     total = 0.0
     weight_used = 0.0
@@ -157,15 +185,20 @@ def calculate_structural_composite(subscores: Dict[str, Optional[float]]) -> Opt
 def calculate_sii(category_scores: Dict[str, Optional[float]]) -> Optional[float]:
     """
     Calculate SII using the canonical v1.0.0 formula.
-    
+
     Formula:
       SII = 0.30×Peg + 0.25×Liquidity + 0.15×MintBurn + 0.10×Distribution + 0.20×Structural
-    
+
     Args:
         category_scores: Dict with scores (0-100) for each canonical category.
-    
+
     Returns:
         SII score (0-100), or None if no data available.
+
+    TODO(aggregation-migration): route through app.composition.aggregate with
+    formula=legacy_sii_v1 once a synthetic SII-level definition is wired in.
+    Preserved verbatim here to avoid rounding-induced SII drift during the
+    aggregation-infrastructure PR. See module docstring.
     """
     total = 0.0
     weight_used = 0.0

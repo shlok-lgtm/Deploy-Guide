@@ -1417,8 +1417,10 @@ def run_psi_scoring():
 
             execute("""
                 INSERT INTO psi_scores (protocol_slug, protocol_name, overall_score, grade,
-                    category_scores, component_scores, raw_values, formula_version, inputs_hash)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    category_scores, component_scores, raw_values, formula_version, inputs_hash,
+                    confidence, confidence_tag, component_coverage,
+                    components_populated, components_total, missing_categories)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT ON CONSTRAINT psi_scores_protocol_slug_scored_date_key
                 DO UPDATE SET
                     protocol_name = EXCLUDED.protocol_name,
@@ -1428,6 +1430,12 @@ def run_psi_scoring():
                     component_scores = EXCLUDED.component_scores,
                     raw_values = EXCLUDED.raw_values,
                     inputs_hash = EXCLUDED.inputs_hash,
+                    confidence = EXCLUDED.confidence,
+                    confidence_tag = EXCLUDED.confidence_tag,
+                    component_coverage = EXCLUDED.component_coverage,
+                    components_populated = EXCLUDED.components_populated,
+                    components_total = EXCLUDED.components_total,
+                    missing_categories = EXCLUDED.missing_categories,
                     computed_at = NOW()
             """, (
                 result["protocol_slug"],
@@ -1439,6 +1447,12 @@ def run_psi_scoring():
                 json.dumps(raw_for_storage, default=str),
                 result["version"],
                 inputs_hash,
+                result.get("confidence"),
+                result.get("confidence_tag"),
+                result.get("component_coverage"),
+                result.get("components_populated"),
+                result.get("components_total"),
+                json.dumps(result.get("missing_categories") or []),
             ))
             # Store per-token treasury holdings with SII cross-reference
             token_holdings = result.get("raw_values", {}).get("_token_holdings")

@@ -274,6 +274,27 @@ def score_rpi_base(slug: str, raw_values: dict) -> dict:
 
     overall = round(total_score / weight_used, 2) if weight_used > 0 else 0.0
 
+    # V7.3 confidence tag fields — base components only. Lens variants are out
+    # of scope for persistence and do not contribute to the canonical score.
+    from app.scoring_engine import compute_confidence_tag
+    from app.index_definitions.rpi_v2 import RPI_V2_DEFINITION as _RPI_DEF
+    _comp_to_cat = {
+        cid: cdef["category"]
+        for cid, cdef in _RPI_DEF["components"].items()
+    }
+    _populated_cats = {
+        _comp_to_cat[cid] for cid in component_scores if cid in _comp_to_cat
+    }
+    _all_cats = set(_RPI_DEF["categories"].keys())
+    missing_categories = sorted(_all_cats - _populated_cats)
+    components_populated = len(component_scores)
+    components_total = len(_RPI_DEF["components"])
+    component_coverage = round(components_populated / max(components_total, 1), 4)
+    _conf = compute_confidence_tag(
+        len(_populated_cats), len(_all_cats),
+        component_coverage, missing_categories,
+    )
+
     return {
         "index_id": "rpi",
         "version": RPI_VERSION,
@@ -282,9 +303,14 @@ def score_rpi_base(slug: str, raw_values: dict) -> dict:
         "grade": score_to_grade(overall),
         "component_scores": component_scores,
         "raw_values": raw_values,
-        "components_available": len(component_scores),
-        "components_total": 5,
-        "coverage": round(len(component_scores) / 5, 2),
+        "components_available": components_populated,
+        "components_total": components_total,
+        "coverage": component_coverage,
+        "components_populated": components_populated,
+        "component_coverage": component_coverage,
+        "missing_categories": missing_categories,
+        "confidence": _conf["confidence"],
+        "confidence_tag": _conf["tag"],
     }
 
 
@@ -419,8 +445,10 @@ def store_rpi_score(slug: str, result: dict):
     execute("""
         INSERT INTO rpi_scores
             (protocol_slug, protocol_name, overall_score, grade,
-             component_scores, raw_values, inputs_hash, methodology_version)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+             component_scores, raw_values, inputs_hash, methodology_version,
+             confidence, confidence_tag, component_coverage,
+             components_populated, components_total, missing_categories)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT ON CONSTRAINT rpi_scores_protocol_slug_scored_date_key
         DO UPDATE SET
             protocol_name = EXCLUDED.protocol_name,
@@ -429,12 +457,24 @@ def store_rpi_score(slug: str, result: dict):
             component_scores = EXCLUDED.component_scores,
             raw_values = EXCLUDED.raw_values,
             inputs_hash = EXCLUDED.inputs_hash,
+            confidence = EXCLUDED.confidence,
+            confidence_tag = EXCLUDED.confidence_tag,
+            component_coverage = EXCLUDED.component_coverage,
+            components_populated = EXCLUDED.components_populated,
+            components_total = EXCLUDED.components_total,
+            missing_categories = EXCLUDED.missing_categories,
             computed_at = NOW()
     """, (
         slug, protocol_name, result["overall_score"], result["grade"],
         json.dumps(result["component_scores"]),
         json.dumps(result["raw_values"], default=str),
         inputs_hash, RPI_VERSION,
+        result.get("confidence"),
+        result.get("confidence_tag"),
+        result.get("component_coverage"),
+        result.get("components_populated"),
+        result.get("components_total"),
+        json.dumps(result.get("missing_categories") or []),
     ))
 
     # Store history

@@ -903,7 +903,10 @@ def _resolve_entity(slug: str) -> dict | None:
             "api_path": f"/api/rpi/scores/{slug_lower}",
         }
 
-    # Circle 7
+    # Circle 7 — BRI and CXRI promoted to scored in v0.2.0 (see
+    # docs/methodology/aggregation_impact_analysis.md and the per-index
+    # changelog files). LSTI, DOHI, VSRI, TTI remain accruing.
+    _scored_circle7 = {"bri", "cxri"}
     for idx in ["lsti", "bri", "dohi", "vsri", "cxri", "tti"]:
         row = fetch_one("""
             SELECT overall_score, entity_name, category_scores,
@@ -925,7 +928,7 @@ def _resolve_entity(slug: str) -> dict | None:
                 "categories": {k.replace("_", " ").title(): v for k, v in cats.items()} if isinstance(cats, dict) else {},
                 "computed_at": row["computed_at"].isoformat() if row.get("computed_at") else None,
                 "formula_version": row.get("formula_version"),
-                "accruing": True,
+                "accruing": idx not in _scored_circle7,
                 "api_path": f"/api/scores/{slug_lower}",
             }
 
@@ -1316,13 +1319,40 @@ async def get_scores(response: Response, methodology_version: Optional[str] = Qu
 
     results = []
     for row in rows:
-        comp_count = row.get("component_count") or 0
-        coverage = round(comp_count / max(SII_COMPONENTS_TOTAL, 1), 2)
-        # Determine missing categories from null category scores
-        sii_cat_map = {"peg": "peg_score", "liquidity": "liquidity_score", "flows": "mint_burn_score",
-                       "distribution": "distribution_score", "structural": "structural_score"}
-        missing = [cat for cat, col in sii_cat_map.items() if not row.get(col)]
-        conf = compute_confidence_tag(5 - len(missing), 5, coverage, missing)
+        # V7.3 confidence fields — prefer the stored columns (populated by
+        # the scorer on write). Fall back to legacy synthesis for rows that
+        # predate migration 084 / the one-shot backfill.
+        stored_populated = row.get("components_populated")
+        if stored_populated is not None:
+            comp_populated = int(stored_populated)
+            comp_total = int(row.get("components_total") or SII_COMPONENTS_TOTAL)
+            coverage = float(row.get("component_coverage") or (
+                round(comp_populated / max(comp_total, 1), 4)
+            ))
+            missing = row.get("missing_categories") or []
+            if isinstance(missing, str):
+                import json as _j
+                try:
+                    missing = _j.loads(missing)
+                except Exception:
+                    missing = []
+            conf_level = row.get("confidence")
+            conf_tag = row.get("confidence_tag")
+            if not conf_level:
+                _c = compute_confidence_tag(5 - len(missing), 5, coverage, missing)
+                conf_level, conf_tag = _c["confidence"], _c["tag"]
+        else:
+            # Legacy fallback — row was written before migration 084.
+            sii_cat_map = {"peg": "peg_score", "liquidity": "liquidity_score", "flows": "mint_burn_score",
+                           "distribution": "distribution_score", "structural": "structural_score"}
+            missing = [cat for cat, col in sii_cat_map.items() if not row.get(col)]
+            comp_populated = row.get("component_count") or 0
+            comp_total = SII_COMPONENTS_TOTAL
+            coverage = round(comp_populated / max(comp_total, 1), 4)
+            _c = compute_confidence_tag(5 - len(missing), 5, coverage, missing)
+            conf_level, conf_tag = _c["confidence"], _c["tag"]
+
+        comp_count = comp_populated
 
         results.append({
             "id": row["stablecoin_id"],
@@ -1331,12 +1361,12 @@ async def get_scores(response: Response, methodology_version: Optional[str] = Qu
             "issuer": row["issuer"],
             "token_contract": row.get("token_contract"),
             "score": float(row["overall_score"]),
-            "confidence": conf["confidence"],
-            "confidence_tag": conf["tag"],
-            "missing_categories": conf["missing_categories"],
+            "confidence": conf_level,
+            "confidence_tag": conf_tag,
+            "missing_categories": missing,
             "component_coverage": coverage,
-            "components_populated": comp_count,
-            "components_total": SII_COMPONENTS_TOTAL,
+            "components_populated": comp_populated,
+            "components_total": comp_total,
             "price": float(row["current_price"]) if row.get("current_price") else None,
             "market_cap": row.get("market_cap"),
             "volume_24h": row.get("volume_24h"),
@@ -1424,12 +1454,38 @@ async def get_score_detail(coin: str, methodology_version: Optional[str] = Query
     
     from app.scoring_engine import compute_confidence_tag
     SII_COMPONENTS_TOTAL = len(COMPONENT_NORMALIZATIONS)
-    comp_count = row.get("component_count") or 0
-    detail_coverage = round(comp_count / max(SII_COMPONENTS_TOTAL, 1), 2)
-    detail_cat_map = {"peg": "peg_score", "liquidity": "liquidity_score", "flows": "mint_burn_score",
-                      "distribution": "distribution_score", "structural": "structural_score"}
-    detail_missing = [cat for cat, col in detail_cat_map.items() if not row.get(col)]
-    detail_conf = compute_confidence_tag(5 - len(detail_missing), 5, detail_coverage, detail_missing)
+    # V7.3 confidence fields — prefer the stored columns, fall back to legacy
+    # synthesis for rows that predate migration 084 / backfill.
+    _stored_populated = row.get("components_populated")
+    if _stored_populated is not None:
+        detail_comp_populated = int(_stored_populated)
+        detail_comp_total = int(row.get("components_total") or SII_COMPONENTS_TOTAL)
+        detail_coverage = float(row.get("component_coverage") or (
+            round(detail_comp_populated / max(detail_comp_total, 1), 4)
+        ))
+        detail_missing = row.get("missing_categories") or []
+        if isinstance(detail_missing, str):
+            import json as _j
+            try:
+                detail_missing = _j.loads(detail_missing)
+            except Exception:
+                detail_missing = []
+        detail_conf = {
+            "confidence": row.get("confidence")
+                or compute_confidence_tag(5 - len(detail_missing), 5, detail_coverage, detail_missing)["confidence"],
+            "tag": row.get("confidence_tag")
+                or compute_confidence_tag(5 - len(detail_missing), 5, detail_coverage, detail_missing)["tag"],
+            "missing_categories": detail_missing,
+        }
+    else:
+        detail_cat_map = {"peg": "peg_score", "liquidity": "liquidity_score", "flows": "mint_burn_score",
+                          "distribution": "distribution_score", "structural": "structural_score"}
+        detail_missing = [cat for cat, col in detail_cat_map.items() if not row.get(col)]
+        detail_comp_populated = row.get("component_count") or 0
+        detail_comp_total = SII_COMPONENTS_TOTAL
+        detail_coverage = round(detail_comp_populated / max(detail_comp_total, 1), 4)
+        detail_conf = compute_confidence_tag(5 - len(detail_missing), 5, detail_coverage, detail_missing)
+    comp_count = detail_comp_populated
 
     return {
         "id": row["stablecoin_id"],
@@ -1442,8 +1498,8 @@ async def get_score_detail(coin: str, methodology_version: Optional[str] = Query
         "confidence_tag": detail_conf["tag"],
         "missing_categories": detail_conf["missing_categories"],
         "component_coverage": detail_coverage,
-        "components_populated": comp_count,
-        "components_total": SII_COMPONENTS_TOTAL,
+        "components_populated": detail_comp_populated,
+        "components_total": detail_comp_total,
         "price": float(row["current_price"]) if row.get("current_price") else None,
         "market_cap": row.get("market_cap"),
         "volume_24h": row.get("volume_24h"),
@@ -4353,24 +4409,56 @@ async def psi_scores():
         SELECT DISTINCT ON (protocol_slug)
             id, protocol_slug, protocol_name, overall_score, grade,
             category_scores, component_scores, raw_values,
-            formula_version, computed_at
+            formula_version, computed_at,
+            confidence, confidence_tag, component_coverage,
+            components_populated, components_total, missing_categories
         FROM psi_scores
         ORDER BY protocol_slug, computed_at DESC
     """)
     from app.index_definitions.psi_v01 import PSI_V01_DEFINITION
     from app.scoring_engine import compute_confidence_tag
     psi_cats_total = len(PSI_V01_DEFINITION["categories"])
-    psi_comps_total = len(PSI_V01_DEFINITION["components"])
+    psi_comps_total_def = len(PSI_V01_DEFINITION["components"])
 
     results = []
     for row in rows:
         slug = row["protocol_slug"]
         cat_scores = row.get("category_scores") or {}
         comp_scores = row.get("component_scores") or {}
-        comps_populated = len(comp_scores)
-        psi_coverage = round(comps_populated / max(psi_comps_total, 1), 2)
-        psi_missing = sorted(set(PSI_V01_DEFINITION["categories"].keys()) - set(cat_scores.keys()))
-        psi_conf = compute_confidence_tag(psi_cats_total - len(psi_missing), psi_cats_total, psi_coverage, psi_missing)
+
+        # Prefer stored V7.3 columns. Fall back to JSON-count synthesis for
+        # rows written before migration 084 / backfill.
+        stored_populated = row.get("components_populated")
+        if stored_populated is not None:
+            comps_populated = int(stored_populated)
+            psi_comps_total = int(row.get("components_total") or psi_comps_total_def)
+            psi_coverage = float(row.get("component_coverage") or (
+                round(comps_populated / max(psi_comps_total, 1), 4)
+            ))
+            psi_missing = row.get("missing_categories") or []
+            if isinstance(psi_missing, str):
+                import json as _j
+                try:
+                    psi_missing = _j.loads(psi_missing)
+                except Exception:
+                    psi_missing = []
+            psi_conf = {
+                "confidence": row.get("confidence"),
+                "tag": row.get("confidence_tag"),
+                "missing_categories": psi_missing,
+            }
+            if not psi_conf["confidence"]:
+                psi_conf = compute_confidence_tag(
+                    psi_cats_total - len(psi_missing), psi_cats_total, psi_coverage, psi_missing,
+                )
+        else:
+            comps_populated = len(comp_scores)
+            psi_comps_total = psi_comps_total_def
+            psi_coverage = round(comps_populated / max(psi_comps_total, 1), 4)
+            psi_missing = sorted(set(PSI_V01_DEFINITION["categories"].keys()) - set(cat_scores.keys()))
+            psi_conf = compute_confidence_tag(
+                psi_cats_total - len(psi_missing), psi_cats_total, psi_coverage, psi_missing,
+            )
 
         results.append({
             "protocol_slug": slug,
@@ -4378,7 +4466,7 @@ async def psi_scores():
             "score": float(row["overall_score"]) if row.get("overall_score") else None,
             "confidence": psi_conf["confidence"],
             "confidence_tag": psi_conf["tag"],
-            "missing_categories": psi_conf["missing_categories"],
+            "missing_categories": psi_conf.get("missing_categories") or psi_missing,
             "component_coverage": psi_coverage,
             "components_populated": comps_populated,
             "components_total": psi_comps_total,
@@ -4587,7 +4675,9 @@ async def psi_score_detail(slug: str):
     row = fetch_one("""
         SELECT id, protocol_slug, protocol_name, overall_score, grade,
                category_scores, component_scores, raw_values,
-               formula_version, computed_at
+               formula_version, computed_at,
+               confidence, confidence_tag, component_coverage,
+               components_populated, components_total, missing_categories
         FROM psi_scores
         WHERE protocol_slug = %s
         ORDER BY computed_at DESC
@@ -4600,15 +4690,42 @@ async def psi_score_detail(slug: str):
     from app.scoring_engine import compute_confidence_tag
     psi_cat_scores = row.get("category_scores") or {}
     psi_comp_scores = row.get("component_scores") or {}
-    psi_comps_populated = len(psi_comp_scores)
-    psi_comps_total = len(PSI_V01_DEFINITION["components"])
-    psi_det_coverage = round(psi_comps_populated / max(psi_comps_total, 1), 2)
-    psi_det_missing = sorted(set(PSI_V01_DEFINITION["categories"].keys()) - set(psi_cat_scores.keys()))
-    psi_det_conf = compute_confidence_tag(
-        len(PSI_V01_DEFINITION["categories"]) - len(psi_det_missing),
-        len(PSI_V01_DEFINITION["categories"]),
-        psi_det_coverage, psi_det_missing
-    )
+
+    _stored_populated = row.get("components_populated")
+    if _stored_populated is not None:
+        psi_comps_populated = int(_stored_populated)
+        psi_comps_total = int(row.get("components_total") or len(PSI_V01_DEFINITION["components"]))
+        psi_det_coverage = float(row.get("component_coverage") or (
+            round(psi_comps_populated / max(psi_comps_total, 1), 4)
+        ))
+        psi_det_missing = row.get("missing_categories") or []
+        if isinstance(psi_det_missing, str):
+            import json as _j
+            try:
+                psi_det_missing = _j.loads(psi_det_missing)
+            except Exception:
+                psi_det_missing = []
+        psi_det_conf = {
+            "confidence": row.get("confidence"),
+            "tag": row.get("confidence_tag"),
+            "missing_categories": psi_det_missing,
+        }
+        if not psi_det_conf["confidence"]:
+            psi_det_conf = compute_confidence_tag(
+                len(PSI_V01_DEFINITION["categories"]) - len(psi_det_missing),
+                len(PSI_V01_DEFINITION["categories"]),
+                psi_det_coverage, psi_det_missing,
+            )
+    else:
+        psi_comps_populated = len(psi_comp_scores)
+        psi_comps_total = len(PSI_V01_DEFINITION["components"])
+        psi_det_coverage = round(psi_comps_populated / max(psi_comps_total, 1), 4)
+        psi_det_missing = sorted(set(PSI_V01_DEFINITION["categories"].keys()) - set(psi_cat_scores.keys()))
+        psi_det_conf = compute_confidence_tag(
+            len(PSI_V01_DEFINITION["categories"]) - len(psi_det_missing),
+            len(PSI_V01_DEFINITION["categories"]),
+            psi_det_coverage, psi_det_missing,
+        )
 
     return {
         "protocol_slug": row["protocol_slug"],
@@ -4616,7 +4733,7 @@ async def psi_score_detail(slug: str):
         "score": float(row["overall_score"]) if row.get("overall_score") else None,
         "confidence": psi_det_conf["confidence"],
         "confidence_tag": psi_det_conf["tag"],
-        "missing_categories": psi_det_conf["missing_categories"],
+        "missing_categories": psi_det_conf.get("missing_categories") or psi_det_missing,
         "component_coverage": psi_det_coverage,
         "components_populated": psi_comps_populated,
         "components_total": psi_comps_total,
@@ -4668,20 +4785,72 @@ async def rpi_scores():
         SELECT DISTINCT ON (protocol_slug)
             id, protocol_slug, protocol_name, overall_score, grade,
             component_scores, raw_values, inputs_hash,
-            methodology_version, computed_at
+            methodology_version, computed_at,
+            confidence, confidence_tag, component_coverage,
+            components_populated, components_total, missing_categories
         FROM rpi_scores
         ORDER BY protocol_slug, computed_at DESC
     """)
     from app.index_definitions.rpi_v2 import RPI_V2_DEFINITION
+    from app.scoring_engine import compute_confidence_tag
+    rpi_comps_total_def = len(RPI_V2_DEFINITION["components"])
+    rpi_cats_total = len(RPI_V2_DEFINITION["categories"])
+    _rpi_comp_to_cat = {
+        cid: cdef["category"] for cid, cdef in RPI_V2_DEFINITION["components"].items()
+    }
+
     results = []
     for row in rows:
+        comp_scores = row.get("component_scores") or {}
+        stored_populated = row.get("components_populated")
+        if stored_populated is not None:
+            rpi_populated = int(stored_populated)
+            rpi_total = int(row.get("components_total") or rpi_comps_total_def)
+            rpi_coverage = float(row.get("component_coverage") or (
+                round(rpi_populated / max(rpi_total, 1), 4)
+            ))
+            rpi_missing = row.get("missing_categories") or []
+            if isinstance(rpi_missing, str):
+                import json as _j
+                try:
+                    rpi_missing = _j.loads(rpi_missing)
+                except Exception:
+                    rpi_missing = []
+            rpi_conf_level = row.get("confidence")
+            rpi_conf_tag = row.get("confidence_tag")
+            if not rpi_conf_level:
+                _c = compute_confidence_tag(
+                    rpi_cats_total - len(rpi_missing), rpi_cats_total, rpi_coverage, rpi_missing,
+                )
+                rpi_conf_level, rpi_conf_tag = _c["confidence"], _c["tag"]
+        else:
+            # Legacy fallback — row predates migration 084 / backfill.
+            rpi_populated = len(comp_scores)
+            rpi_total = rpi_comps_total_def
+            rpi_coverage = round(rpi_populated / max(rpi_total, 1), 4)
+            _pop_cats = {
+                _rpi_comp_to_cat[cid] for cid in comp_scores
+                if cid in _rpi_comp_to_cat
+            }
+            rpi_missing = sorted(set(RPI_V2_DEFINITION["categories"].keys()) - _pop_cats)
+            _c = compute_confidence_tag(
+                len(_pop_cats), rpi_cats_total, rpi_coverage, rpi_missing,
+            )
+            rpi_conf_level, rpi_conf_tag = _c["confidence"], _c["tag"]
+
         results.append({
             "protocol_slug": row["protocol_slug"],
             "protocol_name": row["protocol_name"],
             "score": float(row["overall_score"]) if row.get("overall_score") else None,
             "grade": row.get("grade"),
-            "component_scores": row.get("component_scores"),
+            "component_scores": comp_scores,
             "methodology_version": row.get("methodology_version"),
+            "confidence": rpi_conf_level,
+            "confidence_tag": rpi_conf_tag,
+            "missing_categories": rpi_missing,
+            "component_coverage": rpi_coverage,
+            "components_populated": rpi_populated,
+            "components_total": rpi_total,
             "computed_at": row["computed_at"].isoformat() if row.get("computed_at") else None,
         })
     result = {
@@ -4894,7 +5063,9 @@ async def rpi_score_detail(slug: str, lens: Optional[str] = Query(default=None))
     row = fetch_one("""
         SELECT id, protocol_slug, protocol_name, overall_score, grade,
                component_scores, raw_values, inputs_hash,
-               methodology_version, computed_at
+               methodology_version, computed_at,
+               confidence, confidence_tag, component_coverage,
+               components_populated, components_total, missing_categories
         FROM rpi_scores
         WHERE protocol_slug = %s
         ORDER BY computed_at DESC LIMIT 1
@@ -4902,15 +5073,51 @@ async def rpi_score_detail(slug: str, lens: Optional[str] = Query(default=None))
     if not row:
         raise HTTPException(status_code=404, detail=f"Protocol '{slug}' not found in RPI scores")
 
+    from app.index_definitions.rpi_v2 import RPI_V2_DEFINITION as _RPI_DEF
+    from app.scoring_engine import compute_confidence_tag as _cct
+    _comp_scores = row.get("component_scores") or {}
+    _comp_to_cat = {cid: cdef["category"] for cid, cdef in _RPI_DEF["components"].items()}
+    _stored_populated = row.get("components_populated")
+    if _stored_populated is not None:
+        rpi_populated = int(_stored_populated)
+        rpi_total = int(row.get("components_total") or len(_RPI_DEF["components"]))
+        rpi_coverage = float(row.get("component_coverage") or round(rpi_populated / max(rpi_total, 1), 4))
+        rpi_missing = row.get("missing_categories") or []
+        if isinstance(rpi_missing, str):
+            import json as _j
+            try:
+                rpi_missing = _j.loads(rpi_missing)
+            except Exception:
+                rpi_missing = []
+        rpi_conf_level = row.get("confidence")
+        rpi_conf_tag = row.get("confidence_tag")
+        if not rpi_conf_level:
+            _c = _cct(len(_RPI_DEF["categories"]) - len(rpi_missing), len(_RPI_DEF["categories"]), rpi_coverage, rpi_missing)
+            rpi_conf_level, rpi_conf_tag = _c["confidence"], _c["tag"]
+    else:
+        rpi_populated = len(_comp_scores)
+        rpi_total = len(_RPI_DEF["components"])
+        rpi_coverage = round(rpi_populated / max(rpi_total, 1), 4)
+        _pop_cats = {_comp_to_cat[cid] for cid in _comp_scores if cid in _comp_to_cat}
+        rpi_missing = sorted(set(_RPI_DEF["categories"].keys()) - _pop_cats)
+        _c = _cct(len(_pop_cats), len(_RPI_DEF["categories"]), rpi_coverage, rpi_missing)
+        rpi_conf_level, rpi_conf_tag = _c["confidence"], _c["tag"]
+
     result = {
         "protocol_slug": row["protocol_slug"],
         "protocol_name": row["protocol_name"],
         "rpi_base": float(row["overall_score"]) if row.get("overall_score") else None,
         "grade": row.get("grade"),
-        "component_scores": row.get("component_scores"),
+        "component_scores": _comp_scores,
         "raw_values": row.get("raw_values"),
         "inputs_hash": row.get("inputs_hash"),
         "methodology_version": row.get("methodology_version"),
+        "confidence": rpi_conf_level,
+        "confidence_tag": rpi_conf_tag,
+        "missing_categories": rpi_missing,
+        "component_coverage": rpi_coverage,
+        "components_populated": rpi_populated,
+        "components_total": rpi_total,
         "computed_at": row["computed_at"].isoformat() if row.get("computed_at") else None,
     }
 
@@ -5676,28 +5883,91 @@ async def circle7_scores(index_id: str):
     rows = fetch_all("""
         SELECT DISTINCT ON (entity_slug)
             entity_slug, entity_name, overall_score,
-            category_scores, confidence, confidence_tag,
-            scored_date, computed_at
+            category_scores, component_scores, confidence, confidence_tag,
+            component_coverage, components_populated, components_total,
+            missing_categories, scored_date, computed_at
         FROM generic_index_scores
         WHERE index_id = %s
         ORDER BY entity_slug, computed_at DESC
     """, (index_id,))
 
+    # Definition lookup for fallback synthesis on rows that predate backfill.
+    _def_map = {}
+    try:
+        from app.index_definitions.lsti_v01 import LSTI_V01_DEFINITION
+        from app.index_definitions.bri_v01 import BRI_V01_DEFINITION
+        from app.index_definitions.dohi_v01 import DOHI_V01_DEFINITION
+        from app.index_definitions.vsri_v01 import VSRI_V01_DEFINITION
+        from app.index_definitions.cxri_v01 import CXRI_V01_DEFINITION
+        from app.index_definitions.tti_v01 import TTI_V01_DEFINITION
+        _def_map = {
+            "lsti": LSTI_V01_DEFINITION, "bri": BRI_V01_DEFINITION,
+            "dohi": DOHI_V01_DEFINITION, "vsri": VSRI_V01_DEFINITION,
+            "cxri": CXRI_V01_DEFINITION, "tti": TTI_V01_DEFINITION,
+        }
+    except ImportError:
+        pass
+    defn = _def_map.get(index_id)
+
+    from app.scoring_engine import compute_confidence_tag
+    scores_out = []
+    for r in rows:
+        stored_populated = r.get("components_populated")
+        if stored_populated is not None:
+            populated = int(stored_populated)
+            total = int(r.get("components_total") or (
+                len(defn["components"]) if defn else 0
+            ))
+            coverage = float(r.get("component_coverage") or (
+                round(populated / max(total, 1), 4) if total else 0
+            ))
+            missing = r.get("missing_categories") or []
+            if isinstance(missing, str):
+                import json as _j
+                try:
+                    missing = _j.loads(missing)
+                except Exception:
+                    missing = []
+        elif defn is not None:
+            # Legacy fallback — synthesize from component_scores JSON.
+            cs = r.get("component_scores") or {}
+            populated = len(cs)
+            total = len(defn["components"])
+            coverage = round(populated / max(total, 1), 4)
+            cat_scores = r.get("category_scores") or {}
+            missing = sorted(set(defn["categories"].keys()) - set(cat_scores.keys()))
+        else:
+            populated = total = 0
+            coverage = 0.0
+            missing = []
+
+        conf_level = r.get("confidence")
+        conf_tag = r.get("confidence_tag")
+        if not conf_level and defn is not None:
+            _c = compute_confidence_tag(
+                len(defn["categories"]) - len(missing),
+                len(defn["categories"]), coverage, missing,
+            )
+            conf_level, conf_tag = _c["confidence"], _c["tag"]
+
+        scores_out.append({
+            "entity": r["entity_slug"],
+            "name": r["entity_name"],
+            "score": float(r["overall_score"]) if r["overall_score"] else None,
+            "category_scores": r["category_scores"],
+            "confidence": conf_level,
+            "confidence_tag": conf_tag,
+            "missing_categories": missing,
+            "component_coverage": coverage,
+            "components_populated": populated,
+            "components_total": total,
+            "scored_date": str(r["scored_date"]),
+        })
+
     return {
         "index_id": index_id,
         "count": len(rows),
-        "scores": [
-            {
-                "entity": r["entity_slug"],
-                "name": r["entity_name"],
-                "score": float(r["overall_score"]) if r["overall_score"] else None,
-                "category_scores": r["category_scores"],
-                "confidence": r["confidence"],
-                "confidence_tag": r["confidence_tag"],
-                "scored_date": str(r["scored_date"]),
-            }
-            for r in rows
-        ],
+        "scores": scores_out,
     }
 
 
@@ -5712,7 +5982,8 @@ async def circle7_score_detail(index_id: str, entity_slug: str):
         SELECT entity_slug, entity_name, overall_score,
                category_scores, component_scores, raw_values,
                formula_version, inputs_hash, confidence, confidence_tag,
-               scored_date, computed_at
+               component_coverage, components_populated, components_total,
+               missing_categories, scored_date, computed_at
         FROM generic_index_scores
         WHERE index_id = %s AND entity_slug = %s
         ORDER BY computed_at DESC LIMIT 1
@@ -5720,6 +5991,59 @@ async def circle7_score_detail(index_id: str, entity_slug: str):
 
     if not row:
         raise HTTPException(status_code=404, detail=f"No score found for {entity_slug} in {index_id}")
+
+    _def_map = {}
+    try:
+        from app.index_definitions.lsti_v01 import LSTI_V01_DEFINITION
+        from app.index_definitions.bri_v01 import BRI_V01_DEFINITION
+        from app.index_definitions.dohi_v01 import DOHI_V01_DEFINITION
+        from app.index_definitions.vsri_v01 import VSRI_V01_DEFINITION
+        from app.index_definitions.cxri_v01 import CXRI_V01_DEFINITION
+        from app.index_definitions.tti_v01 import TTI_V01_DEFINITION
+        _def_map = {
+            "lsti": LSTI_V01_DEFINITION, "bri": BRI_V01_DEFINITION,
+            "dohi": DOHI_V01_DEFINITION, "vsri": VSRI_V01_DEFINITION,
+            "cxri": CXRI_V01_DEFINITION, "tti": TTI_V01_DEFINITION,
+        }
+    except ImportError:
+        pass
+    defn = _def_map.get(index_id)
+
+    from app.scoring_engine import compute_confidence_tag as _cct
+    stored_populated = row.get("components_populated")
+    if stored_populated is not None:
+        populated = int(stored_populated)
+        total = int(row.get("components_total") or (len(defn["components"]) if defn else 0))
+        coverage = float(row.get("component_coverage") or (
+            round(populated / max(total, 1), 4) if total else 0
+        ))
+        missing = row.get("missing_categories") or []
+        if isinstance(missing, str):
+            import json as _j
+            try:
+                missing = _j.loads(missing)
+            except Exception:
+                missing = []
+    elif defn is not None:
+        cs = row.get("component_scores") or {}
+        populated = len(cs)
+        total = len(defn["components"])
+        coverage = round(populated / max(total, 1), 4)
+        cat_scores = row.get("category_scores") or {}
+        missing = sorted(set(defn["categories"].keys()) - set(cat_scores.keys()))
+    else:
+        populated = total = 0
+        coverage = 0.0
+        missing = []
+
+    conf_level = row.get("confidence")
+    conf_tag = row.get("confidence_tag")
+    if not conf_level and defn is not None:
+        _c = _cct(
+            len(defn["categories"]) - len(missing),
+            len(defn["categories"]), coverage, missing,
+        )
+        conf_level, conf_tag = _c["confidence"], _c["tag"]
 
     return {
         "index_id": index_id,
@@ -5731,8 +6055,12 @@ async def circle7_score_detail(index_id: str, entity_slug: str):
         "raw_values": row["raw_values"],
         "formula_version": row["formula_version"],
         "inputs_hash": row["inputs_hash"],
-        "confidence": row["confidence"],
-        "confidence_tag": row["confidence_tag"],
+        "confidence": conf_level,
+        "confidence_tag": conf_tag,
+        "missing_categories": missing,
+        "component_coverage": coverage,
+        "components_populated": populated,
+        "components_total": total,
         "scored_date": str(row["scored_date"]),
         "computed_at": str(row["computed_at"]),
     }

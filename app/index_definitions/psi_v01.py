@@ -1,17 +1,26 @@
 """
-PSI v0.2.0 — Protocol Solvency Index
+PSI v0.3.0 — Protocol Solvency Index
 ======================================
 Measures financial health and operational resilience of DeFi protocols.
 Uses the same scoring engine as SII with different categories, weights,
 components, and data sources.
+
+v0.3.0 — aggregation migrated from legacy_renormalize to coverage_weighted
+with min_coverage=0.60. Weights, categories, and components unchanged. See
+docs/methodology/aggregation_impact_analysis.md and
+docs/methodology/psi_changelog.md.
 """
 
 PSI_V01_DEFINITION = {
     "index_id": "psi",
-    "version": "v0.2.0",
+    "version": "v0.3.0",
     "name": "Protocol Solvency Index",
     "description": "Measures financial health and operational resilience of DeFi protocols",
     "entity_type": "protocol",
+    "aggregation": {
+        "formula": "coverage_weighted",
+        "params": {"min_coverage": 0.60},
+    },
     "categories": {
         "balance_sheet": {"name": "Balance Sheet & Reserves", "weight": 0.25},
         "revenue": {"name": "Revenue & Sustainability", "weight": 0.20},

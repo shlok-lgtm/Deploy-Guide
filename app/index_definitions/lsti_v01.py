@@ -6,6 +6,14 @@ distribution, smart contract risk, and withdrawal behavior for LSTs.
 
 LSTs behave like stablecoins pegged to ETH rather than USD.
 Reuses SII component structure where it maps.
+
+Aggregation: remains on legacy_renormalize (no `aggregation` block →
+default). Section A of the aggregation impact analysis report shows the
+LSTI coverage distribution is not yet mature enough for a formula
+migration — too much between-entity variance and too few high-coverage
+entities to anchor a `coverage_withheld` threshold without withholding
+the majority of the roster. Revisit after the LST collector expansion.
+See docs/methodology/aggregation_impact_analysis.md.
 """
 
 LSTI_V01_DEFINITION = {

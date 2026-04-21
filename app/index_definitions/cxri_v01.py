@@ -1,17 +1,30 @@
 """
-CXRI v0.1.0 — CEX Reserve Integrity Index
+CXRI v0.2.0 — CEX Reserve Integrity Index
 ============================================
 Measures reserve proof quality, composition, regulatory status,
 operational track record, transparency, and on-chain signals
 for centralized exchanges.
+
+v0.2.0 — promoted from accruing to scored; aggregation migrated from
+legacy_renormalize to coverage_withheld with coverage_threshold=0.70.
+Weights, categories, and components unchanged. Threshold justified by
+Section A of the aggregation impact analysis report — CXRI coverage
+distribution has matured to the point where 0.70 separates exchanges
+with meaningful PoR/on-chain signal coverage from those without. See
+docs/methodology/aggregation_impact_analysis.md and
+docs/methodology/cxri_changelog.md.
 """
 
 CXRI_V01_DEFINITION = {
     "index_id": "cxri",
-    "version": "v0.1.0",
+    "version": "v0.2.0",
     "name": "CEX Reserve Integrity Index",
     "description": "Reserve integrity and operational risk scoring for centralized exchanges",
     "entity_type": "cex",
+    "aggregation": {
+        "formula": "coverage_withheld",
+        "params": {"coverage_threshold": 0.70},
+    },
     "categories": {
         "reserve_proof_quality": {"name": "Reserve Proof Quality", "weight": 0.25},
         "reserve_composition": {"name": "Reserve Composition", "weight": 0.20},

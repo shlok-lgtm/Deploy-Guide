@@ -1810,9 +1810,9 @@ function normalizeScores(indexId, data) {
       name: p.protocol_name,
       slug: p.protocol_slug,
       score: p.score,
-      confidence_tag: null,
-      components_populated: null,
-      components_total: null,
+      confidence_tag: p.confidence_tag,
+      components_populated: p.components_populated,
+      components_total: p.components_total,
       computed_at: p.computed_at,
     }));
   }
@@ -1822,8 +1822,8 @@ function normalizeScores(indexId, data) {
     slug: s.entity,
     score: s.score,
     confidence_tag: s.confidence_tag,
-    components_populated: null,
-    components_total: null,
+    components_populated: s.components_populated,
+    components_total: s.components_total,
     computed_at: s.scored_date,
   }));
 }

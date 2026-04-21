@@ -20,7 +20,7 @@ The SII dashboard and API are **live in production**. The following are stable a
 - `app/governance.py` — Governance document crawler + sentiment analysis (Aave, MakerDAO, Compound, Morpho, Frax forums).
 - `app/content_engine.py` — Content signal generation from governance data.
 - `frontend/src/App.jsx` (3,212 lines) — React dashboard. Vite build. Do not rewrite from scratch.
-- `migrations/` — 57 applied SQL migrations (001 through 057). Next migration: 058.
+- `migrations/` — applied SQL migrations up to 084. Next migration: 085.
 
 ## Architecture
 
@@ -132,7 +132,7 @@ Structural = 0.30×Reserves + 0.20×SmartContract + 0.15×Oracle + 0.20×Governa
 
 ## Database (Neon Postgres)
 
-57 migrations applied (001 through 057). Key table groups:
+Migrations applied up to 084. Key table groups:
 
 - **Core SII:** stablecoins, component_readings, scores, score_history, score_events, historical_prices, deviation_events, data_provenance
 - **Wallet graph:** wallets, wallet_holdings, wallet_risk_scores, wallet_edges, wallet_profiles, unscored_assets
@@ -266,7 +266,7 @@ Spokes never import from `app/`. They never touch the database directly.
 - Python backend (FastAPI, psycopg2, httpx for async HTTP)
 - React frontend (Vite, single-file App.jsx pattern)
 - All database access through `app/database.py` helpers (`fetch_one`, `fetch_all`, `execute`, `get_cursor`)
-- New migrations go in `migrations/` with sequential numbering (next: 055)
+- New migrations go in `migrations/` with sequential numbering (next: 085)
 - Scores are 0-100, grades A+ through F
 - **Never use the word "rating"** — use "score," "index," "surface"
 - **Terminology:** validation (not traction), bear/base/bull (not conservative)

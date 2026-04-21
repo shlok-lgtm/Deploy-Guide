@@ -203,6 +203,32 @@ def compute_sii_from_components(components: list[dict]) -> dict:
     }
     
     rounded_overall = round(overall, 2)
+
+    # V7.3 confidence tag fields — derived from actual populated components
+    # against the SII v1 component definition. components_total is the total
+    # number of components in COMPONENT_NORMALIZATIONS (56 as of v1.0.0).
+    # components_populated counts only components whose normalized_score is
+    # not None and whose component_id is part of the v1 definition.
+    from app.scoring import COMPONENT_NORMALIZATIONS
+    from app.scoring_engine import compute_confidence_tag
+    sii_comp_total = len(COMPONENT_NORMALIZATIONS)
+    sii_comp_populated = sum(
+        1 for c in components
+        if c.get("component_id") in COMPONENT_NORMALIZATIONS
+        and c.get("normalized_score") is not None
+    )
+    sii_coverage = round(sii_comp_populated / max(sii_comp_total, 1), 4)
+
+    # Missing categories (V1 names): any weighted v1 category whose aggregate
+    # score is None/zero because no component produced a normalized value.
+    _v1_missing = [
+        cat for cat, val in v1_scores.items()
+        if val is None or val == 0
+    ]
+    _conf = compute_confidence_tag(
+        5 - len(_v1_missing), 5, sii_coverage, _v1_missing,
+    )
+
     return {
         "overall_score": rounded_overall,
         "grade": score_to_grade(rounded_overall),
@@ -218,6 +244,12 @@ def compute_sii_from_components(components: list[dict]) -> dict:
         "network_score": round(structural_subs.get("network_chain_risk") or 0, 2),
         "component_count": len(components),
         "formula_version": FORMULA_VERSION,
+        "components_populated": sii_comp_populated,
+        "components_total": sii_comp_total,
+        "component_coverage": sii_coverage,
+        "missing_categories": _v1_missing,
+        "confidence": _conf["confidence"],
+        "confidence_tag": _conf["tag"],
     }
 
 
@@ -273,6 +305,9 @@ def store_score(stablecoin_id: str, score_data: dict, price_ctx: dict):
     if week_ago and week_ago.get("overall_score"):
         weekly_change = round(score_data["overall_score"] - float(week_ago["overall_score"]), 3)
     
+    import json as _json
+    missing_cats = score_data.get("missing_categories") or []
+
     with get_cursor() as cur:
         cur.execute("""
             INSERT INTO scores (
@@ -282,6 +317,8 @@ def store_score(stablecoin_id: str, score_data: dict, price_ctx: dict):
                 component_count, formula_version, data_freshness_pct,
                 current_price, market_cap, volume_24h,
                 daily_change, weekly_change,
+                confidence, confidence_tag, component_coverage,
+                components_populated, components_total, missing_categories,
                 computed_at, updated_at
             ) VALUES (
                 %s, %s, %s,
@@ -290,6 +327,8 @@ def store_score(stablecoin_id: str, score_data: dict, price_ctx: dict):
                 %s, %s, %s,
                 %s, %s, %s,
                 %s, %s,
+                %s, %s, %s,
+                %s, %s, %s,
                 NOW(), NOW()
             )
             ON CONFLICT (stablecoin_id) DO UPDATE SET
@@ -313,6 +352,12 @@ def store_score(stablecoin_id: str, score_data: dict, price_ctx: dict):
                 volume_24h = EXCLUDED.volume_24h,
                 daily_change = EXCLUDED.daily_change,
                 weekly_change = EXCLUDED.weekly_change,
+                confidence = EXCLUDED.confidence,
+                confidence_tag = EXCLUDED.confidence_tag,
+                component_coverage = EXCLUDED.component_coverage,
+                components_populated = EXCLUDED.components_populated,
+                components_total = EXCLUDED.components_total,
+                missing_categories = EXCLUDED.missing_categories,
                 computed_at = NOW(),
                 updated_at = NOW()
         """, (
@@ -329,6 +374,12 @@ def store_score(stablecoin_id: str, score_data: dict, price_ctx: dict):
             price_ctx.get("current_price"), price_ctx.get("market_cap"),
             price_ctx.get("volume_24h"),
             daily_change, weekly_change,
+            score_data.get("confidence"),
+            score_data.get("confidence_tag"),
+            score_data.get("component_coverage"),
+            score_data.get("components_populated"),
+            score_data.get("components_total"),
+            _json.dumps(missing_cats),
         ))
 
 

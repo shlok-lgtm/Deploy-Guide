@@ -532,8 +532,9 @@ def store_lst_score(result: dict) -> None:
         INSERT INTO generic_index_scores
             (index_id, entity_slug, entity_name, overall_score,
              category_scores, component_scores, raw_values,
-             formula_version, inputs_hash, confidence, confidence_tag)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+             formula_version, inputs_hash, confidence, confidence_tag,
+             component_coverage, components_populated, components_total, missing_categories)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (index_id, entity_slug, scored_date)
         DO UPDATE SET
             entity_name = EXCLUDED.entity_name,
@@ -544,6 +545,10 @@ def store_lst_score(result: dict) -> None:
             inputs_hash = EXCLUDED.inputs_hash,
             confidence = EXCLUDED.confidence,
             confidence_tag = EXCLUDED.confidence_tag,
+            component_coverage = EXCLUDED.component_coverage,
+            components_populated = EXCLUDED.components_populated,
+            components_total = EXCLUDED.components_total,
+            missing_categories = EXCLUDED.missing_categories,
             computed_at = NOW()
     """, (
         "lsti",
@@ -557,6 +562,10 @@ def store_lst_score(result: dict) -> None:
         inputs_hash,
         result.get("confidence", "limited"),
         result.get("confidence_tag"),
+        result.get("component_coverage"),
+        result.get("components_populated"),
+        result.get("components_total"),
+        json.dumps(result.get("missing_categories") or []),
     ))
 
 

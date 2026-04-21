@@ -4,6 +4,13 @@ DOHI v0.1.0 — DAO Operational Health Index
 Extends PSI's governance category into a standalone surface.
 Measures governance activity, concentration, operational continuity,
 treasury management, security posture, and transparency.
+
+Aggregation: remains on legacy_renormalize (no `aggregation` block →
+default). Section A of the aggregation impact analysis report shows
+DOHI coverage is still too sparse across the governance-activity and
+transparency categories for a formula migration to produce comparable
+results. Deferred until DAO governance collectors catch up. See
+docs/methodology/aggregation_impact_analysis.md.
 """
 
 DOHI_V01_DEFINITION = {
