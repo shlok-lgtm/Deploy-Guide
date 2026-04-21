@@ -2605,6 +2605,30 @@ async def main():
         "ALTER TABLE liquidity_depth ADD COLUMN IF NOT EXISTS bid_depth NUMERIC",
         "ALTER TABLE liquidity_depth ADD COLUMN IF NOT EXISTS ask_depth NUMERIC",
         "ALTER TABLE liquidity_depth ADD COLUMN IF NOT EXISTS spread_bps NUMERIC",
+        # liquidity_depth columns used by data_layer/liquidity_collector.py + worker fast cycle
+        "ALTER TABLE liquidity_depth ADD COLUMN IF NOT EXISTS venue_type TEXT",
+        "ALTER TABLE liquidity_depth ADD COLUMN IF NOT EXISTS pool_address TEXT",
+        "ALTER TABLE liquidity_depth ADD COLUMN IF NOT EXISTS bid_depth_1pct NUMERIC",
+        "ALTER TABLE liquidity_depth ADD COLUMN IF NOT EXISTS ask_depth_1pct NUMERIC",
+        "ALTER TABLE liquidity_depth ADD COLUMN IF NOT EXISTS bid_depth_2pct NUMERIC",
+        "ALTER TABLE liquidity_depth ADD COLUMN IF NOT EXISTS ask_depth_2pct NUMERIC",
+        "ALTER TABLE liquidity_depth ADD COLUMN IF NOT EXISTS volume_24h NUMERIC",
+        "ALTER TABLE liquidity_depth ADD COLUMN IF NOT EXISTS trade_count_24h INTEGER",
+        "ALTER TABLE liquidity_depth ADD COLUMN IF NOT EXISTS buy_sell_ratio NUMERIC",
+        "ALTER TABLE liquidity_depth ADD COLUMN IF NOT EXISTS trust_score TEXT",
+        "ALTER TABLE liquidity_depth ADD COLUMN IF NOT EXISTS liquidity_score NUMERIC",
+        # dex_pool_ohlcv columns (safety — in case older CREATE TABLE was applied)
+        "ALTER TABLE dex_pool_ohlcv ADD COLUMN IF NOT EXISTS pool_address TEXT",
+        "ALTER TABLE dex_pool_ohlcv ADD COLUMN IF NOT EXISTS chain TEXT",
+        "ALTER TABLE dex_pool_ohlcv ADD COLUMN IF NOT EXISTS dex TEXT",
+        "ALTER TABLE dex_pool_ohlcv ADD COLUMN IF NOT EXISTS asset_id TEXT",
+        "ALTER TABLE dex_pool_ohlcv ADD COLUMN IF NOT EXISTS timestamp TIMESTAMPTZ",
+        "ALTER TABLE dex_pool_ohlcv ADD COLUMN IF NOT EXISTS open NUMERIC",
+        "ALTER TABLE dex_pool_ohlcv ADD COLUMN IF NOT EXISTS high NUMERIC",
+        "ALTER TABLE dex_pool_ohlcv ADD COLUMN IF NOT EXISTS low NUMERIC",
+        "ALTER TABLE dex_pool_ohlcv ADD COLUMN IF NOT EXISTS close NUMERIC",
+        "ALTER TABLE dex_pool_ohlcv ADD COLUMN IF NOT EXISTS volume NUMERIC",
+        "ALTER TABLE dex_pool_ohlcv ADD COLUMN IF NOT EXISTS trades_count INTEGER",
     ]
     for _ddl in _data_layer_creates:
         try:

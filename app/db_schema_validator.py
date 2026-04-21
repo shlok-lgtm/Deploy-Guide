@@ -73,8 +73,10 @@ EXPECTED_COLUMNS = {
         "block_number", "from_address", "to_address", "timestamp", "collected_at",
     ],
     "liquidity_depth": [
-        "id", "asset_id", "venue", "chain", "depth_usd_2pct", "depth_usd_5pct",
-        "bid_depth", "ask_depth", "spread_bps", "raw_data", "snapshot_at",
+        "id", "asset_id", "venue", "venue_type", "chain", "pool_address",
+        "bid_depth_1pct", "ask_depth_1pct", "bid_depth_2pct", "ask_depth_2pct",
+        "spread_bps", "volume_24h", "trade_count_24h", "buy_sell_ratio",
+        "trust_score", "liquidity_score", "raw_data", "snapshot_at",
     ],
     "contract_surveillance": [
         "id", "entity_id", "chain", "contract_address", "has_admin_keys",
@@ -124,6 +126,63 @@ EXPECTED_COLUMNS = {
     "dex_pool_ohlcv": [
         "id", "pool_address", "chain", "dex", "asset_id", "timestamp",
         "open", "high", "low", "close", "volume", "trades_count",
+    ],
+    "component_readings": [
+        "stablecoin_id", "component_id", "category", "raw_value",
+        "normalized_score", "data_source", "collected_at",
+    ],
+    "score_history": [
+        "stablecoin", "score_date", "overall_score", "grade",
+        "peg_score", "liquidity_score", "mint_burn_score", "distribution_score",
+        "structural_score", "reserves_score", "contract_score", "oracle_score",
+        "governance_score", "network_score", "component_count", "formula_version",
+        "daily_change", "created_at",
+    ],
+    "data_provenance": [
+        "stablecoin_id", "component_id", "category", "raw_value",
+        "normalized_score", "data_source", "metadata", "recorded_at",
+    ],
+    "collector_cycle_stats": [
+        "collector_name", "coins_ok", "coins_timeout", "coins_error",
+        "avg_latency_ms", "total_components",
+    ],
+    "state_attestations": [
+        "domain", "entity_id", "batch_hash", "record_count",
+        "methodology_version", "cycle_timestamp",
+    ],
+    "daily_pulses": [
+        "pulse_date", "summary", "page_url",
+    ],
+    "market_chart_history": [
+        "coin_id", "stablecoin_id", "timestamp", "price",
+        "market_cap", "total_volume", "granularity",
+    ],
+    "volatility_surfaces": [
+        "asset_id", "realized_vol_1d", "realized_vol_7d", "realized_vol_30d",
+        "realized_vol_90d", "max_drawdown_7d", "max_drawdown_30d",
+        "max_drawdown_90d", "recovery_time_hours", "computed_at",
+    ],
+    "discovery_signals": [
+        "signal_type", "domain", "title", "description", "entities",
+        "novelty_score", "direction", "magnitude", "baseline",
+        "detail", "methodology_version",
+    ],
+    "rpi_scores": [
+        "protocol_slug", "protocol_name", "overall_score", "grade",
+        "component_scores", "raw_values", "inputs_hash", "methodology_version",
+    ],
+    "score_events": [
+        "event_date", "event_name", "event_type", "affected_stablecoins",
+        "description", "severity",
+    ],
+    "governance_events": [
+        "protocol_slug", "event_type", "event_timestamp", "title",
+        "description", "outcome", "contributor_tag", "source",
+        "source_id", "metadata",
+    ],
+    "protocol_pool_wallets": [
+        "protocol_slug", "stablecoin_symbol", "chain", "wallet_address",
+        "pool_contract_address", "discovered_at", "last_seen",
     ],
 }
 
