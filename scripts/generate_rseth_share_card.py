@@ -2,9 +2,9 @@
 Generate share card PNG for /incident/rseth-2026-04-18.
 
 Output: public/share/incident/rseth-2026-04-18.png (1200x630)
-Fonts:  Liberation Sans/Mono — IBM Plex-compatible metrics when Plex isn't
-        available on the build host. Production card can be re-rendered
-        with real Plex later; v1 commits the static PNG.
+Fonts:  IBM Plex Sans + IBM Plex Mono, committed to fonts/ at the repo root
+        to match the rest of the Basis design system. Liberation is the
+        fallback if the TTF files ever go missing at build time.
 
 Design:
   Paper background, black typography.
@@ -30,16 +30,41 @@ INK_LIGHT = (106, 106, 106)
 INK_FAINT = (154, 154, 154)
 RULE_MID = (200, 196, 188)
 
-FONT_SANS = "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"
-FONT_SANS_BOLD = "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
-FONT_MONO = "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf"
-FONT_MONO_BOLD = "/usr/share/fonts/truetype/liberation/LiberationMono-Bold.ttf"
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+FONTS_DIR = os.path.join(ROOT, "fonts")
+
+# Primary: IBM Plex committed at repo root. Fallback: Liberation (metric-
+# compatible with Helvetica/Courier) from the base image, used only if the
+# Plex TTFs are missing from the build context for any reason.
+FONT_SANS = os.path.join(FONTS_DIR, "IBMPlexSans-Regular.ttf")
+FONT_SANS_BOLD = os.path.join(FONTS_DIR, "IBMPlexSans-Bold.ttf")
+FONT_MONO = os.path.join(FONTS_DIR, "IBMPlexMono-Regular.ttf")
+# IBM Plex Mono Bold is not currently bundled; use regular Mono for both
+# places the card previously used bold-mono (value label on highlighted row).
+FONT_MONO_BOLD = FONT_MONO
+
+_FALLBACK_SANS = "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"
+_FALLBACK_SANS_BOLD = "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
+_FALLBACK_MONO = "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf"
 
 
 def _font(path: str, size: int) -> ImageFont.FreeTypeFont:
     try:
         return ImageFont.truetype(path, size)
     except Exception:
+        # Try fallback path, then PIL default as last resort.
+        fallback_map = {
+            FONT_SANS: _FALLBACK_SANS,
+            FONT_SANS_BOLD: _FALLBACK_SANS_BOLD,
+            FONT_MONO: _FALLBACK_MONO,
+        }
+        fb = fallback_map.get(path)
+        if fb:
+            try:
+                return ImageFont.truetype(fb, size)
+            except Exception:
+                pass
         return ImageFont.load_default()
 
 
