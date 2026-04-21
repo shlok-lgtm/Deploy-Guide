@@ -3440,6 +3440,126 @@ async def track_record_on_chain_status(request: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+
+# =============================================================================
+# Methodology Hashes
+# =============================================================================
+
+@router.post("/methodology")
+async def ops_register_methodology(request: Request):
+    """Register an immutable methodology hash."""
+    _check_admin_key(request)
+    try:
+        body = await request.json()
+        methodology_id = body.get("methodology_id")
+        content = body.get("content")
+        description = body.get("description", "")
+        if not methodology_id or not content:
+            return JSONResponse({"error": "methodology_id and content are required"}, status_code=400)
+
+        from app.methodology_hashes import register_methodology
+        content_hash = register_methodology(methodology_id, content, description)
+        return {"status": "registered", "methodology_id": methodology_id, "content_hash": content_hash}
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=409)
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse({"error": str(e), "traceback": _traceback_mod.format_exc()}, status_code=500)
+
+
+@router.get("/methodology")
+async def ops_list_methodologies(request: Request):
+    """List all registered methodologies (without content)."""
+    _check_admin_key(request)
+    try:
+        from app.methodology_hashes import list_methodologies
+        return {"methodologies": list_methodologies()}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.get("/methodology/pending-on-chain")
+async def ops_methodology_pending_on_chain(request: Request, chain: str = "base"):
+    """Get methodologies not yet committed on-chain for a given chain."""
+    _check_admin_key(request)
+    if chain not in ("base", "arbitrum"):
+        return JSONResponse({"error": "chain must be 'base' or 'arbitrum'"}, status_code=400)
+
+    col = f"committed_on_chain_{chain}"
+    try:
+        from app.methodology_hashes import compute_on_chain_entity_id
+        rows = fetch_all(
+            f"""SELECT methodology_id, content_hash, description, registered_at
+                FROM methodology_hashes
+                WHERE {col} = FALSE
+                ORDER BY registered_at ASC"""
+        )
+        results = []
+        for r in (rows or []):
+            entry = dict(r)
+            entry["entity_id_bytes32"] = compute_on_chain_entity_id(entry)
+            results.append(entry)
+        return results
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.get("/methodology/{methodology_id}")
+async def ops_get_methodology(methodology_id: str, request: Request):
+    """Get a single methodology including full content."""
+    _check_admin_key(request)
+    try:
+        from app.methodology_hashes import get_methodology
+        m = get_methodology(methodology_id)
+        if not m:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return m
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.post("/methodology/{methodology_id}/committed/{chain}")
+async def ops_methodology_mark_committed(methodology_id: str, chain: str, request: Request):
+    """Mark a methodology as committed on-chain for a given chain."""
+    _check_admin_key(request)
+    if chain not in ("base", "arbitrum"):
+        return JSONResponse({"error": "chain must be 'base' or 'arbitrum'"}, status_code=400)
+
+    try:
+        body = await request.json()
+        tx_hash = body.get("tx_hash")
+        if not tx_hash:
+            return JSONResponse({"error": "tx_hash required"}, status_code=400)
+
+        existing = fetch_one(
+            "SELECT methodology_id FROM methodology_hashes WHERE methodology_id = %s",
+            (methodology_id,),
+        )
+        if not existing:
+            return JSONResponse({"error": "methodology not found"}, status_code=404)
+
+        col_flag = f"committed_on_chain_{chain}"
+        col_hash = f"on_chain_tx_hash_{chain}"
+        execute(
+            f"""UPDATE methodology_hashes
+                SET {col_flag} = TRUE,
+                    {col_hash} = %s,
+                    committed_at = COALESCE(committed_at, NOW())
+                WHERE methodology_id = %s""",
+            (tx_hash, methodology_id),
+        )
+        return {"status": "ok", "methodology_id": methodology_id, "chain": chain, "tx_hash": tx_hash}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 # =============================================================================
 # Disputes
 # =============================================================================
