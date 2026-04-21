@@ -6,6 +6,15 @@ treasury and real-world asset products.
 
 53% off-chain component ratio — relies heavily on issuer disclosure
 ingestion (CDA pattern).
+
+Aggregation: remains on legacy_renormalize (no `aggregation` block →
+default). Section A of the aggregation impact analysis report shows
+TTI is the sparsest of the accruing set — the 53% off-chain dependence
+means component coverage is driven by CDA ingestion quality, and no
+threshold in [0.60, 0.85] separates meaningful populated products from
+disclosure-light ones without withholding nearly the entire roster.
+Revisit after CDA backfill completes. See
+docs/methodology/aggregation_impact_analysis.md.
 """
 
 TTI_V01_DEFINITION = {

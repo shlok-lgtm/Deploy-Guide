@@ -1,17 +1,31 @@
 """
-VSRI v0.1.0 — Vault/Yield Strategy Risk Index
+VSRI v0.2.0 — Vault/Yield Strategy Risk Index
 ================================================
 Measures strategy transparency, performance, liquidity risk,
 smart contract risk, underlying asset quality, and operational risk
 for DeFi vault/yield products.
+
+v0.2.0 — aggregation migrated from legacy_renormalize to coverage_withheld
+with coverage_threshold=0.60. VSRI remains accruing (the promotion
+criteria is a separate methodology step). Weights, categories, and
+components unchanged. Threshold justified by Section A of the
+aggregation impact analysis report — 0.60 is the floor below which
+strategy-transparency and underlying-asset categories have too few
+populated components to anchor a meaningful overall. See
+docs/methodology/aggregation_impact_analysis.md and
+docs/methodology/vsri_changelog.md.
 """
 
 VSRI_V01_DEFINITION = {
     "index_id": "vsri",
-    "version": "v0.1.0",
+    "version": "v0.2.0",
     "name": "Vault/Yield Strategy Risk Index",
     "description": "Risk scoring for DeFi vault and yield strategy products",
     "entity_type": "vault",
+    "aggregation": {
+        "formula": "coverage_withheld",
+        "params": {"coverage_threshold": 0.60},
+    },
     "categories": {
         "strategy_transparency": {"name": "Strategy Transparency", "weight": 0.20},
         "performance_volatility": {"name": "Performance & Volatility", "weight": 0.20},

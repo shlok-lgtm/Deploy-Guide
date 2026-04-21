@@ -1,16 +1,29 @@
 """
-BRI v0.1.0 — Bridge Integrity Index
+BRI v0.2.0 — Bridge Integrity Index
 =====================================
 Measures security, operational history, liquidity, smart contract risk,
 decentralization, and economic security for cross-chain bridges.
+
+v0.2.0 — promoted from accruing to scored; aggregation migrated from
+legacy_renormalize to coverage_withheld with coverage_threshold=0.70.
+Weights, categories, and components unchanged. Threshold justified by
+Section A of the aggregation impact analysis report — the BRI coverage
+distribution is mature enough that 0.70 marks a meaningful quality gate
+without withholding the bulk of the roster. See
+docs/methodology/aggregation_impact_analysis.md and
+docs/methodology/bri_changelog.md.
 """
 
 BRI_V01_DEFINITION = {
     "index_id": "bri",
-    "version": "v0.1.0",
+    "version": "v0.2.0",
     "name": "Bridge Integrity Index",
     "description": "Risk scoring for cross-chain bridge protocols",
     "entity_type": "bridge",
+    "aggregation": {
+        "formula": "coverage_withheld",
+        "params": {"coverage_threshold": 0.70},
+    },
     "categories": {
         "security_architecture": {"name": "Security Architecture", "weight": 0.25},
         "operational_history": {"name": "Operational History", "weight": 0.20},

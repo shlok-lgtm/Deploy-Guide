@@ -313,26 +313,65 @@ def _all_index_definitions():
     ]
 
 
+# Expected declared aggregation per index after the 2026-04-21 migration.
+# Indices not listed here intentionally remain on the default
+# (legacy_renormalize) and must not declare an `aggregation` block until
+# their own migration lands. See docs/methodology/aggregation_impact_analysis.md
+# and the per-index changelog files under docs/methodology/*_changelog.md.
+_DECLARED_AGGREGATIONS = {
+    "sii":  ("coverage_weighted",  {"min_coverage": 0.0}),
+    "psi":  ("coverage_weighted",  {"min_coverage": 0.60}),
+    "bri":  ("coverage_withheld",  {"coverage_threshold": 0.70}),
+    "cxri": ("coverage_withheld",  {"coverage_threshold": 0.70}),
+    "vsri": ("coverage_withheld",  {"coverage_threshold": 0.60}),
+}
+_UNDECLARED_INDEX_IDS = {"rpi", "lsti", "dohi", "tti"}
+
+
 @pytest.mark.parametrize("definition", _all_index_definitions())
-def test_definition_has_no_aggregation_block(definition):
-    """Confirm no index declares a non-default aggregation in this PR —
-    this is the spec's primary guarantee of no external behavior change."""
-    assert definition.get("aggregation") is None, (
-        f"{definition['index_id']} declares aggregation; "
-        f"this PR ships infrastructure only — migrations are follow-up PRs."
-    )
+def test_definition_aggregation_block_matches_migration_spec(definition):
+    """Every migrated index declares the exact formula + params from its
+    v0.2/v0.3/v1.1 migration; every non-migrated index still has no
+    `aggregation` block so it takes the legacy_renormalize default."""
+    index_id = definition["index_id"]
+    decl = definition.get("aggregation")
+    if index_id in _DECLARED_AGGREGATIONS:
+        expected_formula, expected_params = _DECLARED_AGGREGATIONS[index_id]
+        assert decl is not None, (
+            f"{index_id} should declare aggregation after its migration; "
+            f"see docs/methodology/{index_id}_changelog.md"
+        )
+        assert decl["formula"] == expected_formula
+        assert decl.get("params", {}) == expected_params
+        assert decl["formula"] in AGGREGATION_FORMULAS
+    else:
+        assert index_id in _UNDECLARED_INDEX_IDS, (
+            f"Unexpected index {index_id}; update this test's "
+            f"_DECLARED_AGGREGATIONS or _UNDECLARED_INDEX_IDS set."
+        )
+        assert decl is None, (
+            f"{index_id} should not declare aggregation until its own "
+            f"migration lands; the analysis report in "
+            f"docs/methodology/aggregation_impact_analysis.md flags "
+            f"coverage maturity or methodology issues for this index."
+        )
 
 
 @pytest.mark.parametrize("definition", _all_index_definitions())
 def test_score_entity_produces_all_new_fields(definition):
     """Every score_entity() result carries the additive fields regardless
-    of flag state. We pass empty raw_values so the path exercises with no
-    components populated."""
+    of formula choice. For migrated indices, aggregation_method reflects
+    the declared formula; for non-migrated indices it's legacy_renormalize."""
     result = score_entity(definition, {})
     for field in ("effective_category_weights", "withheld",
                   "aggregation_method", "aggregation_formula_version"):
         assert field in result, f"missing {field}"
-    assert result["aggregation_method"] == "legacy_renormalize"
+    expected_method = (
+        _DECLARED_AGGREGATIONS[definition["index_id"]][0]
+        if definition["index_id"] in _DECLARED_AGGREGATIONS
+        else "legacy_renormalize"
+    )
+    assert result["aggregation_method"] == expected_method
     assert result["aggregation_formula_version"] == AGGREGATION_FORMULA_VERSION
 
 

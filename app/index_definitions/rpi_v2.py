@@ -10,6 +10,17 @@ optional overlays that consumers can apply.
 
 Base score is always computed and stored.
 Lensed score is computed on-the-fly when requested via ?lens= query param.
+
+Aggregation: remains on RPI's bespoke normalization (not dispatched
+through the aggregation registry — RPI uses its own custom path in
+app/rpi/scorer.py::score_rpi_base). Section B of the aggregation
+impact analysis report flagged RPI as having a methodology-
+discrimination problem — 10+ protocols produce identical base scores
+because the 5 automated components saturate on a crowded mid-range.
+Swapping the aggregation formula would obscure this rather than solve
+it; the fix is methodology review (adding discriminating components or
+re-weighting), not a formula migration. Deferred until that review.
+See docs/methodology/aggregation_impact_analysis.md.
 """
 
 from app.index_definitions.psi_v01 import TARGET_PROTOCOLS

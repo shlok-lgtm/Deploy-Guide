@@ -63,8 +63,14 @@ INDEX_SOURCES = [
      "FROM rpi_scores ORDER BY protocol_slug, computed_at DESC"),
 ]
 
-# Accruing indices live in generic_index_scores.
-ACCRUING_INDEX_IDS = ["lsti", "bri", "dohi", "vsri", "cxri", "tti"]
+# Indices that live in generic_index_scores. BRI and CXRI were promoted
+# from accruing to scored in their v0.2.0 migrations (see per-index
+# changelog files and docs/methodology/aggregation_impact_analysis.md).
+# The analyzer treats them the same as the remaining accruing set since
+# the storage layout is identical.
+GENERIC_TABLE_INDEX_IDS = ["lsti", "bri", "dohi", "vsri", "cxri", "tti"]
+ACCRUING_INDEX_IDS = ["lsti", "dohi", "vsri", "tti"]
+SCORED_CIRCLE7_INDEX_IDS = ["bri", "cxri"]
 
 GENERIC_SCORE_QUERY = (
     "SELECT DISTINCT ON (entity_slug) entity_slug, entity_name, overall_score, "
@@ -475,8 +481,9 @@ def main() -> None:
     # RPI
     _, _, _, rpi_q = INDEX_SOURCES[2]
     all_rows_by_index["rpi"] = analyze_psi_rpi("rpi", rpi_q, "app.index_definitions.rpi_v2", "RPI_V2_DEFINITION")
-    # Accruing
-    for idx in ACCRUING_INDEX_IDS:
+    # generic_index_scores residents: the accruing set plus the Circle 7
+    # indices that were promoted to scored in their v0.2.0 migrations.
+    for idx in GENERIC_TABLE_INDEX_IDS:
         all_rows_by_index[idx] = analyze_generic_index(idx)
 
     print("Computing CQI shift matrix...", file=sys.stderr)

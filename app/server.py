@@ -903,7 +903,10 @@ def _resolve_entity(slug: str) -> dict | None:
             "api_path": f"/api/rpi/scores/{slug_lower}",
         }
 
-    # Circle 7
+    # Circle 7 — BRI and CXRI promoted to scored in v0.2.0 (see
+    # docs/methodology/aggregation_impact_analysis.md and the per-index
+    # changelog files). LSTI, DOHI, VSRI, TTI remain accruing.
+    _scored_circle7 = {"bri", "cxri"}
     for idx in ["lsti", "bri", "dohi", "vsri", "cxri", "tti"]:
         row = fetch_one("""
             SELECT overall_score, entity_name, category_scores,
@@ -925,7 +928,7 @@ def _resolve_entity(slug: str) -> dict | None:
                 "categories": {k.replace("_", " ").title(): v for k, v in cats.items()} if isinstance(cats, dict) else {},
                 "computed_at": row["computed_at"].isoformat() if row.get("computed_at") else None,
                 "formula_version": row.get("formula_version"),
-                "accruing": True,
+                "accruing": idx not in _scored_circle7,
                 "api_path": f"/api/scores/{slug_lower}",
             }
 
