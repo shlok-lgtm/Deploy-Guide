@@ -4,15 +4,14 @@ Track Record — Auto-Entry Writer
 Detects qualifying signals from existing attested state and logs them
 as track_record_entries. Runs at the end of the slow cycle.
 
-Active rules (based on available source tables):
-  A — Material score change (>=10 points in 7 days, high confidence)
-  B — Divergence signal (from divergence_signals table)
-  C — Coherence drop (from coherence_reports, issues_found > 0)
-
-Deferred rules (source tables don't exist yet):
-  D — Oracle stress events (oracle_stress_events table missing)
-  E — Governance proposal edits (governance_proposal_snapshots missing)
-  F — Contract upgrades (contract_upgrade_history missing)
+Active rules:
+  A — Material score change (>=10 points in 7 days)
+  B — Divergence signal (critical/alert severity)
+  C — Coherence drop (issues_found > 0)
+  D — Oracle stress event (open events)
+  E — Governance proposal edit (body_changed)
+  F — Contract upgrade detected
+  G — RPI week-over-week delta >= 10 points
 """
 
 import hashlib
@@ -87,6 +86,17 @@ def _get_entity_baseline(entity_slug: str, index_name: str) -> dict:
             baseline["score"] = float(row.get("overall_score") or 0)
             baseline["confidence"] = row.get("confidence")
             baseline["confidence_tag"] = row.get("confidence_tag")
+
+    elif index_name == "rpi":
+        row = fetch_one(
+            "SELECT * FROM rpi_scores WHERE protocol_slug = %s ORDER BY scored_date DESC LIMIT 1",
+            (entity_slug,),
+        )
+        if row:
+            baseline["score"] = float(row.get("overall_score") or 0)
+            baseline["grade"] = row.get("grade")
+            baseline["component_scores"] = row.get("component_scores")
+            baseline["methodology_version"] = row.get("methodology_version")
 
     return baseline
 
@@ -492,6 +502,77 @@ def _rule_f_contract_upgrade() -> list[dict]:
     return entries
 
 
+def _rule_g_rpi_delta() -> list[dict]:
+    """Rule G: Week-over-week RPI change >= 10 points."""
+    entries = []
+    try:
+        rows = fetch_all("""
+            SELECT r1.protocol_slug,
+                   r1.overall_score AS current_score,
+                   r1.scored_date AS current_date,
+                   r1.component_scores AS current_components,
+                   r2.overall_score AS prev_score,
+                   r2.scored_date AS prev_date,
+                   r2.component_scores AS prev_components,
+                   r1.overall_score - r2.overall_score AS delta
+            FROM (SELECT DISTINCT ON (protocol_slug) protocol_slug, overall_score,
+                         scored_date, component_scores
+                  FROM rpi_scores ORDER BY protocol_slug, scored_date DESC) r1
+            JOIN (SELECT DISTINCT ON (protocol_slug) protocol_slug, overall_score,
+                         scored_date, component_scores
+                  FROM rpi_scores WHERE scored_date <= CURRENT_DATE - 7
+                  ORDER BY protocol_slug, scored_date DESC) r2
+            ON r1.protocol_slug = r2.protocol_slug
+            WHERE ABS(r1.overall_score - r2.overall_score) >= 10
+        """)
+        for row in (rows or []):
+            entity = row["protocol_slug"]
+            delta = float(row["delta"])
+            baseline = _get_entity_baseline(entity, "rpi")
+
+            current_comp = row.get("current_components") or {}
+            prev_comp = row.get("prev_components") or {}
+            if isinstance(current_comp, str):
+                current_comp = json.loads(current_comp)
+            if isinstance(prev_comp, str):
+                prev_comp = json.loads(prev_comp)
+
+            component_deltas = {}
+            for k in set(list(current_comp.keys()) + list(prev_comp.keys())):
+                c = float(current_comp.get(k) or 0)
+                p = float(prev_comp.get(k) or 0)
+                if abs(c - p) >= 1:
+                    component_deltas[k] = round(c - p, 2)
+
+            trigger_detail = {
+                "score_before": float(row["prev_score"]),
+                "score_after": float(row["current_score"]),
+                "delta": delta,
+                "lookback_days": 7,
+                "current_timestamp": str(row.get("current_date")),
+                "prior_timestamp": str(row.get("prev_date")),
+                "direction": "up" if delta > 0 else "down",
+                "component_deltas": component_deltas,
+            }
+            content_hash = _compute_content_hash(
+                entity, "rpi_delta", trigger_detail,
+                datetime.now(timezone.utc).isoformat()[:10], baseline,
+            )
+            entries.append({
+                "entity_slug": entity, "index_name": "rpi",
+                "trigger_kind": "rpi_delta",
+                "trigger_detail": trigger_detail,
+                "triggered_at": datetime.now(timezone.utc),
+                "baseline_snapshot": baseline,
+                "source_domain": "rpi_scores",
+                "content_hash": content_hash,
+            })
+    except Exception as e:
+        logger.warning(f"Rule G (RPI delta) failed: {e}")
+
+    return entries
+
+
 # =============================================================================
 # Main entry point
 # =============================================================================
@@ -515,6 +596,7 @@ def detect_and_log_entries() -> dict:
         ("oracle_stress", _rule_d_oracle_stress, "oracle_stress_events"),
         ("governance_edit", _rule_e_governance_edit, "governance_proposals"),
         ("contract_upgrade", _rule_f_contract_upgrade, "contract_upgrades"),
+        ("rpi_delta", _rule_g_rpi_delta, "rpi_scores"),
     ]:
         try:
             # Freshness gate
