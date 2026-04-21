@@ -52,8 +52,19 @@ T_MONO = "'IBM Plex Mono', monospace"
 # =============================================================================
 
 
+# Response headers for endpoints that serve DB- or file-backed state that
+# can change on deploy/populator runs. Kept in one place so every endpoint
+# below uses the same values; prevents CDNs (Fastly/Cloudflare/etc.) from
+# serving stale snapshot data after a populator run.
+NO_CACHE_HEADERS = {
+    "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
+
+
 @router.get("/api/incident/{slug}")
-def get_incident(slug: str) -> dict:
+def get_incident(slug: str) -> JSONResponse:
     row = fetch_one(
         """
         SELECT slug, event_date, title, summary, captured_at,
@@ -66,15 +77,18 @@ def get_incident(slug: str) -> dict:
     if not row:
         raise HTTPException(status_code=404, detail=f"Unknown incident: {slug}")
 
-    return {
-        "slug": row["slug"],
-        "event_date": str(row["event_date"]),
-        "title": row["title"],
-        "summary": row["summary"],
-        "captured_at": row["captured_at"].isoformat() if row["captured_at"] else None,
-        "components": row["components_json"],
-        "metadata": row["metadata_json"],
-    }
+    return JSONResponse(
+        content={
+            "slug": row["slug"],
+            "event_date": str(row["event_date"]),
+            "title": row["title"],
+            "summary": row["summary"],
+            "captured_at": row["captured_at"].isoformat() if row["captured_at"] else None,
+            "components": row["components_json"],
+            "metadata": row["metadata_json"],
+        },
+        headers=NO_CACHE_HEADERS,
+    )
 
 
 # =============================================================================
@@ -108,7 +122,7 @@ def incident_notify(payload: NotifyPayload) -> JSONResponse:
         logger.warning(f"incident-notify insert failed: {e}")
 
     # Always return 200 silently per spec; never gate content behind email.
-    return JSONResponse({"ok": True})
+    return JSONResponse({"ok": True}, headers=NO_CACHE_HEADERS)
 
 
 # =============================================================================

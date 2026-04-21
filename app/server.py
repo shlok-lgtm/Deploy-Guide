@@ -9317,7 +9317,9 @@ def _register_spa_catch_all(app_instance):
         except Exception as e:
             logger.warning(f"Report page render failed for /{full_path}: {e}")
 
-        # Audit pages — server-rendered from audits/*.md for all visitors
+        # Audit pages — server-rendered from audits/*.md for all visitors.
+        # No-cache: audit markdown can be updated between deploys; we don't
+        # want a CDN serving the v1.0 version after v1.1 addendum lands.
         try:
             if full_path.startswith("audits/"):
                 from app.incidents import render_audit_html
@@ -9327,12 +9329,19 @@ def _register_spa_catch_all(app_instance):
                     if html is not None:
                         return HTMLResponse(
                             content=html,
-                            headers={"Cache-Control": "public, max-age=300", "Basis-URL-Stability": "permanent"}
+                            headers={
+                                "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+                                "Pragma": "no-cache",
+                                "Expires": "0",
+                                "Basis-URL-Stability": "permanent",
+                            },
                         )
         except Exception as e:
             logger.warning(f"Audit page render failed for /{full_path}: {e}")
 
-        # Incident pages — SSR shell with OG meta, React renders the body
+        # Incident pages — SSR shell with OG meta, React renders the body.
+        # No-cache: title/summary/og-image are pulled from incident_snapshots,
+        # which can update when the populator re-runs.
         try:
             if full_path.startswith("incident/"):
                 from app.incidents import render_incident_ssr_shell
@@ -9343,7 +9352,11 @@ def _register_spa_catch_all(app_instance):
                         _idx = _f.read()
                     return HTMLResponse(
                         content=render_incident_ssr_shell(slug.lower(), _idx),
-                        headers={"Cache-Control": "public, max-age=60"}
+                        headers={
+                            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+                            "Pragma": "no-cache",
+                            "Expires": "0",
+                        },
                     )
         except Exception as e:
             logger.warning(f"Incident SSR shell failed for /{full_path}: {e}")
