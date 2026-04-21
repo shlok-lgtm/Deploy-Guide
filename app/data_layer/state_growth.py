@@ -140,12 +140,19 @@ def _bulk_row_counts() -> dict[str, int]:
     except Exception:
         pass
 
-    # Override pg_stat for tables with DELETE+INSERT churn patterns.
+    # Override pg_stat for tables with upsert/DELETE+INSERT churn patterns.
     # pg_stat n_live_tup inflates massively between VACUUM cycles for these.
     TABLE_COUNT_OVERRIDES = {
         "wallet_graph.wallet_risk_scores": "SELECT COUNT(DISTINCT wallet_address) as cnt FROM wallet_graph.wallet_risk_scores",
         "wallet_graph.wallet_holdings": "SELECT COUNT(DISTINCT wallet_address || token_address) as cnt FROM wallet_graph.wallet_holdings WHERE public.immutable_date(indexed_at) = CURRENT_DATE",
         "component_readings": "SELECT COUNT(DISTINCT stablecoin_id || component_id) as cnt FROM component_readings WHERE collected_at > NOW() - INTERVAL '24 hours'",
+        "peg_snapshots_5m": "SELECT COUNT(*) as cnt FROM peg_snapshots_5m",
+        "yield_snapshots": "SELECT COUNT(*) as cnt FROM yield_snapshots",
+        "entity_snapshots_hourly": "SELECT COUNT(*) as cnt FROM entity_snapshots_hourly",
+        "exchange_snapshots": "SELECT COUNT(*) as cnt FROM exchange_snapshots",
+        "mint_burn_events": "SELECT COUNT(*) as cnt FROM mint_burn_events",
+        "liquidity_depth": "SELECT COUNT(*) as cnt FROM liquidity_depth",
+        "governance_voters": "SELECT COUNT(*) as cnt FROM governance_voters",
     }
     for table_name, query in TABLE_COUNT_OVERRIDES.items():
         try:
