@@ -406,3 +406,318 @@ def compute_cqi_matrix():
         pass  # attestation is non-critical
 
     return {"matrix": matrix, "count": len(matrix)}
+
+
+# =============================================================================
+# Aggregation Formulas — within-index weighted-sum dispatch
+# =============================================================================
+#
+# Parallel to the composition formulas at the top of this file, these named
+# aggregation formulas extend the registry pattern to within-index
+# aggregation. Every index's score_entity() call dispatches through one of
+# these via aggregate(). The default is legacy_renormalize, which preserves
+# the pre-registry behavior exactly so historical scores remain reproducible.
+#
+# Each formula takes (definition, component_scores, raw_values, params) and
+# returns the same dict shape:
+#
+#     {
+#         "overall_score":              float | None,
+#         "category_scores":            dict[str, float],
+#         "effective_category_weights": dict[str, float],
+#         "coverage":                   float,   # populated/total, 0..1
+#         "withheld":                   bool,
+#         "method":                     str,     # formula name
+#         "formula_version":            str,
+#     }
+#
+# Every index without an `aggregation` block on its definition produces
+# byte-for-byte identical output to pre-registry score_entity(), because
+# legacy_renormalize is the default path.
+
+AGGREGATION_FORMULA_VERSION = "aggregation-v1.0.0"
+
+
+def _cat_nominal_weight(cat_def):
+    """Nominal category weight from a definition entry. Preserves the
+    current engine's tolerance for non-dict entries (returns 0)."""
+    return cat_def.get("weight", 0) if isinstance(cat_def, dict) else 0
+
+
+def _component_coverage(definition, component_scores):
+    """populated_count / total_count, rounded to 2 decimals. Matches the
+    legacy score_entity() coverage field exactly so existing thresholds and
+    confidence-tag mappings continue to apply."""
+    total = len(definition.get("components", {}))
+    populated = sum(
+        1 for cid in definition.get("components", {})
+        if cid in component_scores
+    )
+    return round(populated / max(total, 1), 2)
+
+
+def aggregate_legacy_renormalize(definition, component_scores, raw_values, params=None):
+    """
+    Current (pre-fix) behavior. Silently renormalizes weighted sums over
+    populated components at both category and overall levels.
+
+    Preserved forever so historical scores remain reproducible. This is the
+    canonical formula for every record written before its index migrated its
+    aggregation declaration.
+    """
+    category_scores = {}
+    effective_weights = {}
+
+    for cat_id, cat_def in definition["categories"].items():
+        cat_weight = _cat_nominal_weight(cat_def)
+        cat_components = {
+            cid: cdef for cid, cdef in definition["components"].items()
+            if cdef.get("category") == cat_id
+        }
+        cat_total_comp_weight = sum(cdef.get("weight", 0) for cdef in cat_components.values())
+        total = 0.0
+        weight_used = 0.0
+        for cid, cdef in cat_components.items():
+            if cid in component_scores:
+                w = cdef.get("weight", 0)
+                total += component_scores[cid] * w
+                weight_used += w
+        if weight_used > 0:
+            category_scores[cat_id] = round(total / weight_used, 2)
+            if cat_total_comp_weight > 0:
+                effective_weights[cat_id] = round(
+                    cat_weight * (weight_used / cat_total_comp_weight), 4
+                )
+            else:
+                effective_weights[cat_id] = 0.0
+        else:
+            effective_weights[cat_id] = 0.0
+
+    # Overall: renormalize over populated categories (legacy behavior — this
+    # is the defect the audit documents, preserved here verbatim).
+    overall = 0.0
+    cat_weight_used = 0.0
+    for cat_id, cat_def in definition["categories"].items():
+        cat_weight = _cat_nominal_weight(cat_def)
+        if cat_id in category_scores:
+            overall += category_scores[cat_id] * cat_weight
+            cat_weight_used += cat_weight
+
+    if cat_weight_used > 0 and cat_weight_used < 1.0:
+        overall = overall / cat_weight_used
+
+    overall_out = round(overall, 2) if cat_weight_used > 0 else None
+
+    return {
+        "overall_score": overall_out,
+        "category_scores": category_scores,
+        "effective_category_weights": effective_weights,
+        "coverage": _component_coverage(definition, component_scores),
+        "withheld": False,
+        "method": "legacy_renormalize",
+        "formula_version": AGGREGATION_FORMULA_VERSION,
+    }
+
+
+def aggregate_coverage_weighted(definition, component_scores, raw_values, params=None):
+    """
+    Option C. Category scores renormalize within category (same as legacy,
+    so a partial category still produces a meaningful category reading),
+    but the overall weighted sum uses effective category weights:
+
+        effective_weight = nominal_weight
+                           × (populated_component_weight
+                              / total_component_weight_in_category)
+
+    Missing categories contribute 0 to both numerator and denominator.
+    Overall = sum(cat_score × effective_weight) / sum(effective_weights).
+
+    params:
+      min_coverage (optional, default 0.0): if the index's overall component
+        coverage is below this threshold, overall_score is None and
+        withheld=True. Category scores are still returned.
+    """
+    params = params or {}
+    min_coverage = float(params.get("min_coverage", 0.0))
+
+    category_scores = {}
+    effective_weights = {}
+
+    for cat_id, cat_def in definition["categories"].items():
+        cat_weight = _cat_nominal_weight(cat_def)
+        cat_components = {
+            cid: cdef for cid, cdef in definition["components"].items()
+            if cdef.get("category") == cat_id
+        }
+        cat_total_comp_weight = sum(cdef.get("weight", 0) for cdef in cat_components.values())
+        total = 0.0
+        weight_used = 0.0
+        for cid, cdef in cat_components.items():
+            if cid in component_scores:
+                w = cdef.get("weight", 0)
+                total += component_scores[cid] * w
+                weight_used += w
+        if weight_used > 0:
+            category_scores[cat_id] = round(total / weight_used, 2)
+        if cat_total_comp_weight > 0 and weight_used > 0:
+            effective_weights[cat_id] = round(
+                cat_weight * (weight_used / cat_total_comp_weight), 4
+            )
+        else:
+            effective_weights[cat_id] = 0.0
+
+    eff_sum = sum(effective_weights.values())
+    if eff_sum > 0:
+        overall_num = sum(
+            category_scores[cat_id] * effective_weights[cat_id]
+            for cat_id in category_scores
+        )
+        overall = round(overall_num / eff_sum, 2)
+    else:
+        overall = None
+
+    coverage = _component_coverage(definition, component_scores)
+    withheld = False
+    if min_coverage > 0 and coverage < min_coverage:
+        overall = None
+        withheld = True
+
+    return {
+        "overall_score": overall,
+        "category_scores": category_scores,
+        "effective_category_weights": effective_weights,
+        "coverage": coverage,
+        "withheld": withheld,
+        "method": "coverage_weighted",
+        "formula_version": AGGREGATION_FORMULA_VERSION,
+    }
+
+
+def aggregate_coverage_withheld(definition, component_scores, raw_values, params=None):
+    """
+    Option D. Same math as coverage_weighted. `coverage_threshold` is
+    required in params. Below threshold, overall_score is None and
+    withheld=True. Category scores are still returned regardless.
+
+    params:
+      coverage_threshold (required): fraction in [0, 1].
+    """
+    params = params or {}
+    if "coverage_threshold" not in params:
+        raise ValueError(
+            "aggregate_coverage_withheld requires params['coverage_threshold']"
+        )
+    threshold = float(params["coverage_threshold"])
+    if not (0.0 <= threshold <= 1.0):
+        raise ValueError(
+            f"coverage_threshold must be in [0, 1], got {threshold}"
+        )
+
+    result = aggregate_coverage_weighted(
+        definition, component_scores, raw_values,
+        params={"min_coverage": threshold},
+    )
+    result["method"] = "coverage_withheld"
+    return result
+
+
+def aggregate_strict_zero(definition, component_scores, raw_values, params=None):
+    """
+    Option B. Missing components treated as 0. Category denominators are
+    full (not renormalized). Category weights at full nominal value.
+
+    Not adopted by any index by default; shipped for completeness.
+    """
+    category_scores = {}
+    effective_weights = {}
+
+    for cat_id, cat_def in definition["categories"].items():
+        cat_weight = _cat_nominal_weight(cat_def)
+        cat_components = {
+            cid: cdef for cid, cdef in definition["components"].items()
+            if cdef.get("category") == cat_id
+        }
+        cat_total_comp_weight = sum(cdef.get("weight", 0) for cdef in cat_components.values())
+        if cat_total_comp_weight <= 0:
+            effective_weights[cat_id] = 0.0
+            continue
+        total = 0.0
+        for cid, cdef in cat_components.items():
+            score = component_scores.get(cid, 0)
+            total += score * cdef.get("weight", 0)
+        category_scores[cat_id] = round(total / cat_total_comp_weight, 2)
+        effective_weights[cat_id] = round(cat_weight, 4)
+
+    total_cat_weight = sum(
+        _cat_nominal_weight(cat_def)
+        for cat_def in definition["categories"].values()
+    )
+    if total_cat_weight > 0 and category_scores:
+        overall_num = sum(
+            category_scores[cat_id]
+            * _cat_nominal_weight(definition["categories"][cat_id])
+            for cat_id in category_scores
+        )
+        overall = round(overall_num / total_cat_weight, 2)
+    else:
+        overall = None
+
+    return {
+        "overall_score": overall,
+        "category_scores": category_scores,
+        "effective_category_weights": effective_weights,
+        "coverage": _component_coverage(definition, component_scores),
+        "withheld": False,
+        "method": "strict_zero",
+        "formula_version": AGGREGATION_FORMULA_VERSION,
+    }
+
+
+def aggregate_strict_neutral(definition, component_scores, raw_values, params=None):
+    """
+    Option A. Missing components imputed to 50 (neutral). Category weights
+    at full nominal. Not adopted by any index by default; shipped for
+    completeness and future-use.
+    """
+    imputed = dict(component_scores)
+    for cid in definition.get("components", {}):
+        if cid not in imputed:
+            imputed[cid] = 50
+    result = aggregate_strict_zero(definition, imputed, raw_values, params)
+    # Coverage reflects actual inputs, not imputations.
+    result["coverage"] = _component_coverage(definition, component_scores)
+    result["method"] = "strict_neutral"
+    return result
+
+
+AGGREGATION_FORMULAS = {
+    "legacy_renormalize": aggregate_legacy_renormalize,
+    "coverage_weighted": aggregate_coverage_weighted,
+    "coverage_withheld": aggregate_coverage_withheld,
+    "strict_zero": aggregate_strict_zero,
+    "strict_neutral": aggregate_strict_neutral,
+}
+
+
+def aggregate(definition, component_scores, raw_values=None):
+    """Dispatch aggregation through the formula declared in the index definition.
+
+    If no `aggregation` block is present on the definition, defaults to
+    legacy_renormalize with empty params — preserves the pre-registry
+    behavior exactly. This is the contract that lets this PR ship without
+    any index migrating simultaneously.
+
+    Raises ValueError if the declared formula name is not in
+    AGGREGATION_FORMULAS.
+    """
+    raw_values = raw_values or {}
+    agg_config = definition.get("aggregation") or {}
+    formula_name = agg_config.get("formula", "legacy_renormalize")
+    params = agg_config.get("params", {}) or {}
+    formula = AGGREGATION_FORMULAS.get(formula_name)
+    if formula is None:
+        raise ValueError(
+            f"Unknown aggregation formula: {formula_name!r}. "
+            f"Valid formulas: {sorted(AGGREGATION_FORMULAS)}"
+        )
+    return formula(definition, component_scores, raw_values, params)
