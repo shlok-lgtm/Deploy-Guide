@@ -31,6 +31,18 @@ const TAB_ACCENT = {
   "witness-detail": "#A8C4A0",
 };
 
+// Label rendered on the diagonal accent ribbon behind the frame, per tab.
+// Form IDs are placeholders pending constitution confirmation.
+const RIBBON_LABELS = {
+  rankings:         "STABLECOINS · SII V7.8",
+  protocols:        "PROTOCOLS · PSI V2.1",
+  wallets:          "WALLETS · WEI V1.0",
+  witness:          "WITNESS · ISSUER REGISTRY",
+  methodology:      "METHODOLOGY · FORM INDEX",
+  detail:           "STABLECOINS · SII V7.8",
+  "witness-detail": "WITNESS · ISSUER REGISTRY",
+};
+
 function TabHeader({ title, formId, stats, formulaLine, versionLabel, accent, mobile, showOnChain = true, coinCount, onChainCount }) {
   return (
     <div style={{ border: `1.5px solid ${T.ink}`, marginBottom: 0 }}>
@@ -3156,11 +3168,60 @@ export default function App() {
       <div style={{
         maxWidth: 1100, margin: "0 auto", padding: mobile ? "8px 6px 0" : "32px 24px 0",
       }}>
+        {/* Stage wraps the frame so the diagonal accent ribbon can peek
+            above and below it. Stage is the positioning context for the
+            absolutely-positioned ribbon; the frame sits on top at z-index 2. */}
         <div style={{
-          border: `${mobile ? 2 : 3}px solid ${T.ink}`,
-          boxShadow: mobile ? "none" : `6px 6px 0 0 ${T.ruleMid}`,
-          background: T.paper,
+          position: "relative",
+          paddingTop: mobile ? 24 : 40,
+          paddingBottom: mobile ? 24 : 40,
         }}>
+          <div
+            aria-hidden="true"
+            style={{
+              position: "absolute",
+              left: "-4%",
+              right: "-4%",
+              top: 0,
+              height: mobile ? 56 : 64,
+              transform: mobile ? "rotate(0deg)" : "rotate(-3deg)",
+              transformOrigin: "center center",
+              background: TAB_ACCENT[view] || TAB_ACCENT.rankings,
+              zIndex: 1,
+              pointerEvents: "none",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontFamily: T.mono,
+              fontSize: mobile ? 10 : 11,
+              letterSpacing: 3,
+              color: T.ink,
+              textTransform: "uppercase",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+            }}
+          >
+            — {RIBBON_LABELS[view] || RIBBON_LABELS.rankings} —
+          </div>
+          <div style={{
+            position: "relative",
+            zIndex: 2,
+            border: `${mobile ? 2 : 3}px solid ${T.ink}`,
+            boxShadow: mobile ? "none" : `6px 6px 0 0 ${T.ruleMid}`,
+            background: T.paper,
+          }}>
+          {/* Tagline strip — reads as a subtitle for the whole box, sits
+              above the nav row with a hairline separator. Not uppercased. */}
+          <div style={{
+            padding: mobile ? "6px 12px 4px" : "8px 24px 5px",
+            borderBottom: `1px solid ${T.ruleLight}`,
+            fontFamily: T.mono,
+            fontSize: 11,
+            letterSpacing: 0.5,
+            color: T.inkMid,
+          }}>
+            Continuous risk measurement across stablecoins + protocols + exchanges + treasuries + bridges +++
+          </div>
           <div style={{ padding: mobile ? "10px 12px" : "12px 24px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <nav style={{ display: "flex", gap: mobile ? 12 : 16, overflowX: mobile ? "auto" : "visible", WebkitOverflowScrolling: "touch" }}>
               {[
@@ -3208,6 +3269,7 @@ export default function App() {
           </div>
 
           <Footer mobile={mobile} />
+          </div>
         </div>
 
         <div style={{ height: mobile ? 16 : 32 }} />
