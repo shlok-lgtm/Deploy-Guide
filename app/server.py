@@ -1096,6 +1096,90 @@ async def entity_page(slug: str, request: Request):
     })
 
 
+@app.get("/disputes")
+async def disputes_ssr_page():
+    """Server-rendered HTML page listing public disputes."""
+    from starlette.concurrency import run_in_threadpool
+    from fastapi.responses import HTMLResponse
+
+    def _load_disputes():
+        return fetch_all(
+            "SELECT * FROM disputes WHERE status != 'submitted' ORDER BY created_at DESC LIMIT 100"
+        )
+
+    try:
+        rows = await run_in_threadpool(_load_disputes)
+    except Exception:
+        rows = []
+
+    dispute_rows_html = ""
+    for r in (rows or []):
+        d = dict(r)
+        status_color = {
+            "under_review": "#f39c12",
+            "counter_evidence_issued": "#3498db",
+            "resolved": "#27ae60",
+            "withdrawn": "#95a5a6",
+        }.get(d.get("status", ""), "#999")
+        resolution = ""
+        if d.get("resolution_category"):
+            resolution = f' <span style="font-size:10px;color:#666">({d["resolution_category"]})</span>'
+        created = str(d.get("created_at", ""))[:10]
+        dispute_rows_html += f"""<tr>
+<td><a href="/api/disputes/{d['dispute_id']}" style="color:#0a0a0a;font-family:'IBM Plex Mono',monospace;font-size:11px">{str(d['dispute_id'])[:8]}...</a></td>
+<td style="font-weight:600">{d.get('entity_slug', '')}</td>
+<td>{d.get('submitter_type', '')}</td>
+<td><span style="color:{status_color};font-weight:600">{d.get('status', '')}</span>{resolution}</td>
+<td style="color:#666">{created}</td>
+</tr>"""
+
+    if not dispute_rows_html:
+        dispute_rows_html = '<tr><td colspan="5" style="text-align:center;color:#999;padding:24px">No public disputes yet.</td></tr>'
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Score Disputes | Basis Protocol</title>
+<meta name="description" content="Public record of score disputes submitted against Basis Protocol indices.">
+<link rel="canonical" href="https://basisprotocol.xyz/disputes">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=IBM+Plex+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+body {{ margin:0; background:#f5f2ec; color:#0a0a0a; font-family:'IBM Plex Sans',system-ui,sans-serif; }}
+.page-wrap {{ max-width:900px; margin:0 auto; padding:24px 16px; }}
+h1 {{ font-size:28px; font-weight:400; letter-spacing:-0.3px; margin:0 0 8px; }}
+.meta {{ font-family:'IBM Plex Mono',monospace; font-size:11px; color:#6a6a6a; }}
+table {{ width:100%; border-collapse:collapse; margin-top:20px; }}
+th {{ text-align:left; font-family:'IBM Plex Mono',monospace; font-size:10px; font-weight:600;
+     color:#6a6a6a; text-transform:uppercase; letter-spacing:0.5px; padding:8px 6px;
+     border-bottom:2px solid #c8c4bc; }}
+td {{ padding:8px 6px; font-size:12px; border-bottom:1px solid #e0ddd6; }}
+a {{ color:#0a0a0a; }}
+.footer {{ margin-top:32px; padding-top:12px; border-top:1px solid #c8c4bc;
+           font-family:'IBM Plex Mono',monospace; font-size:10px; color:#9a9a9a;
+           display:flex; justify-content:space-between; }}
+</style>
+</head>
+<body>
+<div class="page-wrap">
+<p class="meta"><a href="/">Basis Protocol</a> &rsaquo; Disputes</p>
+<h1>Score Disputes</h1>
+<p class="meta">Public record of disputes submitted against scored entities. Disputes become visible once they move to review.</p>
+<table>
+<thead><tr><th>ID</th><th>Entity</th><th>Submitter</th><th>Status</th><th>Submitted</th></tr></thead>
+<tbody>{dispute_rows_html}</tbody>
+</table>
+<p class="meta" style="margin-top:16px">Data also available via <a href="/api/disputes">API</a>.</p>
+<div class="footer"><span>Basis Protocol</span><span>basisprotocol.xyz</span></div>
+</div>
+</body>
+</html>"""
+
+    return HTMLResponse(content=html, headers={"Cache-Control": "public, max-age=120"})
+
+
 @app.get("/sitemap.xml")
 async def sitemap_xml():
     """Dynamic sitemap listing all entity pages."""
@@ -4374,6 +4458,60 @@ async def verify_assessment(assessment_id: str):
             "recomputed_inputs_hash": recomputed_hash,
         },
     }
+
+
+# =============================================================================
+# Disputes — Public API
+# =============================================================================
+
+@app.get("/api/disputes")
+async def public_list_disputes(status: Optional[str] = None):
+    """Public dispute listing. Only shows disputes that have moved past 'submitted' status."""
+    try:
+        if status:
+            if status == "submitted":
+                return {"disputes": []}
+            rows = fetch_all(
+                "SELECT * FROM disputes WHERE status = %s AND status != 'submitted' ORDER BY created_at DESC",
+                (status,),
+            )
+        else:
+            rows = fetch_all(
+                "SELECT * FROM disputes WHERE status != 'submitted' ORDER BY created_at DESC"
+            )
+        return {"disputes": [dict(r) for r in rows] if rows else []}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.get("/api/disputes/{dispute_id}")
+async def public_get_dispute(dispute_id: str):
+    """Public single-dispute view. Only visible if status != 'submitted'."""
+    try:
+        dispute = fetch_one(
+            "SELECT * FROM disputes WHERE dispute_id = %s::uuid AND status != 'submitted'",
+            (dispute_id,),
+        )
+        if not dispute:
+            raise HTTPException(status_code=404, detail="Dispute not found or not yet public")
+
+        transitions = fetch_all(
+            "SELECT * FROM dispute_transitions WHERE dispute_id = %s::uuid ORDER BY transition_index",
+            (dispute_id,),
+        )
+        result = dict(dispute)
+        result["transitions"] = []
+        for t in (transitions or []):
+            td = dict(t)
+            if isinstance(td.get("transition_payload"), str):
+                import json as _json
+                td["transition_payload"] = _json.loads(td["transition_payload"])
+            result["transitions"].append(td)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
 # =============================================================================
