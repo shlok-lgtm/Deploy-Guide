@@ -31,17 +31,6 @@ const TAB_ACCENT = {
   "witness-detail": "#A8C4A0",
 };
 
-// Label rendered on the diagonal accent ribbon behind the frame, per tab.
-// Form IDs are placeholders pending constitution confirmation.
-const RIBBON_LABELS = {
-  rankings:         "STABLECOINS · SII V7.8",
-  protocols:        "PROTOCOLS · PSI V2.1",
-  wallets:          "WALLETS · WEI V1.0",
-  witness:          "WITNESS · ISSUER REGISTRY",
-  methodology:      "METHODOLOGY · FORM INDEX",
-  detail:           "STABLECOINS · SII V7.8",
-  "witness-detail": "WITNESS · ISSUER REGISTRY",
-};
 
 function TabHeader({ title, formId, stats, formulaLine, versionLabel, accent, mobile, showOnChain = true, coinCount, onChainCount }) {
   return (
@@ -3168,9 +3157,9 @@ export default function App() {
       <div style={{
         maxWidth: 1100, margin: "0 auto", padding: mobile ? "8px 6px 0" : "32px 24px 0",
       }}>
-        {/* Stage wraps the frame so the diagonal accent ribbon can peek
-            above and below it. Stage is the positioning context for the
-            absolutely-positioned ribbon; the frame sits on top at z-index 2. */}
+        {/* Stage wraps the frame so the accent ribbon can peek above it.
+            Stage is the positioning context for the absolutely-positioned
+            ribbon; the frame sits on top at z-index 2. */}
         <div style={{
           position: "relative",
           paddingTop: mobile ? 24 : 40,
@@ -3183,26 +3172,12 @@ export default function App() {
               left: "-4%",
               right: "-4%",
               top: 0,
-              height: mobile ? 56 : 64,
-              transform: mobile ? "rotate(0deg)" : "rotate(-3deg)",
-              transformOrigin: "center center",
+              height: mobile ? 112 : 128,
               background: TAB_ACCENT[view] || TAB_ACCENT.rankings,
               zIndex: 1,
               pointerEvents: "none",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontFamily: T.mono,
-              fontSize: mobile ? 10 : 11,
-              letterSpacing: 3,
-              color: T.ink,
-              textTransform: "uppercase",
-              whiteSpace: "nowrap",
-              overflow: "hidden",
             }}
-          >
-            — {RIBBON_LABELS[view] || RIBBON_LABELS.rankings} —
-          </div>
+          />
           <div style={{
             position: "relative",
             zIndex: 2,
