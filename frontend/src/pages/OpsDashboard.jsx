@@ -3217,6 +3217,59 @@ function TrackRecordPanel() {
 }
 
 
+function MethodologyPanel() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [flash, showFlash] = useFlash();
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const res = await opsFetch("/api/ops/methodology");
+      setItems(res.methodologies || []);
+    } catch (e) {
+      showFlash(e.message, false);
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, []);
+
+  return (
+    <Section title="METHODOLOGY HASHES" actions={
+      <button onClick={load} disabled={loading} style={{ fontSize: 9, fontFamily: T.mono, padding: "2px 6px", border: `1px solid ${T.paper}44`, background: "transparent", color: T.paper, cursor: "pointer", opacity: loading ? 0.5 : 1 }}>
+        {loading ? "Loading..." : "Refresh"}
+      </button>
+    }>
+      <Flash flash={flash} />
+      <div style={{ padding: "0 10px" }}>
+        {items.length === 0 && !loading && (
+          <div style={{ color: T.inkFaint, fontSize: 12 }}>No methodologies registered yet.</div>
+        )}
+        {items.length > 0 && (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto auto auto", gap: "4px 12px", fontSize: 11, fontFamily: T.mono, alignItems: "center" }}>
+            <div style={{ fontWeight: 600, fontSize: 10, color: T.inkLight, textTransform: "uppercase" }}>ID</div>
+            <div style={{ fontWeight: 600, fontSize: 10, color: T.inkLight, textTransform: "uppercase" }}>Hash</div>
+            <div style={{ fontWeight: 600, fontSize: 10, color: T.inkLight, textTransform: "uppercase" }}>Base</div>
+            <div style={{ fontWeight: 600, fontSize: 10, color: T.inkLight, textTransform: "uppercase" }}>Arb</div>
+            <div style={{ fontWeight: 600, fontSize: 10, color: T.inkLight, textTransform: "uppercase" }}>Registered</div>
+            {items.map((m) => (
+              <div key={m.methodology_id} style={{ display: "contents" }}>
+                <span style={{ color: T.inkMid }}>{m.methodology_id}</span>
+                <span style={{ color: T.inkFaint, fontSize: 10 }}>{(m.content_hash || "").substring(0, 12)}...</span>
+                <span style={{ color: m.committed_on_chain_base ? "#27ae60" : "#e74c3c" }}>{m.committed_on_chain_base ? "✓" : "✗"}</span>
+                <span style={{ color: m.committed_on_chain_arbitrum ? "#27ae60" : "#e74c3c" }}>{m.committed_on_chain_arbitrum ? "✓" : "✗"}</span>
+                <span style={{ color: T.inkFaint, fontSize: 10 }}>{m.registered_at ? new Date(m.registered_at).toLocaleDateString() : ""}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </Section>
+  );
+}
+
+
 function ABMPanel() {
   const [campaigns, setCampaigns] = useState([]);
   const [config, setConfig] = useState(null);
@@ -4490,6 +4543,7 @@ export default function OpsDashboard() {
                 <BacktestPanel />
                 <ABMPanel />
                 <TrackRecordPanel />
+                <MethodologyPanel />
               </div>
             )}
             {tab === "playground" && (

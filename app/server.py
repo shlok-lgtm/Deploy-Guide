@@ -1995,6 +1995,33 @@ async def get_methodology_versions():
 
 
 # =============================================================================
+# 6c. GET /api/methodology/hashes — Methodology hash registry (public)
+# =============================================================================
+
+@app.get("/api/methodology/hashes")
+async def public_list_methodology_hashes():
+    """List all registered methodology hashes (no content — use detail endpoint for full content)."""
+    try:
+        from app.methodology_hashes import list_methodologies
+        return {"methodologies": list_methodologies()}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.get("/api/methodology/hashes/{methodology_id}")
+async def public_get_methodology_hash(methodology_id: str):
+    """Get a single methodology including full content."""
+    try:
+        from app.methodology_hashes import get_methodology
+        m = get_methodology(methodology_id)
+        if not m:
+            return JSONResponse(status_code=404, content={"error": "methodology not found"})
+        return m
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+# =============================================================================
 # 7. GET /api/config — Stablecoin registry
 # =============================================================================
 
