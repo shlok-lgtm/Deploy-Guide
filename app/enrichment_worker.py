@@ -459,7 +459,7 @@ async def run_enrichment_pipeline() -> dict:
     async def _run_cda():
         from app.services.cda_collector import run_collection
         result = await run_collection()
-        logger.error(f"[enrichment] cda_collection result: {result}")
+        logger.info(f"[enrichment] cda_collection result: {result}")
         return result
 
     pipeline.add(EnrichmentTask(
@@ -476,7 +476,7 @@ async def run_enrichment_pipeline() -> dict:
     async def _run_treasury_flows():
         from app.collectors.treasury_flows import collect_treasury_events
         result = await collect_treasury_events()
-        logger.error(f"[enrichment] treasury_flows result: {len(result) if isinstance(result, list) else result}")
+        logger.info(f"[enrichment] treasury_flows result: {len(result) if isinstance(result, list) else result}")
         return result
 
     pipeline.add(EnrichmentTask(
@@ -530,7 +530,7 @@ async def run_enrichment_pipeline() -> dict:
     async def _run_divergence():
         from app.divergence import detect_all_divergences
         result = detect_all_divergences(store=True)
-        logger.error(f"[enrichment] divergence result: {result.get('summary', {}).get('total_signals', 0) if isinstance(result, dict) else result}")
+        logger.info(f"[enrichment] divergence result: {result.get('summary', {}).get('total_signals', 0) if isinstance(result, dict) else result}")
         return result
 
     pipeline.add(EnrichmentTask(
