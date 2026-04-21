@@ -28,7 +28,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 
-from app.database import execute  # noqa: E402
+from app.database import execute, init_pool  # noqa: E402
 
 SLUG = "rseth-2026-04-18"
 EVENT_DATE = date(2026, 4, 18)
@@ -278,6 +278,7 @@ def build_row(api_base: str | None) -> dict:
 
 
 def main() -> None:
+    init_pool()
     api_base = os.environ.get("BASIS_API_BASE")  # e.g. http://localhost:5000
     try:
         components_json = build_row(api_base)
