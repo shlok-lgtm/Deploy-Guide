@@ -554,6 +554,23 @@ async def startup():
     except Exception as e:
         logger.warning(f"MCP endpoint registration failed: {e}")
 
+    # Incident pages — evidence artifacts, frozen snapshots, email capture
+    try:
+        from app.incidents import router as incidents_router
+        app.include_router(incidents_router)
+        logger.info("Incident routes registered (/api/incident/*, /api/incident-notify)")
+    except Exception as e:
+        logger.warning(f"Incident router registration failed: {e}")
+
+    # Static share assets (Twitter/X cards for incident pages)
+    try:
+        _share_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "public", "share")
+        if os.path.isdir(_share_dir):
+            app.mount("/share", StaticFiles(directory=_share_dir), name="share-assets")
+            logger.info(f"Mounted /share from {_share_dir}")
+    except Exception as e:
+        logger.warning(f"Share static mount failed: {e}")
+
     # SPA catch-all must be registered LAST so it doesn't shadow dynamic routes
     _register_spa_catch_all(app)
     logger.info("Basis Protocol API started")
@@ -9299,6 +9316,28 @@ def _register_spa_catch_all(app_instance):
             pass  # Fall through to SPA
         except Exception as e:
             logger.warning(f"Report page render failed for /{full_path}: {e}")
+
+        # Incident pages — SSR shell with OG meta, React renders the body.
+        # No-cache: title/summary/og-image are pulled from incident_snapshots,
+        # which can update when the populator re-runs.
+        try:
+            if full_path.startswith("incident/"):
+                from app.incidents import render_incident_ssr_shell
+                slug = full_path.split("incident/")[1].split("/")[0].split("?")[0]
+                index_path = os.path.join(FRONTEND_DIR, "index.html")
+                if slug and os.path.exists(index_path):
+                    with open(index_path, "r", encoding="utf-8") as _f:
+                        _idx = _f.read()
+                    return HTMLResponse(
+                        content=render_incident_ssr_shell(slug.lower(), _idx),
+                        headers={
+                            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+                            "Pragma": "no-cache",
+                            "Expires": "0",
+                        },
+                    )
+        except Exception as e:
+            logger.warning(f"Incident SSR shell failed for /{full_path}: {e}")
 
         # Witness static evidence pages — server-rendered for all visitors
         try:

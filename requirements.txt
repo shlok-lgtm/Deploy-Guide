@@ -1,24 +1,17 @@
 # Basis Protocol - Backend Dependencies
 # build: 2026-04-13T15:30Z — cache bust for data layer collectors
-fastapi==0.115.6
-uvicorn[standard]==0.34.0
-psycopg2-binary==2.9.10
-httpx==0.28.1
-python-dotenv==1.0.1
-python-dateutil
-fastapi
-httpx
-psycopg2-binary
-python-dateutil
-python-dotenv
-uvicorn[standard]
-mcp[http]
-mcp[http]
-dbt-core>=1.7.0
-dbt-postgres>=1.7.0
-scipy>=1.11.0
-networkx>=3.1
 dbt-core>=1.7.13
+dbt-postgres>=1.7.0
+email-validator>=2.0
+fastapi==0.115.6
+httpx==0.28.1
+mcp[http]
+networkx>=3.1
 pillow>=12.1.1
+psycopg2-binary==2.9.10
+python-dateutil
+python-dotenv==1.0.1
+scipy>=1.11.0
 tornado>=6.5.5
+uvicorn[standard]==0.34.0
 x402>=2.6.0

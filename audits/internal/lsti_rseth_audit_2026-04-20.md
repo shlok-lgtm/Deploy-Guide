@@ -287,3 +287,70 @@ Voice matched to the V9.3 "Bridge Flow Collector Deferral" amendment: direct, da
 One code change:
 
 - `app/collectors/lst_collector.py:88-95` — `kelp-rseth.exploit_history_lst`: **100 → 10**, with a 4-line comment citing this audit, the 2026-04-18 event amount ($292M), the severity band (10, for $100M+), and the `min(live, static)` interaction at `lst_collector.py:377`. No other file was modified. No commit, no push — awaiting review.
+
+---
+
+## V1.1 Addendum — Pre-Deploy Verification Findings (2026-04-20) {#v1-1-addendum}
+
+Status: appended 2026-04-20 during pre-deploy verification of the rsETH incident page. Three findings that changed the published Q4 package. Original v1.0 sections above are retained unchanged for the historical record.
+
+### Finding 1 — `dex_pool_depth` wiring gap
+
+The component exists in `app/collectors/lst_collector.py:234` and `lst_collector.py:253` and is declared in `app/index_definitions/lsti_v01.py:71`. The collector writes `raw["dex_pool_depth"] = total_tvl` after summing TVL from DeFiLlama's `/yields/pools` response.
+
+Despite the write, inspection of `generic_index_scores.raw_values` on production on 2026-04-20 shows `dex_pool_depth` **absent** from the stored raw_values for all four tracked LSTs (`kelp-rseth`, `lido-steth`, `rocket-pool-reth`, `etherfi-eeth`). The value is being computed in the collector but is not reaching the API response. Root cause not resolved in this pass — likely a mismatch between the component's population path (`raw_values.update(pool_data)` vs `raw_values` directly) or a downstream filter that drops unregistered keys before storage.
+
+**Decision.** `dex_pool_depth` is removed from the Q4 forum-reply package and from the incident page's comparison table. A separate PR will debug the collector-to-storage wiring.
+
+**Secondary methodology note.** DeFiLlama's `/yields/pools` aggregates lending-market TVL (Aave, Compound) alongside actual DEX pool depth. Even if wired correctly, `dex_pool_depth` as currently implemented conflates "capital deployed" with "swap depth." Follow-up: split into `dex_pool_depth_swappable` (Uniswap, Curve, Balancer, Fluid) vs `lending_market_tvl` (Aave, Compound), scored independently. Out of scope for this audit; documented for the follow-up ticket.
+
+### Finding 2 — `eth_peg_deviation` is not cross-peer comparable
+
+The component measures the absolute deviation of an LST's price from 1.0 ETH. This is a valid peg-stability signal for **rebasing** LSTs (Lido stETH, EtherFi eETH) which target a 1:1 ratio by design and whose token balance adjusts to absorb staking rewards. It is **not** a valid peg-stability signal for **reward-bearing** LSTs (Rocket Pool rETH, Kelp rsETH) which maintain a fixed balance and appreciate above 1.0 ETH as the underlying exchange rate grows.
+
+On 2026-04-20, CoinGecko reported:
+
+| LST | ETH ratio | Design | Expected range | What it means |
+|---|---|---|---|---|
+| Lido stETH | 0.994 | Rebasing | ~1.00 | On peg |
+| EtherFi eETH | 0.993 | Rebasing | ~1.00 | On peg |
+| Rocket Pool rETH | 1.158 | Reward-bearing | 1.10–1.18 | Normal accrual |
+| Kelp rsETH | 0.891 | Reward-bearing | 1.05–1.10 | ~18% below reward-bearing baseline |
+
+Publishing rETH's 15.8% "deviation" and rsETH's 10.9% "deviation" side by side, without context, misrepresents the comparison. rETH's "deviation" is design-correct accrual; rsETH's is the exploit signature.
+
+The gap between rsETH's observed 0.891 and its reward-bearing baseline tracks the unbacked mint ratio: **116,500 unbacked / ~630,000 total supply ≈ 18.5% dilution**. The market priced the dilution precisely. That precision is the publishable finding.
+
+**Decision.** `eth_peg_deviation` is removed from the Q4 forum-reply package. Replaced with `eth_price_ratio`, captured directly from CoinGecko `/simple/price?vs_currencies=eth`. Each LST entity is tagged with its design type (`rebasing` or `reward-bearing`) in the snapshot, and the incident page renders both in the same cell so readers see the raw ratio alongside the frame that makes it honest.
+
+**Follow-up engineering.** Implement `eth_peg_deviation_vs_exchange_rate` as a live-scored LSTI component that fetches each LST's on-chain exchange rate (from the protocol's own contract) and measures deviation from that reference. That component is the correct long-term replacement. It is a separate PR and will not be manually snapshotted for future incidents — the scoring engine will compute it on every cycle.
+
+### Finding 3 — static_config table stale relative to production
+
+The audit's §Q3 defensibility table is stale. It documents the static_config **seed** values; production serves the **effective** values after the `max(live, static)` enrichment override. The gap is intentional in code but unsignaled in §Q3 — a delegate comparing the audit to the API will see different numbers.
+
+Concretely, §Q3 documents `kelp-rseth` seeds as `audit_status: 3`, `upgradeability_risk: 50`, `withdrawal_queue_impl: 60`. Inspection of `generic_index_scores.raw_values` for `kelp-rseth` on 2026-04-20 shows stored values `audit_status: 7`, `upgradeability_risk: 70`, `withdrawal_queue_impl: 60`.
+
+The `max(live, static)` override at `lst_collector.py:334-341` intentionally raises the static seed when live contract analysis (Etherscan verification, proxy+implementation detection) returns a higher signal. For Kelp, the live contract is verified and the proxy/implementation pair is detected, so `audit_status` is bumped from the static 3 to the live 7. `upgradeability_risk` follows the same path.
+
+The effect: the audit's §Q3 table accurately documents the **static floor**; the production `raw_values` record the **effective score** after live enrichment. A delegate querying `/api/lsti/scores/kelp-rseth` sees the effective score, not the floor.
+
+**Decision.** No code change. Future incident audits will document both static seeds and current production values side by side, and the public methodology page (`/methodology/lsti` or equivalent) should explain the `max(live, static)` override logic so the gap isn't surprising.
+
+### Revised Q4 package (published in v1.1)
+
+The incident page and any forum reply derived from this audit cite the following five components. The two removed components (`dex_pool_depth`, `eth_peg_deviation`) and the three always-null components (`validator_count`, `operator_diversity_hhi`, `attestation_rate` — Rated Network coverage gap) stay out of the published set.
+
+| # | Component | Why it holds in v1.1 |
+|---|---|---|
+| 1 | `exploit_history_lst` | Static, updated 100 → 10 on 2026-04-20 per audit §Q3. Peers unchanged at 100. |
+| 2 | `eth_price_ratio` | Cross-peer comparable when paired with the Design column. Captures rsETH's exploit signature (~18% below reward-bearing baseline, matching the unbacked-mint ratio). |
+| 3 | `peg_volatility_7d` | Design-agnostic. Measures price noise, not absolute peg. On 2026-04-20 rsETH sat at ~16.5% vs peers ~3.7%. |
+| 4 | `market_cap` | Objective, every peer populated. Anchors the size comparison. |
+| 5 | `top_holder_concentration` | Objective. eETH showing 0.00% is a suspected contract-filter bug in the holder analyzer — the incident page flags this inline rather than hiding the value. |
+
+Ranking order on the page matches this table. The share card renders only row 1 (`exploit_history_lst`) because the bar chart for a five-component comparison at 1200×630 becomes illegible; the card's role is the hook, and the incident page carries the full evidence.
+
+### Post-deploy: `top_holder_concentration` also removed
+
+Since this addendum's initial draft, `top_holder_concentration` was also removed from the forum-reply package. Three of four peers (rsETH, rETH, eETH) rendered as `0.00%` in production due to the same contract-filter issue in the holder analyzer that was inline-flagged in v1.1. One-of-four having a suspected-anomaly value was borderline publishable with a footnote; three-of-four is not — the row invites questions we can't answer cleanly, and the comparison is no longer cross-peer valid. Published package is now **4 rows**: `exploit_history_lst`, `eth_price_ratio`, `peg_volatility_7d`, `market_cap`. Follow-up investigation of the holder-analyzer contract-filter is pending and will restore `top_holder_concentration` to the package once resolved.
