@@ -690,12 +690,85 @@ def aggregate_strict_neutral(definition, component_scores, raw_values, params=No
     return result
 
 
+def aggregate_legacy_sii_v1(definition, component_scores, raw_values, params=None):
+    """
+    SII v1.0.0's historical weighted-sum behavior — distinct from
+    legacy_renormalize because `app.scoring.calculate_sii` and
+    `calculate_structural_composite` do NOT round intermediate category
+    scores, whereas legacy_renormalize rounds to 2 decimals per category.
+
+    This formula exists so the registry has SII's slot reserved. The actual
+    wire-up of `app.scoring.calculate_sii` to dispatch through this formula
+    is deferred to a follow-up PR — routing it now risks changing stored
+    SII values (rounding drift) which would violate the no-external-change
+    constraint of the aggregation-infrastructure PR.
+
+    Semantics: same as legacy_renormalize EXCEPT no per-category rounding.
+    Overall is rounded at the very end (matches calculate_sii's return).
+    """
+    category_scores = {}
+    effective_weights = {}
+
+    for cat_id, cat_def in definition["categories"].items():
+        cat_weight = _cat_nominal_weight(cat_def)
+        cat_components = {
+            cid: cdef for cid, cdef in definition["components"].items()
+            if cdef.get("category") == cat_id
+        }
+        cat_total_comp_weight = sum(cdef.get("weight", 0) for cdef in cat_components.values())
+        total = 0.0
+        weight_used = 0.0
+        for cid, cdef in cat_components.items():
+            if cid in component_scores:
+                w = cdef.get("weight", 0)
+                total += component_scores[cid] * w
+                weight_used += w
+        if weight_used > 0:
+            # No rounding on category score — preserves SII's precision
+            category_scores[cat_id] = total / weight_used
+            if cat_total_comp_weight > 0:
+                effective_weights[cat_id] = round(
+                    cat_weight * (weight_used / cat_total_comp_weight), 4
+                )
+            else:
+                effective_weights[cat_id] = 0.0
+        else:
+            effective_weights[cat_id] = 0.0
+
+    overall = 0.0
+    cat_weight_used = 0.0
+    for cat_id, cat_def in definition["categories"].items():
+        cat_weight = _cat_nominal_weight(cat_def)
+        if cat_id in category_scores:
+            overall += category_scores[cat_id] * cat_weight
+            cat_weight_used += cat_weight
+
+    if cat_weight_used > 0 and cat_weight_used < 1.0:
+        overall = overall / cat_weight_used
+
+    overall_out = round(overall, 2) if cat_weight_used > 0 else None
+
+    # Also round category_scores at output time so the API remains consistent
+    rounded_cats = {k: round(v, 2) for k, v in category_scores.items()}
+
+    return {
+        "overall_score": overall_out,
+        "category_scores": rounded_cats,
+        "effective_category_weights": effective_weights,
+        "coverage": _component_coverage(definition, component_scores),
+        "withheld": False,
+        "method": "legacy_sii_v1",
+        "formula_version": AGGREGATION_FORMULA_VERSION,
+    }
+
+
 AGGREGATION_FORMULAS = {
     "legacy_renormalize": aggregate_legacy_renormalize,
     "coverage_weighted": aggregate_coverage_weighted,
     "coverage_withheld": aggregate_coverage_withheld,
     "strict_zero": aggregate_strict_zero,
     "strict_neutral": aggregate_strict_neutral,
+    "legacy_sii_v1": aggregate_legacy_sii_v1,
 }
 
 
