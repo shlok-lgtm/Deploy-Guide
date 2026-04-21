@@ -2588,6 +2588,7 @@ async def main():
         "CREATE TABLE IF NOT EXISTS correlation_matrices (id BIGSERIAL PRIMARY KEY, matrix_type TEXT NOT NULL, window_days INTEGER NOT NULL, entity_ids JSONB, matrix_data JSONB, computed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(matrix_type, window_days, computed_at))",
         "CREATE TABLE IF NOT EXISTS wallet_behavior_tags (id BIGSERIAL PRIMARY KEY, wallet_address TEXT NOT NULL, behavior_type TEXT NOT NULL, confidence NUMERIC, metrics JSONB, computed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(wallet_address, behavior_type, computed_at))",
         "CREATE TABLE IF NOT EXISTS dex_pool_ohlcv (id BIGSERIAL PRIMARY KEY, pool_address TEXT NOT NULL, chain TEXT NOT NULL, dex TEXT, asset_id TEXT, timestamp TIMESTAMPTZ NOT NULL, open NUMERIC, high NUMERIC, low NUMERIC, close NUMERIC, volume NUMERIC, trades_count INTEGER, UNIQUE(pool_address, chain, timestamp))",
+        "CREATE TABLE IF NOT EXISTS volatility_surfaces (id BIGSERIAL PRIMARY KEY, asset_id TEXT NOT NULL, realized_vol_1d NUMERIC, realized_vol_7d NUMERIC, realized_vol_30d NUMERIC, realized_vol_90d NUMERIC, max_drawdown_7d NUMERIC, max_drawdown_30d NUMERIC, max_drawdown_90d NUMERIC, recovery_time_hours NUMERIC, raw_prices JSONB, computed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(asset_id, computed_at))",
     ]
     _data_layer_alters = [
         "ALTER TABLE governance_voters ADD COLUMN IF NOT EXISTS source TEXT",
@@ -2667,6 +2668,7 @@ async def main():
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_corr_matrix_unique ON correlation_matrices (matrix_type, window_days, computed_at)",
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_behavior_unique ON wallet_behavior_tags (wallet_address, behavior_type, computed_at)",
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_ohlcv_unique ON dex_pool_ohlcv (pool_address, chain, timestamp)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_vol_surface_unique ON volatility_surfaces (asset_id, computed_at)",
     ]
     for _ui in _unique_indexes:
         try:
