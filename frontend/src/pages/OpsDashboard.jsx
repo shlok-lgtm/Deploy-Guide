@@ -3217,6 +3217,97 @@ function TrackRecordPanel() {
 }
 
 
+function DisputesPanel() {
+  const [disputes, setDisputes] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [flash, showFlash] = useFlash();
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const res = await opsFetch("/api/ops/disputes");
+      setDisputes(res.disputes || []);
+    } catch (e) {
+      showFlash(e.message, false);
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const statusColor = (s) => ({
+    submitted: "#3498db",
+    under_review: "#f39c12",
+    counter_evidence_issued: "#8e44ad",
+    resolved: "#27ae60",
+    withdrawn: "#95a5a6",
+  }[s] || "#999");
+
+  const countByStatus = {};
+  disputes.forEach(d => { countByStatus[d.status] = (countByStatus[d.status] || 0) + 1; });
+
+  return (
+    <Section title="DISPUTES" actions={
+      <button onClick={load} disabled={loading} style={{ fontSize: 9, fontFamily: T.mono, padding: "2px 6px", border: `1px solid ${T.paper}44`, background: "transparent", color: T.paper, cursor: "pointer", opacity: loading ? 0.5 : 1 }}>
+        {loading ? "Loading..." : "Refresh"}
+      </button>
+    }>
+      <Flash flash={flash} />
+      <div style={{ padding: "0 10px" }}>
+        {!disputes.length && !loading && <div style={{ color: T.inkFaint, fontSize: 12 }}>No disputes filed yet.</div>}
+
+        {disputes.length > 0 && (
+          <>
+            {/* Status counts */}
+            <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 12, padding: "8px 0", borderBottom: `1px solid ${T.ruleLight}` }}>
+              <div>
+                <Lbl>Total</Lbl>
+                <div style={{ fontSize: 18, fontFamily: T.mono, fontWeight: 700, color: T.ink }}>{disputes.length}</div>
+              </div>
+              {Object.entries(countByStatus).map(([s, c]) => (
+                <div key={s}>
+                  <Lbl>{s.replace(/_/g, " ")}</Lbl>
+                  <div style={{ fontSize: 14, fontFamily: T.mono, color: statusColor(s) }}>{c}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Disputes table */}
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, fontFamily: T.mono }}>
+                <thead>
+                  <tr style={{ borderBottom: `2px solid ${T.ruleMid}` }}>
+                    <th style={{ textAlign: "left", padding: "4px 6px", fontSize: 10, color: T.inkLight }}>Entity</th>
+                    <th style={{ textAlign: "left", padding: "4px 6px", fontSize: 10, color: T.inkLight }}>Submitter</th>
+                    <th style={{ textAlign: "left", padding: "4px 6px", fontSize: 10, color: T.inkLight }}>Status</th>
+                    <th style={{ textAlign: "left", padding: "4px 6px", fontSize: 10, color: T.inkLight }}>Created</th>
+                    <th style={{ textAlign: "left", padding: "4px 6px", fontSize: 10, color: T.inkLight }}>On-chain</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {disputes.map(d => (
+                    <tr key={d.dispute_id} style={{ borderBottom: `1px solid ${T.ruleLight}` }}>
+                      <td style={{ padding: "4px 6px", fontWeight: 600 }}>{d.entity_slug}</td>
+                      <td style={{ padding: "4px 6px", color: T.inkMid }}>{d.submitter_type}</td>
+                      <td style={{ padding: "4px 6px" }}>
+                        <span style={{ color: statusColor(d.status), fontWeight: 600 }}>{d.status.replace(/_/g, " ")}</span>
+                        {d.resolution_category && <span style={{ color: T.inkFaint, marginLeft: 4 }}>({d.resolution_category})</span>}
+                      </td>
+                      <td style={{ padding: "4px 6px", color: T.inkFaint }}>{(d.created_at || "").substring(0, 10)}</td>
+                      <td style={{ padding: "4px 6px", color: T.inkFaint }}>{d.status === "resolved" ? "pending" : "-"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+      </div>
+    </Section>
+  );
+}
+
+
 function ABMPanel() {
   const [campaigns, setCampaigns] = useState([]);
   const [config, setConfig] = useState(null);
@@ -4490,6 +4581,7 @@ export default function OpsDashboard() {
                 <BacktestPanel />
                 <ABMPanel />
                 <TrackRecordPanel />
+                <DisputesPanel />
               </div>
             )}
             {tab === "playground" && (

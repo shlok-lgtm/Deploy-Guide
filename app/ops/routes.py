@@ -3440,6 +3440,190 @@ async def track_record_on_chain_status(request: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+# =============================================================================
+# Disputes
+# =============================================================================
+
+@router.post("/disputes")
+async def submit_dispute(request: Request):
+    _check_admin_key(request)
+    try:
+        body = await request.json()
+        required = ["entity_slug", "submitter_identifier", "submitter_type", "submission_text"]
+        for field in required:
+            if not body.get(field):
+                return JSONResponse({"error": f"{field} required"}, status_code=400)
+        if body["submitter_type"] not in ("issuer", "third_party", "regulator", "anonymous"):
+            return JSONResponse({"error": "submitter_type must be one of: issuer, third_party, regulator, anonymous"}, status_code=400)
+
+        from app.disputes import submit_dispute as _submit
+        dispute_id = _submit(
+            entity_slug=body["entity_slug"],
+            submitter_identifier=body["submitter_identifier"],
+            submitter_type=body["submitter_type"],
+            submission_text=body["submission_text"],
+            submission_evidence_url=body.get("submission_evidence_url"),
+            disputed_score_content_hash=body.get("disputed_score_content_hash"),
+        )
+        return {"status": "ok", "dispute_id": dispute_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Dispute submission failed: {e}")
+        return JSONResponse({"error": str(e), "traceback": _traceback_mod.format_exc()}, status_code=500)
+
+
+@router.post("/disputes/{dispute_id}/counter-evidence")
+async def dispute_counter_evidence(dispute_id: str, request: Request):
+    _check_admin_key(request)
+    try:
+        body = await request.json()
+        if not body.get("payload"):
+            return JSONResponse({"error": "payload required"}, status_code=400)
+        if not body.get("author"):
+            return JSONResponse({"error": "author required"}, status_code=400)
+
+        from app.disputes import issue_counter_evidence
+        transition_id = issue_counter_evidence(
+            dispute_id=dispute_id,
+            payload_dict=body["payload"],
+            author=body["author"],
+        )
+        return {"status": "ok", "transition_id": transition_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Counter-evidence failed: {e}")
+        return JSONResponse({"error": str(e), "traceback": _traceback_mod.format_exc()}, status_code=500)
+
+
+@router.post("/disputes/{dispute_id}/resolve")
+async def dispute_resolve(dispute_id: str, request: Request):
+    _check_admin_key(request)
+    try:
+        body = await request.json()
+        if not body.get("resolution_category"):
+            return JSONResponse({"error": "resolution_category required"}, status_code=400)
+        if body["resolution_category"] not in ("accepted", "partially_accepted", "rejected"):
+            return JSONResponse({"error": "resolution_category must be one of: accepted, partially_accepted, rejected"}, status_code=400)
+        if not body.get("resolution_narrative"):
+            return JSONResponse({"error": "resolution_narrative required"}, status_code=400)
+        if not body.get("author"):
+            return JSONResponse({"error": "author required"}, status_code=400)
+
+        from app.disputes import resolve_dispute
+        transition_id = resolve_dispute(
+            dispute_id=dispute_id,
+            resolution_category=body["resolution_category"],
+            resolution_narrative=body["resolution_narrative"],
+            author=body["author"],
+        )
+        return {"status": "ok", "transition_id": transition_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Dispute resolution failed: {e}")
+        return JSONResponse({"error": str(e), "traceback": _traceback_mod.format_exc()}, status_code=500)
+
+
+@router.get("/disputes")
+async def list_disputes(request: Request, status: Optional[str] = None):
+    _check_admin_key(request)
+    try:
+        if status:
+            rows = fetch_all(
+                "SELECT * FROM disputes WHERE status = %s ORDER BY created_at DESC",
+                (status,),
+            )
+        else:
+            rows = fetch_all("SELECT * FROM disputes ORDER BY created_at DESC")
+        return {"disputes": [dict(r) for r in rows] if rows else []}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.get("/disputes/pending-on-chain")
+async def disputes_pending_on_chain(request: Request, chain: str = "base"):
+    _check_admin_key(request)
+    if chain not in ("base", "arbitrum"):
+        return JSONResponse({"error": "chain must be 'base' or 'arbitrum'"}, status_code=400)
+
+    col = f"committed_on_chain_{chain}"
+    try:
+        from app.disputes import compute_on_chain_entity_id
+        rows = fetch_all(
+            f"SELECT * FROM dispute_transitions WHERE {col} = FALSE ORDER BY created_at"
+        )
+        results = []
+        for r in (rows or []):
+            entry = dict(r)
+            entry["entity_id_bytes32"] = compute_on_chain_entity_id(entry)
+            if isinstance(entry.get("transition_payload"), str):
+                entry["transition_payload"] = json.loads(entry["transition_payload"])
+            results.append(entry)
+        return results
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.get("/disputes/{dispute_id}")
+async def get_dispute(dispute_id: str, request: Request):
+    _check_admin_key(request)
+    try:
+        dispute = fetch_one(
+            "SELECT * FROM disputes WHERE dispute_id = %s::uuid", (dispute_id,)
+        )
+        if not dispute:
+            return JSONResponse({"error": "dispute not found"}, status_code=404)
+
+        transitions = fetch_all(
+            "SELECT * FROM dispute_transitions WHERE dispute_id = %s::uuid ORDER BY transition_index",
+            (dispute_id,),
+        )
+        result = dict(dispute)
+        result["transitions"] = [dict(t) for t in transitions] if transitions else []
+        for t in result["transitions"]:
+            if isinstance(t.get("transition_payload"), str):
+                t["transition_payload"] = json.loads(t["transition_payload"])
+        return result
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.post("/disputes/transitions/{transition_id}/committed/{chain}")
+async def dispute_transition_mark_committed(transition_id: str, chain: str, request: Request):
+    _check_admin_key(request)
+    if chain not in ("base", "arbitrum"):
+        return JSONResponse({"error": "chain must be 'base' or 'arbitrum'"}, status_code=400)
+
+    body = await request.json()
+    tx_hash = body.get("tx_hash")
+    if not tx_hash:
+        return JSONResponse({"error": "tx_hash required"}, status_code=400)
+
+    col_flag = f"committed_on_chain_{chain}"
+    col_hash = f"on_chain_tx_hash_{chain}"
+    try:
+        existing = fetch_one(
+            "SELECT transition_id FROM dispute_transitions WHERE transition_id = %s::uuid",
+            (transition_id,),
+        )
+        if not existing:
+            return JSONResponse({"error": "transition not found"}, status_code=404)
+
+        execute(
+            f"""UPDATE dispute_transitions
+                SET {col_flag} = TRUE,
+                    {col_hash} = %s,
+                    committed_at = COALESCE(committed_at, NOW())
+                WHERE transition_id = %s::uuid""",
+            (tx_hash, transition_id),
+        )
+        return {"status": "ok", "transition_id": transition_id, "chain": chain, "tx_hash": tx_hash}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 def register_ops_routes(app):
     """Register the ops router with the main FastAPI app."""
     app.include_router(router)
