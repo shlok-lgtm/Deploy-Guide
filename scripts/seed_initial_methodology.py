@@ -182,6 +182,39 @@ Score range: 0-100, grades A+ through F
 # Main
 # =============================================================================
 
+# =============================================================================
+# 4. Confidence Tier Codes v1
+# =============================================================================
+
+CONFIDENCE_TIER_CODES_V1 = """Confidence Tier Codes v1
+=========================
+
+The grade field in /api/scores and /api/psi/scores carries a confidence tier
+code, not a credit rating. This is not an NRSRO rating, a CRA rating, or any
+assessment of creditworthiness. It is a two-character code representing the
+methodological confidence level at which the underlying score was computed.
+
+Mapping:
+
+| confidence_tag | Code | Meaning                                    |
+|----------------|------|--------------------------------------------|
+| (null/high)    | HI   | High confidence — >=80% component coverage |
+| STANDARD       | ST   | Standard confidence — >=60% coverage       |
+| LIMITED DATA   | LD   | Limited data — <60% component coverage     |
+| (unknown)      | XX   | Fallback for unrecognized tags             |
+
+On-chain storage: the bytes2 grade slot on the BasisOracle contract is a legacy
+schema field name. The semantic meaning as of this version is confidence tier
+code. The keeper's gradeToBytes2() function packs two ASCII characters into
+bytes2 — encoding-agnostic.
+
+Examples:
+  HI -> 0x4849 (H=0x48, I=0x49)
+  ST -> 0x5354 (S=0x53, T=0x54)
+  LD -> 0x4c44 (L=0x4c, D=0x44)
+"""
+
+
 METHODOLOGIES = [
     (
         "track_record_rules_v1",
@@ -197,6 +230,11 @@ METHODOLOGIES = [
         "sii_component_weights_v1",
         SII_COMPONENT_WEIGHTS_V1,
         "SII v1.0.0 canonical category weights and structural subcategory weights",
+    ),
+    (
+        "confidence_tier_codes_v1",
+        CONFIDENCE_TIER_CODES_V1,
+        "Mapping of SII confidence_tag values to bytes2 tier codes used in on-chain grade field.",
     ),
 ]
 
