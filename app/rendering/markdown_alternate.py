@@ -29,7 +29,7 @@ def render_entity_markdown(entity_slug: str) -> str:
                   s.component_count, s.formula_version,
                   s.current_price, s.market_cap, s.volume_24h,
                   s.daily_change, s.weekly_change,
-                  s.calculated_at,
+                  s.computed_at,
                   c.name, c.symbol, c.issuer
            FROM scores s
            JOIN stablecoins c ON s.stablecoin_id = c.id
@@ -44,7 +44,7 @@ def render_entity_markdown(entity_slug: str) -> str:
     symbol = row.get("symbol", entity_slug.upper())
     score = row.get("overall_score", 0)
     grade = row.get("grade", "?")
-    updated = row.get("calculated_at", "")
+    updated = row.get("computed_at", "")
     version = row.get("formula_version", "")
 
     lines = [
@@ -193,7 +193,7 @@ def render_proof_markdown(index_name: str, entity_slug: str) -> str:
     if index_name == "sii":
         row = fetch_one(
             """SELECT s.overall_score, s.grade, s.component_count,
-                      s.formula_version, s.calculated_at
+                      s.formula_version, s.computed_at
                FROM scores s WHERE s.stablecoin_id = %s""",
             (entity_slug,),
         )
@@ -203,7 +203,7 @@ def render_proof_markdown(index_name: str, entity_slug: str) -> str:
                 f"**Grade:** {row.get('grade', '?')}",
                 f"**Components:** {row.get('component_count', 0)}",
                 f"**Formula version:** {row.get('formula_version', '?')}",
-                f"**Computed at:** {row.get('calculated_at', '?')}",
+                f"**Computed at:** {row.get('computed_at', '?')}",
                 "",
             ])
 
