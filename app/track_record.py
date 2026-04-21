@@ -50,6 +50,21 @@ def _compute_content_hash(entity_slug: str, trigger_kind: str,
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
+def compute_on_chain_entity_id(entry: dict) -> str:
+    """Compute deterministic bytes32 entityId for on-chain anchoring via publishReportHash."""
+    canonical = json.dumps({
+        "entity_slug": entry.get("entity_slug", ""),
+        "trigger_kind": entry.get("trigger_kind", ""),
+        "triggered_at": str(entry.get("triggered_at", "")),
+    }, sort_keys=True, separators=(",", ":"))
+    try:
+        import sha3
+        h = sha3.keccak_256(canonical.encode()).hexdigest()
+    except ImportError:
+        h = hashlib.sha256(canonical.encode()).hexdigest()
+    return "0x" + h
+
+
 def _get_entity_baseline(entity_slug: str, index_name: str) -> dict:
     """Capture the entity's current scored state as a frozen baseline."""
     baseline = {"entity_slug": entity_slug, "index_name": index_name, "captured_at": datetime.now(timezone.utc).isoformat()}

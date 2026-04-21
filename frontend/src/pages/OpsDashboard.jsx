@@ -3099,14 +3099,19 @@ function AbmStateBadge({ state }) {
 
 function TrackRecordPanel() {
   const [data, setData] = useState(null);
+  const [onChain, setOnChain] = useState(null);
   const [loading, setLoading] = useState(false);
   const [flash, showFlash] = useFlash();
 
   const load = async () => {
     setLoading(true);
     try {
-      const res = await opsFetch("/api/ops/track-record/summary");
+      const [res, oc] = await Promise.all([
+        opsFetch("/api/ops/track-record/summary"),
+        opsFetch("/api/ops/track-record/on-chain-status").catch(() => null),
+      ]);
       setData(res);
+      setOnChain(oc);
     } catch (e) {
       showFlash(e.message, false);
     }
@@ -3142,6 +3147,24 @@ function TrackRecordPanel() {
                 <div style={{ fontSize: 14, fontFamily: T.mono, color: (data.pending_followups || []).length > 0 ? "#e74c3c" : T.inkFaint }}>{(data.pending_followups || []).length}</div>
               </div>
             </div>
+
+            {/* On-chain anchoring status */}
+            {onChain && (
+              <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 12, padding: "8px 0", borderBottom: `1px solid ${T.ruleLight}` }}>
+                <div>
+                  <Lbl>On-chain (Base)</Lbl>
+                  <div style={{ fontSize: 14, fontFamily: T.mono, color: onChain.committed_base > 0 ? "#27ae60" : T.inkFaint }}>{onChain.committed_base || 0} / {onChain.total || 0}</div>
+                </div>
+                <div>
+                  <Lbl>On-chain (Arb)</Lbl>
+                  <div style={{ fontSize: 14, fontFamily: T.mono, color: onChain.committed_arbitrum > 0 ? "#27ae60" : T.inkFaint }}>{onChain.committed_arbitrum || 0} / {onChain.total || 0}</div>
+                </div>
+                <div>
+                  <Lbl>Uncommitted</Lbl>
+                  <div style={{ fontSize: 14, fontFamily: T.mono, color: (onChain.uncommitted_either || 0) > 0 ? "#e74c3c" : "#27ae60" }}>{onChain.uncommitted_either || 0}</div>
+                </div>
+              </div>
+            )}
 
             {/* By trigger kind (30 days) */}
             {data.by_trigger_kind_30d && data.by_trigger_kind_30d.length > 0 && (

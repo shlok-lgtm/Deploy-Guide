@@ -3358,6 +3358,88 @@ async def track_record_summary(request: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@router.get("/track-record/pending-on-chain")
+async def track_record_pending_on_chain(request: Request, chain: str = "base"):
+    _check_admin(request)
+    if chain not in ("base", "arbitrum"):
+        return JSONResponse({"error": "chain must be 'base' or 'arbitrum'"}, status_code=400)
+
+    col = f"committed_on_chain_{chain}"
+    try:
+        from app.track_record import compute_on_chain_entity_id
+        rows = fetch_all(
+            f"""SELECT entry_id, entity_slug, trigger_kind, triggered_at,
+                       content_hash, baseline_snapshot, trigger_detail
+                FROM track_record_entries
+                WHERE {col} = FALSE
+                ORDER BY triggered_at ASC
+                LIMIT 100"""
+        )
+        results = []
+        for r in (rows or []):
+            entry = dict(r)
+            entry["entity_id_bytes32"] = compute_on_chain_entity_id(entry)
+            for k in ("baseline_snapshot", "trigger_detail"):
+                if isinstance(entry.get(k), str):
+                    entry[k] = json.loads(entry[k])
+            results.append(entry)
+        return results
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.post("/track-record/entries/{entry_id}/committed/{chain}")
+async def track_record_mark_committed(entry_id: str, chain: str, request: Request):
+    _check_admin(request)
+    if chain not in ("base", "arbitrum"):
+        return JSONResponse({"error": "chain must be 'base' or 'arbitrum'"}, status_code=400)
+
+    body = await request.json()
+    tx_hash = body.get("tx_hash")
+    if not tx_hash:
+        return JSONResponse({"error": "tx_hash required"}, status_code=400)
+
+    col_flag = f"committed_on_chain_{chain}"
+    col_hash = f"on_chain_tx_hash_{chain}"
+    try:
+        existing = fetch_one(
+            "SELECT entry_id FROM track_record_entries WHERE entry_id = %s::uuid",
+            (entry_id,),
+        )
+        if not existing:
+            return JSONResponse({"error": "entry not found"}, status_code=404)
+
+        execute(
+            f"""UPDATE track_record_entries
+                SET {col_flag} = TRUE,
+                    {col_hash} = %s,
+                    committed_at = COALESCE(committed_at, NOW())
+                WHERE entry_id = %s::uuid""",
+            (tx_hash, entry_id),
+        )
+        return {"status": "ok", "entry_id": entry_id, "chain": chain, "tx_hash": tx_hash}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.get("/track-record/on-chain-status")
+async def track_record_on_chain_status(request: Request):
+    _check_admin(request)
+    try:
+        row = fetch_one("""
+            SELECT
+                COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE committed_on_chain_base = TRUE) AS committed_base,
+                COUNT(*) FILTER (WHERE committed_on_chain_arbitrum = TRUE) AS committed_arbitrum,
+                COUNT(*) FILTER (WHERE committed_on_chain_base = TRUE AND committed_on_chain_arbitrum = TRUE) AS committed_both,
+                COUNT(*) FILTER (WHERE committed_on_chain_base = FALSE OR committed_on_chain_arbitrum = FALSE) AS uncommitted_either
+            FROM track_record_entries
+        """)
+        return dict(row) if row else {}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 def register_ops_routes(app):
     """Register the ops router with the main FastAPI app."""
     app.include_router(router)
