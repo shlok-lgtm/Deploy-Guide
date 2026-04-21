@@ -12,37 +12,38 @@ const SECTION_04_VALUES = {
   "etherfi-eeth":     { audit_status: 7, admin_key_risk: 95, upgradeability_risk: 70,  withdrawal_queue_impl: 85, slashing_insurance: 50, exploit_history_lst: 100 },
 };
 
-// Row ordering + labeling for the Section 04 table.
+// Row ordering for the Section 02 "What Basis Knew" table. Labels render
+// as plain strings; Admin key risk carries a footnote dagger appended in
+// the section renderer. Every measure here is higher-is-better.
 const SECTION_04_ROWS = [
-  { key: "audit_status",          label: "Audits completed",                          source: "Static config" },
-  { key: "admin_key_risk",        label: "Admin key risk (0–100, higher = safer)",    source: "Live contract analysis" },
-  { key: "upgradeability_risk",   label: "Upgradeability risk",                       source: "Live contract analysis" },
-  { key: "withdrawal_queue_impl", label: "Withdrawal queue",                          source: "Static config + live" },
-  { key: "slashing_insurance",    label: "Slashing insurance",                        source: "Static config" },
-  { key: "exploit_history_lst",   label: "Exploit history (post-event)",              source: "DeFiLlama + static", footnoteDagger: false },
+  { key: "audit_status",          label: "Audits completed" },
+  { key: "upgradeability_risk",   label: "Upgradeability risk" },
+  { key: "withdrawal_queue_impl", label: "Withdrawal queue" },
+  { key: "slashing_insurance",    label: "Slashing insurance" },
+  { key: "exploit_history_lst",   label: "Exploit history" },
+  { key: "admin_key_risk",        label: "Admin key risk (0–100, higher = safer)", dagger: true },
 ];
 
 const SECTION_04_PEERS = ["kelp-rseth", "lido-steth", "rocket-pool-reth", "etherfi-eeth"];
 
-// Bolding rule: if rsETH holds the worst value in the row, bold the rsETH
-// cell; otherwise bold the best-performing peer cell. All-equal rows get
-// no bolding. "Worst" and "best" are domain-aware — every component here
-// is higher-is-better except admin_key_risk which all saturate at 95
-// (no bolding needed).
+// Bolding rules:
+//   - All-equal row → no bold (e.g. admin_key_risk saturates at 95)
+//   - rsETH strictly worst (unique minimum) → bold rsETH
+//   - Otherwise → bold the best-performing non-rsETH cell
+// Matches the visual rhythm the copy describes: worst-on-rsETH rows draw
+// the eye to rsETH; on rows where rsETH is at least tied-with-peers, the
+// eye lands on the best peer instead.
 function section04BoldCell(rowKey, peer) {
-  const values = SECTION_04_PEERS.map((p) => [p, SECTION_04_VALUES[p][rowKey]]);
-  const uniq = new Set(values.map(([, v]) => v));
-  if (uniq.size === 1) return false; // all-equal row (admin_key_risk)
+  const pairs = SECTION_04_PEERS.map((p) => [p, SECTION_04_VALUES[p][rowKey]]);
+  const uniqVals = new Set(pairs.map(([, v]) => v));
+  if (uniqVals.size === 1) return false;
   const rsEthVal = SECTION_04_VALUES["kelp-rseth"][rowKey];
-  const worst = Math.min(...values.map(([, v]) => v));
-  const best = Math.max(...values.map(([, v]) => v));
-  if (rsEthVal === worst) {
-    return peer === "kelp-rseth";
-  }
-  // rsETH is not worst — bold the best peer (excluding rsETH if it's tied for best)
-  const bestPeers = values.filter(([, v]) => v === best).map(([p]) => p);
-  const nonRsEthBest = bestPeers.find((p) => p !== "kelp-rseth");
-  return peer === (nonRsEthBest || bestPeers[0]);
+  const minVal = Math.min(...pairs.map(([, v]) => v));
+  const rsEthStrictlyWorst = rsEthVal === minVal && pairs.every(([p, v]) => p === "kelp-rseth" || v > minVal);
+  if (rsEthStrictlyWorst) return peer === "kelp-rseth";
+  const maxVal = Math.max(...pairs.map(([, v]) => v));
+  const bestPeer = pairs.find(([p, v]) => v === maxVal && p !== "kelp-rseth");
+  return bestPeer && peer === bestPeer[0];
 }
 
 const T = {
@@ -63,16 +64,6 @@ const API = "";
 const _DK = "BF6KF2i34EslzTnvBXAjcLlDZBlQKLSTP9LdrAzxUHI";
 const apiFetch = (url, opts) =>
   fetch(`${url}${url.includes("?") ? "&" : "?"}apikey=${_DK}`, opts);
-
-const GOVERNANCE_QUESTIONS = [
-  "Should LST-bridge composition be a standing risk consideration for collateral listings?",
-  "What threshold of independent risk data should gate collateral proposals?",
-  "How should cross-chain distribution be weighted in LST risk assessment?",
-  "Is an LST's dependency on a single bridge a fragility or a feature?",
-];
-
-const AUDIT_DISCLOSURE =
-  "Basis does not publish an overall LSTI score for rsETH or its peers; LSTI v0.1.0 is accruing, not promoted to scored status. The component-level values cited above are drawn from live data sources (CoinGecko, DeFiLlama, Etherscan) at query time and one updated static floor (exploit_history_lst, lowered to 10 on 2026-04-20 in response to the Kelp DAO bridge incident).";
 
 function useIsMobile() {
   const [mobile, setMobile] = useState(
@@ -199,8 +190,9 @@ function TopNav({ mobile }) {
         color: T.inkLight,
       }}
     >
-      <a href="/" style={{ color: T.ink, textDecoration: "none", fontWeight: 700, letterSpacing: 0.5 }}>
-        Basis Protocol
+      <a href="/" style={{ display: "flex", alignItems: "center", gap: 10, color: T.ink, textDecoration: "none", fontWeight: 700, letterSpacing: 0.5 }}>
+        <BasisLogo size={mobile ? 28 : 38} />
+        <span>Basis Protocol</span>
       </a>
       <span>Incident</span>
     </nav>
@@ -208,23 +200,40 @@ function TopNav({ mobile }) {
 }
 
 function IncidentBody({ data, mobile }) {
-  // Assembled from smaller section components declared below this component.
+  // Chronological order: what happened → what Basis knew before →
+  // observable measures after → measurement roadmap. Admin-key footnote
+  // lives at the page bottom, outside the two-column grid, so it sits
+  // below both the main column and the sidebar on desktop.
   return (
     <>
       <IncidentHeader data={data} mobile={mobile} />
       <div style={{ display: "flex", flexDirection: mobile ? "column" : "row", gap: mobile ? 28 : 40, marginTop: mobile ? 24 : 36 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <WhatHappenedSection mobile={mobile} />
-          <ComparisonSection data={data} mobile={mobile} />
-          <CapturedMissedSection mobile={mobile} />
-          <Section04Evidence mobile={mobile} />
-          <MethodologySection slug={data.slug} mobile={mobile} />
+          <Section02WhatBasisKnew mobile={mobile} />
+          <Section03ObservableMeasures mobile={mobile} />
+          <Section04MeasurementRoadmap mobile={mobile} />
         </div>
         <aside style={{ width: mobile ? "100%" : 300, flexShrink: 0, order: mobile ? -1 : 0 }}>
           <ActionPanel data={data} mobile={mobile} />
         </aside>
       </div>
+      <PageFootnote mobile={mobile} />
     </>
+  );
+}
+
+function PageFootnote({ mobile }) {
+  return (
+    <div style={{ marginTop: mobile ? 32 : 48 }}>
+      <hr style={{ border: "none", borderTop: `1px solid ${T.ruleMid}`, marginBottom: 14 }} />
+      <p style={{
+        fontFamily: T.mono, fontSize: 10, fontStyle: "italic",
+        color: T.inkFaint, lineHeight: 1.55, maxWidth: 720,
+      }}>
+        † Admin key risk resolves to 95 across all four tracked LSTs because the live contract-analysis override saturates the value when a standard transparent-proxy + timelock pattern is detected. Per-entity differentiation is a follow-up methodology item.
+      </p>
+    </div>
   );
 }
 
@@ -251,17 +260,14 @@ function IncidentHeader({ data, mobile }) {
         {eventDate}
       </div>
       <p style={{ fontFamily: T.sans, fontSize: mobile ? 15 : 16, lineHeight: 1.55, color: T.inkMid, maxWidth: 720, marginBottom: 14 }}>
-        {data.summary}
+        Basis's tracked measures showed rsETH lagging peers on withdrawal queue design and slashing insurance before the event, and diverging sharply from peers on peg behavior after.
       </p>
       <div style={{
         fontFamily: T.mono, fontSize: 10, color: T.inkFaint,
         borderTop: `1px solid ${T.ruleMid}`, borderBottom: `1px solid ${T.ruleMid}`,
         padding: "8px 0", letterSpacing: 0.5,
       }}>
-        Values on this page are pinned to {capturedAt}. Live data at{" "}
-        <a href="/api/lsti/scores/kelp-rseth" style={{ color: T.inkMid, borderBottom: `1px solid ${T.ruleMid}`, textDecoration: "none" }}>
-          /api/lsti/scores/kelp-rseth
-        </a>.
+        Values on this page are pinned to April 21, 2026.
       </div>
     </header>
   );
@@ -285,252 +291,86 @@ function WhatHappenedSection({ mobile }) {
       <SectionTitle n="01" title="What Happened" mobile={mobile} />
       <div style={{ fontFamily: T.sans, fontSize: mobile ? 14 : 15, lineHeight: 1.7, color: T.inkMid, maxWidth: 720 }}>
         <p style={{ marginBottom: 10 }}>
-          On April 18, 2026, an attacker exploited Kelp DAO's LayerZero bridge and minted 116,500 rsETH on Ethereum mainnet without corresponding ETH backing on the origin chain.
-        </p>
-        <p style={{ marginBottom: 10 }}>
-          The unbacked rsETH — worth approximately $292M at spot — was deposited as collateral on Aave V3 and used to borrow roughly $196M of WETH.
-        </p>
-        <p style={{ marginBottom: 10 }}>
-          The borrow moved Aave V3 TVL materially within the hour. Kelp paused minting on the bridge shortly after the exploit was observed. rsETH depegged from ETH; peers held their peg.
+          On April 18, an attacker exploited Kelp DAO's LayerZero bridge to mint 116,500 rsETH (~$292M) without ETH backing, depositing it as Aave V3 collateral to borrow ~$196M of WETH.
         </p>
         <p>
-          This is the largest DeFi exploit of 2026 to date.
+          Kelp paused bridge minting shortly after the exploit was observed.
         </p>
       </div>
     </section>
   );
 }
-function ComparisonSection({ data, mobile }) {
-  const order = data.components?.component_order || [];
-  const meta = data.components?.component_meta || {};
-  const peers = data.components?.peers || {};
-  const peerOrder = ["kelp-rseth", "lido-steth", "rocket-pool-reth", "etherfi-eeth"];
+// Section 03 — pinned post-event observable measures. Values hardcoded,
+// reflect the April 21, 2026 snapshot. No API call at render time.
+const SECTION_03_ROWS = [
+  {
+    key: "exploit_history",
+    label: "Exploit History",
+    source: "Basis static config, updated April 20, 2026",
+    values: {
+      "kelp-rseth":       { display: "10",    bold: true  },
+      "lido-steth":       { display: "100",   bold: false },
+      "rocket-pool-reth": { display: "100",   bold: false },
+      "etherfi-eeth":     { display: "100",   bold: false },
+    },
+  },
+  {
+    key: "eth_price_ratio",
+    label: "ETH Price Ratio",
+    source: "CoinGecko",
+    values: {
+      "kelp-rseth":       { display: "0.844", design: "Reward-bearing", bold: true  },
+      "lido-steth":       { display: "0.993", design: "Rebasing",       bold: false },
+      "rocket-pool-reth": { display: "1.155", design: "Reward-bearing", bold: false },
+      "etherfi-eeth":     { display: "1.003", design: "Rebasing",       bold: false },
+    },
+  },
+  {
+    key: "peg_volatility_7d",
+    label: "7d Peg Volatility",
+    source: "CoinGecko",
+    values: {
+      "kelp-rseth":       { display: "14.16%", bold: true  },
+      "lido-steth":       { display: "2.26%",  bold: false },
+      "rocket-pool-reth": { display: "2.36%",  bold: false },
+      "etherfi-eeth":     { display: "3.15%",  bold: false },
+    },
+  },
+  {
+    key: "market_cap",
+    label: "Market Cap",
+    source: "CoinGecko",
+    values: {
+      "kelp-rseth":       { display: "$1.30B",  bold: false },
+      "lido-steth":       { display: "$21.72B", bold: false },
+      "rocket-pool-reth": { display: "$903M",   bold: false },
+      "etherfi-eeth":     { display: "$602M",   bold: false },
+    },
+  },
+];
 
-  const peerLabel = (p) => {
-    const info = peers[p];
-    if (!info) return p;
-    return info.symbol || info.name || p;
-  };
+function Section03ObservableMeasures({ mobile }) {
+  const peerLabelMap = { "kelp-rseth": "rsETH", "lido-steth": "stETH", "rocket-pool-reth": "rETH", "etherfi-eeth": "eETH" };
 
   return (
     <section style={{ marginBottom: 44 }}>
-      <SectionTitle n="02" title="Component Comparison" mobile={mobile} />
-      <p style={{ fontFamily: T.sans, fontSize: mobile ? 13 : 14, lineHeight: 1.6, color: T.inkLight, marginBottom: 16, maxWidth: 720 }}>
-        The six components from the rsETH audit's recommended forum-reply data package, pinned to this incident's capture time. No overall LSTI score is shown — the audit explains why.
+      <SectionTitle n="03" title="Observable Measures After the Event" mobile={mobile} />
+      <p style={{ fontFamily: T.sans, fontSize: mobile ? 14 : 15, lineHeight: 1.65, color: T.inkMid, maxWidth: 720, marginBottom: 16 }}>
+        The four measures below, pinned to April 21, 2026, show how rsETH's observable risk profile compared to three peer liquid staking tokens in the days following the exploit.
       </p>
 
       <div style={{ border: `1px solid ${T.ruleMid}`, overflowX: "auto" }}>
         {!mobile && (
           <div style={{
             display: "grid",
-            gridTemplateColumns: "1.6fr 0.9fr 0.9fr 0.9fr 0.9fr 0.9fr",
+            gridTemplateColumns: "1.4fr 0.9fr 0.9fr 0.9fr 0.9fr 1.4fr",
             padding: "10px 14px",
             borderBottom: `1px solid ${T.ruleMid}`,
             background: T.paperWarm,
             fontFamily: T.mono, fontSize: 10, fontWeight: 600,
             color: T.inkLight, textTransform: "uppercase", letterSpacing: 1,
           }}>
-            <span>Component</span>
-            <span>{peerLabel("kelp-rseth")}</span>
-            <span>{peerLabel("lido-steth")}</span>
-            <span>{peerLabel("rocket-pool-reth")}</span>
-            <span>{peerLabel("etherfi-eeth")}</span>
-            <span>Source</span>
-          </div>
-        )}
-        {order.map((compId, i) => {
-          const m = meta[compId] || {};
-          const rowBorder = i < order.length - 1 ? `1px dotted ${T.ruleMid}` : "none";
-          const showDesign = compId === "eth_price_ratio";
-          if (mobile) {
-            return (
-              <div key={compId} style={{ padding: "12px 14px", borderBottom: rowBorder }}>
-                <div style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 600, color: T.ink, marginBottom: 2 }}>
-                  {m.label || compId}
-                </div>
-                <div style={{ fontFamily: T.mono, fontSize: 10, color: T.inkLight, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
-                  {m.category || ""} · {m.source || ""}
-                </div>
-                {peerOrder.map((p) => {
-                  const val = peers[p]?.values?.[compId];
-                  const design = showDesign ? designLabel(peers[p]?.design) : null;
-                  const isSubject = p === "kelp-rseth";
-                  return (
-                    <div key={p} style={{ padding: "3px 0", borderBottom: `1px dotted ${T.ruleLight}` }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", fontFamily: T.mono, fontSize: 12, color: T.inkMid }}>
-                        <span style={{ color: T.inkLight }}>{peerLabel(p)}</span>
-                        <span style={{ fontWeight: isSubject ? 600 : 400, color: isSubject ? T.ink : T.inkMid }}>
-                          {formatValue(compId, val)}
-                        </span>
-                      </div>
-                      {design && (
-                        <div style={{ fontFamily: T.mono, fontSize: 10, color: T.inkFaint, textAlign: "right", marginTop: 1, letterSpacing: 0.3 }}>
-                          {design}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            );
-          }
-          return (
-            <div key={compId} style={{
-              display: "grid",
-              gridTemplateColumns: "1.6fr 0.9fr 0.9fr 0.9fr 0.9fr 0.9fr",
-              padding: "12px 14px",
-              borderBottom: rowBorder,
-              alignItems: "baseline",
-            }}>
-              <div>
-                <div style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 600, color: T.ink }}>
-                  {m.label || compId}
-                </div>
-                <div style={{ fontFamily: T.mono, fontSize: 10, color: T.inkFaint, textTransform: "uppercase", letterSpacing: 0.5, marginTop: 2 }}>
-                  {m.category || ""}
-                </div>
-              </div>
-              {peerOrder.map((p) => {
-                const val = peers[p]?.values?.[compId];
-                const isSubject = p === "kelp-rseth";
-                const design = showDesign ? designLabel(peers[p]?.design) : null;
-                return (
-                  <div key={p}>
-                    <div style={{ fontFamily: T.mono, fontSize: 13, fontWeight: isSubject ? 600 : 400, color: isSubject ? T.ink : T.inkMid }}>
-                      {formatValue(compId, val)}
-                    </div>
-                    {design && (
-                      <div style={{ fontFamily: T.mono, fontSize: 10, color: T.inkFaint, letterSpacing: 0.3, marginTop: 2 }}>
-                        {design}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-              <div style={{ fontFamily: T.mono, fontSize: 10, color: T.inkLight, letterSpacing: 0.3 }}>
-                {m.source || ""}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-      <div style={{ marginTop: 10, fontFamily: T.mono, fontSize: 10, color: T.inkFaint, lineHeight: 1.5 }}>
-        Bold column = rsETH. Static values noted as "static, updated 2026-04-20" reflect the post-incident audit update; see Section 4.
-      </div>
-
-      <div style={{
-        marginTop: 18, padding: "12px 14px",
-        borderLeft: `3px solid ${T.ruleMid}`, background: T.paperWarm,
-        maxWidth: 720,
-      }}>
-        <div style={{ fontFamily: T.mono, fontSize: 10, color: T.inkLight, letterSpacing: 1, textTransform: "uppercase", marginBottom: 6 }}>
-          Methodology note
-        </div>
-        <p style={{ fontFamily: T.sans, fontSize: 13, lineHeight: 1.65, color: T.inkMid, margin: 0 }}>
-          The original Q4 package included <code style={{ fontFamily: T.mono, fontSize: 12 }}>eth_peg_deviation</code> and <code style={{ fontFamily: T.mono, fontSize: 12 }}>dex_pool_depth</code>. Both were removed after verification: <code style={{ fontFamily: T.mono, fontSize: 12 }}>eth_peg_deviation</code> conflates rebasing and reward-bearing LST designs and is not cross-peer comparable; <code style={{ fontFamily: T.mono, fontSize: 12 }}>dex_pool_depth</code> has a known collector wiring gap (follow-up PR). Replaced <code style={{ fontFamily: T.mono, fontSize: 12 }}>eth_peg_deviation</code> with <code style={{ fontFamily: T.mono, fontSize: 12 }}>eth_price_ratio</code>, which shows the raw ETH-denominated price alongside each LST's design type — letting the comparison speak for itself. Source for each component is listed in the table's Source column. Live scoring data at <a href="/api/lsti/scores/kelp-rseth" style={{ color: T.ink, textDecoration: "none", borderBottom: `1px solid ${T.ruleMid}` }}>/api/lsti/scores/kelp-rseth</a>.
-        </p>
-      </div>
-    </section>
-  );
-}
-function CapturedMissedSection({ mobile }) {
-  const subLabel = {
-    fontFamily: T.mono, fontSize: 10, letterSpacing: 1.5,
-    color: T.inkLight, textTransform: "uppercase", marginBottom: 8,
-  };
-  const body = {
-    fontFamily: T.sans, fontSize: mobile ? 14 : 15, lineHeight: 1.65,
-    color: T.inkMid, marginBottom: 10,
-  };
-  return (
-    <section style={{ marginBottom: 44 }}>
-      <SectionTitle n="03" title="What the Scoring Captured, What It Missed" mobile={mobile} />
-
-      <div style={{
-        border: `1px solid ${T.ruleMid}`, borderLeft: `3px solid ${T.ink}`,
-        padding: mobile ? "14px 16px" : "16px 20px", marginBottom: 14, maxWidth: 720,
-      }}>
-        <div style={subLabel}>Captured — pre-exploit</div>
-        <p style={body}>
-          Before the exploit, rsETH already scored lowest in the tracked LST set on the smart-contract category static values: audit_status = 3 (peers 4–8), admin_key_risk = 55 (peers 65–85), upgradeability_risk = 50 (peers 60–75), withdrawal_queue_impl = 60 (peers 70–90), slashing_insurance = 40 (peers 50–90).
-        </p>
-        <p style={{ ...body, marginBottom: 0 }}>
-          Direction of signal: Basis was scoring rsETH as the weakest LST in the set on the components where the numbers were static and researcher-set, not live-feed-driven.
-        </p>
-      </div>
-
-      <div style={{
-        border: `1px solid ${T.ruleMid}`, borderLeft: `3px solid ${T.accent}`,
-        padding: mobile ? "14px 16px" : "16px 20px", maxWidth: 720,
-      }}>
-        <div style={subLabel}>Missed</div>
-        <p style={body}>
-          <strong style={{ color: T.ink }}>(a) No bridge-dependency model.</strong> LSTI and BRI scored separately. No component modeled "this LST collapses if this bridge fails." The Kelp/LayerZero dependency that made the exploit a single point of failure was not represented in the LSTI component set.
-        </p>
-        <p style={body}>
-          <strong style={{ color: T.ink }}>(b) cross_chain_liquidity was treated as directionally positive.</strong> More chains mapped to a higher score. The exploit demonstrates that single-bridge-multi-chain is a fragility, not a strength — the same bridge failing produces losses across every chain it reaches.
-        </p>
-        <p style={{ ...body, marginBottom: 0 }}>
-          <strong style={{ color: T.ink }}>(c) exploit_history_lst was 100 pre-exploit (no prior exploits).</strong> This component is historical, not predictive. It correctly labelled rsETH as unexploited up to April 18 and then became obsolete in one transaction. It did not and structurally cannot predict a first exploit.
-        </p>
-      </div>
-    </section>
-  );
-}
-
-function Section04Evidence({ mobile }) {
-  const logoSize = mobile ? 44 : 52;
-  const cellBase = {
-    fontFamily: T.mono,
-    fontSize: 13,
-    color: T.inkMid,
-  };
-  const valueCell = (rowKey, peer) => {
-    const bold = section04BoldCell(rowKey, peer);
-    return {
-      ...cellBase,
-      fontWeight: bold ? 600 : 400,
-      color: bold ? T.ink : T.inkMid,
-    };
-  };
-
-  return (
-    <section style={{ marginBottom: 44 }}>
-      {/* BasisLogo evidentiary stamp — left-aligned, subtle, with rule */}
-      <div style={{
-        borderBottom: `1px solid ${T.ruleMid}`,
-        paddingBottom: 10,
-        marginBottom: 18,
-        opacity: 0.85,
-      }}>
-        <BasisLogo size={logoSize} />
-      </div>
-
-      <SectionTitle n="04" title="What Basis Knew on April 20, 2026" mobile={mobile} />
-
-      <p style={{ fontFamily: T.sans, fontSize: mobile ? 14 : 15, lineHeight: 1.65, color: T.inkMid, maxWidth: 720, marginBottom: 14 }}>
-        Basis's tracked values as of April 20, 2026 did not show broad-based weakness in rsETH. They showed a narrower pattern:
-      </p>
-
-      <ul style={{ margin: "0 0 20px 22px", padding: 0, fontFamily: T.sans, fontSize: mobile ? 14 : 15, lineHeight: 1.7, color: T.inkMid, maxWidth: 720 }}>
-        <li style={{ marginBottom: 6 }}>Relative weakness was concentrated in withdrawal queue design and slashing insurance</li>
-        <li style={{ marginBottom: 6 }}>The rest of the tracked smart-contract profile was broadly in line with peers or better<sup style={{ fontSize: "0.65em", marginLeft: 1 }}>†</sup></li>
-        <li>Exploit history was updated after the fact, moving from 100 to 10 on April 20, 2026 to reflect the April 18 event</li>
-      </ul>
-
-      {/* Table — matches Section 02 component-comparison styling */}
-      <div style={{ border: `1px solid ${T.ruleMid}`, overflowX: "auto" }}>
-        {!mobile && (
-          <div style={{
-            display: "grid",
-            gridTemplateColumns: "1.8fr 0.7fr 0.7fr 0.7fr 0.7fr 1.1fr",
-            padding: "10px 14px",
-            borderBottom: `1px solid ${T.ruleMid}`,
-            background: T.paperWarm,
-            fontFamily: T.mono, fontSize: 10, fontWeight: 600,
-            color: T.inkLight, textTransform: "uppercase", letterSpacing: 1,
-          }}>
-            <span>Component</span>
+            <span>Measure</span>
             <span>rsETH</span>
             <span>stETH</span>
             <span>rETH</span>
@@ -539,8 +379,8 @@ function Section04Evidence({ mobile }) {
           </div>
         )}
 
-        {SECTION_04_ROWS.map((row, i) => {
-          const rowBorder = i < SECTION_04_ROWS.length - 1 ? `1px dotted ${T.ruleMid}` : "none";
+        {SECTION_03_ROWS.map((row, i) => {
+          const rowBorder = i < SECTION_03_ROWS.length - 1 ? `1px dotted ${T.ruleMid}` : "none";
 
           if (mobile) {
             return (
@@ -552,8 +392,127 @@ function Section04Evidence({ mobile }) {
                   {row.source}
                 </div>
                 {SECTION_04_PEERS.map((p) => {
+                  const cell = row.values[p];
+                  return (
+                    <div key={p} style={{ padding: "3px 0", borderBottom: `1px dotted ${T.ruleLight}` }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontFamily: T.mono, fontSize: 12, color: T.inkMid }}>
+                        <span style={{ color: T.inkLight }}>{peerLabelMap[p]}</span>
+                        <span style={{ fontWeight: cell.bold ? 600 : 400, color: cell.bold ? T.ink : T.inkMid }}>
+                          {cell.display}
+                        </span>
+                      </div>
+                      {cell.design && (
+                        <div style={{ fontFamily: T.mono, fontSize: 10, color: T.inkFaint, textAlign: "right", marginTop: 1, letterSpacing: 0.3 }}>
+                          {cell.design}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          }
+
+          return (
+            <div key={row.key} style={{
+              display: "grid",
+              gridTemplateColumns: "1.4fr 0.9fr 0.9fr 0.9fr 0.9fr 1.4fr",
+              padding: "12px 14px",
+              borderBottom: rowBorder,
+              alignItems: "baseline",
+            }}>
+              <div style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 600, color: T.ink }}>
+                {row.label}
+              </div>
+              {SECTION_04_PEERS.map((p) => {
+                const cell = row.values[p];
+                return (
+                  <div key={p}>
+                    <div style={{ fontFamily: T.mono, fontSize: 13, fontWeight: cell.bold ? 600 : 400, color: cell.bold ? T.ink : T.inkMid }}>
+                      {cell.display}
+                    </div>
+                    {cell.design && (
+                      <div style={{ fontFamily: T.mono, fontSize: 10, color: T.inkFaint, letterSpacing: 0.3, marginTop: 2 }}>
+                        {cell.design}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              <div style={{ fontFamily: T.mono, fontSize: 10, color: T.inkLight, letterSpacing: 0.3 }}>
+                {row.source}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+function Section04MeasurementRoadmap({ mobile }) {
+  return (
+    <section style={{ marginBottom: 44 }}>
+      <SectionTitle n="04" title="Measurement Roadmap" mobile={mobile} />
+      <p style={{ fontFamily: T.sans, fontSize: mobile ? 14 : 15, lineHeight: 1.7, color: T.inkMid, maxWidth: 720 }}>
+        Basis did not anticipate the bridge exploit itself. The measures that track smart-contract risk (bridge integrity, cross-chain attestation, mint authority control) do not currently cover LayerZero-style message-passing bridges as a failure surface. This is a named follow-up.
+      </p>
+    </section>
+  );
+}
+
+function Section02WhatBasisKnew({ mobile }) {
+  const peerLabelMap = { "kelp-rseth": "rsETH", "lido-steth": "stETH", "rocket-pool-reth": "rETH", "etherfi-eeth": "eETH" };
+  const rowLabel = (row) => (
+    <>
+      {row.label}
+      {row.dagger && <sup style={{ fontSize: "0.65em", marginLeft: 1 }}>†</sup>}
+    </>
+  );
+
+  return (
+    <section style={{ marginBottom: 44 }}>
+      <SectionTitle n="02" title="What Basis Knew on April 20, 2026" mobile={mobile} />
+
+      <p style={{ fontFamily: T.sans, fontSize: mobile ? 14 : 15, lineHeight: 1.65, color: T.inkMid, maxWidth: 720, marginBottom: 14 }}>
+        Basis measures did not show broad-based weakness in rsETH. They showed a narrower pattern:
+      </p>
+
+      <ul style={{ margin: "0 0 20px 22px", padding: 0, fontFamily: T.sans, fontSize: mobile ? 14 : 15, lineHeight: 1.7, color: T.inkMid, maxWidth: 720 }}>
+        <li style={{ marginBottom: 6 }}>Relative weakness was concentrated in withdrawal queue design and slashing insurance</li>
+        <li>The rest of the tracked smart-contract profile was broadly in line with peers or better</li>
+      </ul>
+
+      {/* 5-column table: Measure / rsETH / stETH / rETH / eETH (no SOURCE) */}
+      <div style={{ border: `1px solid ${T.ruleMid}`, overflowX: "auto" }}>
+        {!mobile && (
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: "2.2fr 0.8fr 0.8fr 0.8fr 0.8fr",
+            padding: "10px 14px",
+            borderBottom: `1px solid ${T.ruleMid}`,
+            background: T.paperWarm,
+            fontFamily: T.mono, fontSize: 10, fontWeight: 600,
+            color: T.inkLight, textTransform: "uppercase", letterSpacing: 1,
+          }}>
+            <span>Measure</span>
+            <span>rsETH</span>
+            <span>stETH</span>
+            <span>rETH</span>
+            <span>eETH</span>
+          </div>
+        )}
+
+        {SECTION_04_ROWS.map((row, i) => {
+          const rowBorder = i < SECTION_04_ROWS.length - 1 ? `1px dotted ${T.ruleMid}` : "none";
+
+          if (mobile) {
+            return (
+              <div key={row.key} style={{ padding: "12px 14px", borderBottom: rowBorder }}>
+                <div style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 600, color: T.ink, marginBottom: 8 }}>
+                  {rowLabel(row)}
+                </div>
+                {SECTION_04_PEERS.map((p) => {
                   const bold = section04BoldCell(row.key, p);
-                  const peerLabelMap = { "kelp-rseth": "rsETH", "lido-steth": "stETH", "rocket-pool-reth": "rETH", "etherfi-eeth": "eETH" };
                   return (
                     <div key={p} style={{ display: "flex", justifyContent: "space-between", fontFamily: T.mono, fontSize: 12, padding: "3px 0", color: T.inkMid }}>
                       <span style={{ color: T.inkLight }}>{peerLabelMap[p]}</span>
@@ -570,22 +529,26 @@ function Section04Evidence({ mobile }) {
           return (
             <div key={row.key} style={{
               display: "grid",
-              gridTemplateColumns: "1.8fr 0.7fr 0.7fr 0.7fr 0.7fr 1.1fr",
+              gridTemplateColumns: "2.2fr 0.8fr 0.8fr 0.8fr 0.8fr",
               padding: "12px 14px",
               borderBottom: rowBorder,
               alignItems: "baseline",
             }}>
               <div style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 600, color: T.ink }}>
-                {row.label}
+                {rowLabel(row)}
               </div>
-              {SECTION_04_PEERS.map((p) => (
-                <div key={p} style={valueCell(row.key, p)}>
-                  {SECTION_04_VALUES[p][row.key]}
-                </div>
-              ))}
-              <div style={{ fontFamily: T.mono, fontSize: 10, color: T.inkLight, letterSpacing: 0.3 }}>
-                {row.source}
-              </div>
+              {SECTION_04_PEERS.map((p) => {
+                const bold = section04BoldCell(row.key, p);
+                return (
+                  <div key={p} style={{
+                    fontFamily: T.mono, fontSize: 13,
+                    fontWeight: bold ? 600 : 400,
+                    color: bold ? T.ink : T.inkMid,
+                  }}>
+                    {SECTION_04_VALUES[p][row.key]}
+                  </div>
+                );
+              })}
             </div>
           );
         })}
@@ -596,59 +559,16 @@ function Section04Evidence({ mobile }) {
         fontFamily: T.mono, fontSize: 10, color: T.inkFaint,
         lineHeight: 1.5, maxWidth: 720,
       }}>
-        This section is evidentiary, not dynamic. Values are pinned to April 20, 2026 and do not update. Source for each component is in the table's Source column. Live scoring data at{" "}
-        <a href="/api/lsti/scores/kelp-rseth" style={{ color: T.inkMid, textDecoration: "none", borderBottom: `1px solid ${T.ruleMid}` }}>
-          /api/lsti/scores/kelp-rseth
-        </a>.
-      </p>
-
-      <p style={{
-        marginTop: 6,
-        fontFamily: T.mono, fontSize: 10, fontStyle: "italic",
-        color: T.inkFaint, lineHeight: 1.5, maxWidth: 720,
-      }}>
-        † admin_key_risk resolves to 95 across all four tracked LSTs because the live contract-analysis override saturates the value when a standard transparent-proxy + timelock pattern is detected. Per-entity differentiation is a follow-up methodology item.
+        This section is evidentiary, values do not update.
       </p>
     </section>
   );
 }
 
-function MethodologySection({ slug, mobile }) {
-  const link = {
-    color: T.ink, textDecoration: "none",
-    borderBottom: `1px solid ${T.ruleMid}`, fontFamily: T.mono, fontSize: 13,
-  };
-  return (
-    <section style={{ marginBottom: 24 }}>
-      <SectionTitle n="05" title="Methodology & Data Integrity" mobile={mobile} />
-      <p style={{ fontFamily: T.sans, fontSize: mobile ? 14 : 15, lineHeight: 1.65, color: T.inkMid, maxWidth: 720, marginBottom: 14 }}>
-        This page displays component-level readings, not an overall LSTI score. See the index methodology and the live source.
-      </p>
-      <ul style={{ listStyle: "none", padding: 0, marginBottom: 18 }}>
-        <li style={{ marginBottom: 6 }}>
-          <span style={{ fontFamily: T.mono, fontSize: 10, color: T.inkFaint, textTransform: "uppercase", letterSpacing: 1, marginRight: 10 }}>METHODOLOGY</span>
-          <a href="/methodology" style={link}>/methodology</a>
-        </li>
-        <li>
-          <span style={{ fontFamily: T.mono, fontSize: 10, color: T.inkFaint, textTransform: "uppercase", letterSpacing: 1, marginRight: 10 }}>LIVE</span>
-          <a href="/api/lsti/scores/kelp-rseth" style={link}>/api/lsti/scores/kelp-rseth</a>
-        </li>
-      </ul>
-      <blockquote style={{
-        fontFamily: T.sans, fontSize: mobile ? 13 : 14, lineHeight: 1.65,
-        color: T.inkMid, borderLeft: `3px solid ${T.ink}`,
-        padding: "4px 0 4px 14px", maxWidth: 720,
-      }}>
-        "{AUDIT_DISCLOSURE}"
-      </blockquote>
-    </section>
-  );
-}
 function ActionPanel({ data, mobile }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: mobile ? 18 : 22 }}>
       <ShareCard data={data} />
-      <GovernanceQuestions />
       <EmailCapture slug={data.slug} />
     </div>
   );
@@ -658,7 +578,7 @@ function ShareCard({ data }) {
   const [copied, setCopied] = useState(false);
   const url = typeof window !== "undefined" ? window.location.href : `https://basisprotocol.xyz/incident/${data.slug}`;
   const img = `/share/incident/${data.slug}.png`;
-  const tweet = `Basis published its pre-exploit LSTI component readings for rsETH: ${url}`;
+  const tweet = `Basis published its pre-exploit LSTI measure readings for rsETH: ${url}`;
   const xHref = `https://twitter.com/intent/tweet?text=${encodeURIComponent(tweet)}`;
   const copy = () => {
     navigator.clipboard.writeText(url).then(() => {
@@ -688,42 +608,6 @@ function ShareCard({ data }) {
         <button onClick={copy} style={btn}>{copied ? "Copied" : "Copy link"}</button>
         <a href={xHref} target="_blank" rel="noopener noreferrer" style={btn}>Post on X</a>
       </div>
-    </div>
-  );
-}
-
-function GovernanceQuestions() {
-  const [copiedIdx, setCopiedIdx] = useState(null);
-  const copy = (text, i) => {
-    navigator.clipboard.writeText(text).then(() => {
-      setCopiedIdx(i);
-      setTimeout(() => setCopiedIdx(null), 1500);
-    });
-  };
-  return (
-    <div style={{ border: `1px solid ${T.ruleMid}`, padding: 12, background: T.paper }}>
-      <div style={{ fontFamily: T.mono, fontSize: 10, color: T.inkLight, textTransform: "uppercase", letterSpacing: 1.2, marginBottom: 10 }}>
-        Questions for governance
-      </div>
-      <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-        {GOVERNANCE_QUESTIONS.map((q, i) => (
-          <li key={i} style={{
-            fontFamily: T.sans, fontSize: 13, lineHeight: 1.5,
-            color: T.inkMid, paddingBottom: 10, marginBottom: 10,
-            borderBottom: i < GOVERNANCE_QUESTIONS.length - 1 ? `1px dotted ${T.ruleMid}` : "none",
-          }}>
-            <div style={{ marginBottom: 4 }}>{q}</div>
-            <button onClick={() => copy(q, i)} style={{
-              background: "transparent", border: `1px solid ${T.ruleMid}`,
-              cursor: "pointer", padding: "2px 8px",
-              fontFamily: T.mono, fontSize: 10, letterSpacing: 0.8,
-              textTransform: "uppercase", color: T.inkLight,
-            }}>
-              {copiedIdx === i ? "Copied" : "Copy"}
-            </button>
-          </li>
-        ))}
-      </ul>
     </div>
   );
 }
