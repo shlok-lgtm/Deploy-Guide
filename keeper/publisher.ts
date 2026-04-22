@@ -129,14 +129,26 @@ export async function publishUpdates(
 
   const nonce = await nonceManager.getCurrentNonce(provider, wallet.address, chainKey);
 
+  let gasLimit: bigint;
+  try {
+    const gasEstimate = await (oracle.batchUpdateScores as ethers.BaseContractMethod).estimateGas(
+      tokens, scores, grades, timestamps, versions
+    );
+    gasLimit = (gasEstimate * 120n) / 100n;
+    logger.info("SII gas estimated", { chain: chainKey, estimate: gasEstimate.toString(), limit: gasLimit.toString() });
+  } catch (err) {
+    logger.warn("SII gas estimate failed — tx would revert, skipping", {
+      chain: chainKey,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+
   const txHash = await withRetry(
     async () => {
       const tx = await (oracle.batchUpdateScores as ethers.ContractMethod)(
         tokens, scores, grades, timestamps, versions,
-        {
-          nonce,
-          gasLimit: BigInt(config.gasLimitPerUpdate),
-        }
+        { nonce, gasLimit }
       );
 
       logger.info("Transaction submitted", {
@@ -228,14 +240,26 @@ export async function publishPsiScores(
 
   const nonce = await nonceManager.getCurrentNonce(provider, wallet.address, chainKey);
 
+  let psiGasLimit: bigint;
+  try {
+    const gasEstimate = await (oracle.batchUpdatePsiScores as ethers.BaseContractMethod).estimateGas(
+      slugs, scores, grades, timestamps, versions
+    );
+    psiGasLimit = (gasEstimate * 120n) / 100n;
+    logger.info("PSI gas estimated", { chain: chainKey, estimate: gasEstimate.toString(), limit: psiGasLimit.toString() });
+  } catch (err) {
+    logger.warn("PSI gas estimate failed — tx would revert, skipping", {
+      chain: chainKey,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+
   const txHash = await withRetry(
     async () => {
       const tx = await (oracle.batchUpdatePsiScores as ethers.ContractMethod)(
         slugs, scores, grades, timestamps, versions,
-        {
-          nonce,
-          gasLimit: 200_000n,
-        }
+        { nonce, gasLimit: psiGasLimit }
       );
 
       logger.info("PSI transaction submitted", {
@@ -301,10 +325,25 @@ export async function publishReportHashes(
 
   for (const u of updates) {
     try {
+      let reportGasLimit: bigint;
+      try {
+        const est = await (oracle.publishReportHash as ethers.BaseContractMethod).estimateGas(
+          u.entityId, u.reportHash, u.lensId
+        );
+        reportGasLimit = (est * 120n) / 100n;
+      } catch (estErr) {
+        logger.warn("Report hash gas estimate failed — skipping", {
+          chain: chainKey,
+          entityId: u.entityId.slice(0, 18),
+          error: estErr instanceof Error ? estErr.message : String(estErr),
+        });
+        continue;
+      }
+
       const nonce = await nonceManager.getCurrentNonce(provider, wallet.address, chainKey);
       const tx = await (oracle.publishReportHash as ethers.ContractMethod)(
         u.entityId, u.reportHash, u.lensId,
-        { nonce, gasLimit: 100_000n }
+        { nonce, gasLimit: reportGasLimit }
       );
       await tx.wait(1);
       published++;
@@ -351,10 +390,22 @@ export async function publishStateRoot(
       return false;
     }
 
+    let stateRootGasLimit: bigint;
+    try {
+      const est = await (oracle.publishStateRoot as ethers.BaseContractMethod).estimateGas(stateRootHash);
+      stateRootGasLimit = (est * 120n) / 100n;
+    } catch (estErr) {
+      logger.warn("State root gas estimate failed — tx would revert, skipping", {
+        chain: chainKey,
+        error: estErr instanceof Error ? estErr.message : String(estErr),
+      });
+      return false;
+    }
+
     const nonce = await nonceManager.getCurrentNonce(provider, wallet.address, chainKey);
     const tx = await (oracle.publishStateRoot as ethers.ContractMethod)(
       stateRootHash,
-      { nonce, gasLimit: 80_000n }
+      { nonce, gasLimit: stateRootGasLimit }
     );
     await tx.wait(1);
     logger.info("State root published", { chain: chainKey, hash: stateRootHash.slice(0, 18), txHash: tx.hash });
