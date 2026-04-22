@@ -86,8 +86,32 @@ def _get_rpc_url(chain: str) -> str:
     return FALLBACK_RPCS.get(chain, "")
 
 
-async def _async_eth_call(client: httpx.AsyncClient, rpc_url: str, to: str, data: str) -> str:
-    """Async eth_call. Returns hex result or empty string."""
+async def _async_eth_call(client: httpx.AsyncClient, rpc_url: str, to: str, data: str,
+                          chain: str = "ethereum") -> str:
+    """Async eth_call via the provider router. Returns hex result or empty string.
+
+    As of the Dwellir integration (migration 090), eth_call dispatches through
+    `app.utils.rpc_provider.call()` which routes between Alchemy and Dwellir
+    and records usage in `rpc_provider_usage`. The `rpc_url` argument is kept
+    for signature compatibility with existing callers but is no longer the
+    transport — the router owns URL resolution. It's still used as a
+    fall-back-of-the-fall-back if the router can't resolve either configured
+    provider (e.g., both API keys missing in a dev environment).
+    """
+    try:
+        from app.utils.rpc_provider import call as _rpc_call, RPCError
+        result = await _rpc_call(
+            "eth_call", [{"to": to, "data": data}, "latest"],
+            chain=chain, client=client, timeout=15.0,
+        )
+        return result if result else "0x"
+    except RPCError as e:
+        logger.debug(f"eth_call routed failed for {to}: {e}")
+    except Exception as e:
+        logger.debug(f"eth_call router unavailable for {to}: {e}")
+
+    # Fallback to the old direct httpx path — preserved so a router-path
+    # misconfiguration doesn't take the oracle pipeline down silently.
     if not rpc_url:
         return "0x"
     try:
@@ -104,12 +128,27 @@ async def _async_eth_call(client: httpx.AsyncClient, rpc_url: str, to: str, data
         result = resp.json().get("result", "0x")
         return result if result else "0x"
     except Exception as e:
-        logger.debug(f"eth_call failed for {to}: {e}")
+        logger.debug(f"eth_call direct-fallback failed for {to}: {e}")
         return "0x"
 
 
-async def _async_get_block_timestamp(client: httpx.AsyncClient, rpc_url: str) -> int:
-    """Get current block timestamp."""
+async def _async_get_block_timestamp(client: httpx.AsyncClient, rpc_url: str,
+                                     chain: str = "ethereum") -> int:
+    """Get current block timestamp via the provider router (see _async_eth_call
+    for rationale)."""
+    try:
+        from app.utils.rpc_provider import call as _rpc_call, RPCError
+        block = await _rpc_call(
+            "eth_getBlockByNumber", ["latest", False],
+            chain=chain, client=client, timeout=10.0,
+        )
+        if block:
+            return int(block.get("timestamp", "0x0"), 16)
+    except RPCError as e:
+        logger.debug(f"eth_getBlockByNumber routed failed: {e}")
+    except Exception as e:
+        logger.debug(f"eth_getBlockByNumber router unavailable: {e}")
+
     if not rpc_url:
         return int(time.time())
     try:
@@ -154,7 +193,10 @@ async def _read_chainlink_oracle(
     client: httpx.AsyncClient, oracle: dict, rpc_url: str, block_ts: int
 ) -> dict | None:
     """Read a Chainlink oracle via latestRoundData()."""
-    result = await _async_eth_call(client, rpc_url, oracle["oracle_address"], CHAINLINK_LATEST_ROUND_DATA)
+    result = await _async_eth_call(
+        client, rpc_url, oracle["oracle_address"], CHAINLINK_LATEST_ROUND_DATA,
+        chain=oracle.get("chain", "ethereum"),
+    )
     if not result or result == "0x" or len(result) < 322:
         return None
 
@@ -186,7 +228,10 @@ async def _read_pyth_oracle(
     feed_id = PYTH_USDC_FEED_ID.zfill(64)
     calldata = PYTH_GET_PRICE + feed_id
 
-    result = await _async_eth_call(client, rpc_url, oracle["oracle_address"], calldata)
+    result = await _async_eth_call(
+        client, rpc_url, oracle["oracle_address"], calldata,
+        chain=oracle.get("chain", "ethereum"),
+    )
     if not result or result == "0x" or len(result) < 194:
         return None
 
@@ -223,7 +268,7 @@ async def _read_oracle(client: httpx.AsyncClient, oracle: dict) -> dict | None:
     name = oracle.get("oracle_name", oracle.get("oracle_address", "?"))
 
     try:
-        block_ts = await _async_get_block_timestamp(client, rpc_url)
+        block_ts = await _async_get_block_timestamp(client, rpc_url, chain=chain)
 
         if provider == "chainlink":
             result = await _read_chainlink_oracle(client, oracle, rpc_url, block_ts)

@@ -786,6 +786,87 @@ def run_cycle_diagnostics():
     except Exception as _e:
         logger.error(f"[api_usage_7d] failed: {_e}")
 
+    # 3c. Dwellir RPC router usage — per-provider call counts and fallback
+    # rates from rpc_provider_usage (populated by app/utils/rpc_provider.py).
+    # Emits one line per (provider, top methods) for the last 7 days, plus a
+    # fallbacks_24h summary. Silently skips if the table doesn't exist yet.
+    try:
+        _rpc_7d = fetch_all("""
+            SELECT provider, method, status, SUM(calls)::BIGINT AS total
+            FROM rpc_provider_usage
+            WHERE hour > NOW() - INTERVAL '7 days'
+            GROUP BY provider, method, status
+            ORDER BY provider, total DESC
+        """)
+        if _rpc_7d:
+            _by_provider = {}
+            for _r in _rpc_7d:
+                _by_provider.setdefault(_r["provider"], []).append(_r)
+            for _prov in sorted(_by_provider.keys()):
+                _rows = _by_provider[_prov]
+                _ok_by_method = {}
+                _err_by_method = {}
+                _fb_by_method = {}
+                for _r in _rows:
+                    _m = _r["method"]
+                    _n = int(_r["total"])
+                    if _r["status"] == "ok":
+                        _ok_by_method[_m] = _ok_by_method.get(_m, 0) + _n
+                    elif _r["status"] == "error":
+                        _err_by_method[_m] = _err_by_method.get(_m, 0) + _n
+                    elif _r["status"] == "fallback":
+                        _fb_by_method[_m] = _fb_by_method.get(_m, 0) + _n
+                _top = sorted(_ok_by_method.items(), key=lambda x: -x[1])[:6]
+                _parts = []
+                for _m, _n in _top:
+                    _fb = _fb_by_method.get(_m, 0)
+                    _err = _err_by_method.get(_m, 0)
+                    _parts.append(f"{_n:,} {_m} ({_fb} fallback, {_err} err)")
+                logger.error(f"[rpc_usage_7d] {_prov}: {', '.join(_parts) if _parts else 'no calls'}")
+        else:
+            logger.error("[rpc_usage_7d] no rpc_provider_usage data in last 7 days")
+
+        _fb_24h = fetch_all("""
+            SELECT provider, method, SUM(calls)::BIGINT AS total, MAX(fallback_reason) AS reason
+            FROM rpc_provider_usage
+            WHERE status = 'fallback' AND hour > NOW() - INTERVAL '24 hours'
+            GROUP BY provider, method
+            ORDER BY total DESC
+            LIMIT 10
+        """)
+        if _fb_24h:
+            _fb_parts = []
+            for _r in _fb_24h:
+                _fb_parts.append(
+                    f"{_r['provider']}→alt={_r['total']} ({_r['method']}"
+                    f"{': ' + (_r['reason'] or '?')[:40] if _r.get('reason') else ''})"
+                )
+            logger.error(f"[rpc_usage_7d] fallbacks_24h: {'; '.join(_fb_parts)}")
+    except Exception as _e:
+        logger.error(f"[rpc_usage_7d] failed: {_e}")
+
+    # 3d. Dwellir capability probe — surface latest probe results from
+    # rpc_capabilities so ops can see at a glance which methods Dwellir's
+    # free tier supports. One row per (provider, chain, method); newest
+    # tested_at per group.
+    try:
+        _caps = fetch_all("""
+            SELECT DISTINCT ON (provider, chain, method)
+                provider, chain, method, status, error_message, tested_at
+            FROM rpc_capabilities
+            ORDER BY provider, chain, method, tested_at DESC
+        """)
+        if _caps:
+            _cap_lines = []
+            for _r in _caps:
+                _cap_lines.append(
+                    f"{_r['provider']}/{_r['chain']}/{_r['method']}: {_r['status']}"
+                    + (f" ({(_r['error_message'] or '')[:60]})" if _r['status'] != 'ok' else "")
+                )
+            logger.error("[rpc_capabilities]\n  " + "\n  ".join(_cap_lines))
+    except Exception as _e:
+        logger.debug(f"[rpc_capabilities] diagnostic skipped: {_e}")
+
     # 4. API usage table verification
     try:
         _hourly = fetch_one("SELECT COUNT(*) as cnt, MAX(hour) as latest FROM api_usage_hourly")
@@ -3133,6 +3214,20 @@ async def main():
         logger.error(f"[schema_validator] failed to run: {e}")
 
     logger.error("[startup] schema fixes complete, diagnostics will fire in 60s via independent loop")
+
+    # Dwellir RPC capability probe — one-shot at boot. Never raises.
+    # Records results in rpc_capabilities so ops can see what Dwellir's free
+    # tier actually supports (method-not-found / archive-depth / rate
+    # limits) before we rely on it for new pipelines. If DWELLIR_API_KEY
+    # isn't set, the probe logs a warning and returns — Alchemy-only
+    # routing takes over. See app/utils/rpc_provider.py and
+    # migrations/090_rpc_provider_usage.sql.
+    try:
+        from app.utils.rpc_provider import probe_rpc_capabilities
+        logger.error("[startup] running Dwellir capability probe")
+        await probe_rpc_capabilities(chain="ethereum")
+    except Exception as e:
+        logger.error(f"[startup] rpc_probe skipped: {type(e).__name__}: {e}")
 
     # Seed email alert channel if not configured
     try:
