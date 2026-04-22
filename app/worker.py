@@ -2940,6 +2940,7 @@ async def main():
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_ptr_unique ON protocol_trace_observations (tx_hash, chain)",
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_tas_unique ON token_approval_snapshots (wallet_address, token_address, spender_address, chain, snapshot_at)",
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_ouc_unique ON oracle_update_cadence (oracle_id, round_id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_gov_proposals_collector ON governance_proposals (protocol, source, proposal_id) WHERE protocol IS NOT NULL AND source IS NOT NULL",
     ]
     for _ui in _unique_indexes:
         try:
@@ -3186,6 +3187,21 @@ async def main():
         "ALTER TABLE governance_proposals ADD COLUMN IF NOT EXISTS first_capture_body_hash VARCHAR(66)",
         "ALTER TABLE governance_proposals ADD COLUMN IF NOT EXISTS content_hash VARCHAR(66)",
         "ALTER TABLE governance_proposals ADD COLUMN IF NOT EXISTS attested_at TIMESTAMPTZ",
+        # Columns used by data_layer/governance_collector.py (Writer 2)
+        "ALTER TABLE governance_proposals ADD COLUMN IF NOT EXISTS protocol TEXT",
+        "ALTER TABLE governance_proposals ADD COLUMN IF NOT EXISTS source TEXT",
+        "ALTER TABLE governance_proposals ADD COLUMN IF NOT EXISTS author TEXT",
+        "ALTER TABLE governance_proposals ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ",
+        "ALTER TABLE governance_proposals ADD COLUMN IF NOT EXISTS start_at TIMESTAMPTZ",
+        "ALTER TABLE governance_proposals ADD COLUMN IF NOT EXISTS end_at TIMESTAMPTZ",
+        "ALTER TABLE governance_proposals ADD COLUMN IF NOT EXISTS votes_for NUMERIC",
+        "ALTER TABLE governance_proposals ADD COLUMN IF NOT EXISTS votes_against NUMERIC",
+        "ALTER TABLE governance_proposals ADD COLUMN IF NOT EXISTS votes_abstain NUMERIC",
+        "ALTER TABLE governance_proposals ADD COLUMN IF NOT EXISTS voter_count INTEGER",
+        "ALTER TABLE governance_proposals ADD COLUMN IF NOT EXISTS quorum_reached BOOLEAN",
+        "ALTER TABLE governance_proposals ADD COLUMN IF NOT EXISTS scores JSONB",
+        "ALTER TABLE governance_proposals ADD COLUMN IF NOT EXISTS raw_data JSONB",
+        "ALTER TABLE governance_proposals ADD COLUMN IF NOT EXISTS collected_at TIMESTAMPTZ DEFAULT NOW()",
     ]:
         try:
             execute(_col_sql)

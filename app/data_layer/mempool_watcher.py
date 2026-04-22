@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 MAX_WATCHLIST_ADDRESSES = 100
 RECONCILIATION_INTERVAL_SEC = 60
 DROPPED_THRESHOLD_SEC = 10 * 60      # 10 minutes
-WS_PING_INTERVAL_SEC = 30
+WS_PING_INTERVAL_SEC = 15
 WS_PING_TIMEOUT_SEC = 10
 WS_RECONNECT_BASE_DELAY_SEC = 2
 WS_RECONNECT_MAX_DELAY_SEC = 120
@@ -87,6 +87,8 @@ def build_watchlist(chain: str = "ethereum", limit: int = MAX_WATCHLIST_ADDRESSE
     """
     addresses: list[str] = []
     seen: set[str] = set()
+    n_stables = 0
+    n_pools = 0
 
     def _add(addr: str | None) -> None:
         if not addr or not isinstance(addr, str):
@@ -107,6 +109,7 @@ def build_watchlist(chain: str = "ethereum", limit: int = MAX_WATCHLIST_ADDRESSE
             ) or []
             for r in rows:
                 _add(r.get("contract"))
+            n_stables = len(addresses)
         except Exception as e:
             logger.warning(f"[mempool_watcher] stablecoins watchlist skipped: {e}")
 
@@ -126,8 +129,15 @@ def build_watchlist(chain: str = "ethereum", limit: int = MAX_WATCHLIST_ADDRESSE
             _add(r.get("addr"))
             if len(addresses) >= limit:
                 break
+        n_pools = len(addresses) - n_stables
     except Exception as e:
         logger.warning(f"[mempool_watcher] protocol_pool_wallets watchlist skipped: {e}")
+
+    logger.error(
+        f"[mempool_watcher] watchlist: stablecoins={n_stables}, "
+        f"pool_wallets={n_pools}, deduped_total={len(addresses)}, "
+        f"limit={limit}"
+    )
 
     original_count = len(addresses)
     if original_count > limit:

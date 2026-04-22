@@ -22,6 +22,9 @@ EXPECTED_COLUMNS = {
         "scores_against", "scores_abstain", "quorum", "choices", "votes",
         "ipfs_hash", "discussion_url", "captured_at", "body_changed",
         "first_capture_body_hash", "content_hash", "attested_at",
+        "protocol", "source", "author", "created_at", "start_at", "end_at",
+        "votes_for", "votes_against", "votes_abstain", "voter_count",
+        "quorum_reached", "scores", "raw_data", "collected_at",
     ],
     "oracle_registry": [
         "id", "oracle_address", "oracle_name", "oracle_provider", "chain",
