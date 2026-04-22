@@ -17,7 +17,7 @@ from app.database import execute, fetch_all, fetch_one
 logger = logging.getLogger(__name__)
 
 ETHERSCAN_API_KEY = os.environ.get("ETHERSCAN_API_KEY", "")
-ETHERSCAN_BASE = "https://api.etherscan.io/api"
+ETHERSCAN_BASE = "https://api.etherscan.io/v2/api"
 
 # Protocol admin/governance contract addresses and function signatures
 # that correspond to risk parameter changes.

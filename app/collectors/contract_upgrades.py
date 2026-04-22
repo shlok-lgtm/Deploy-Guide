@@ -54,7 +54,7 @@ def _get_etherscan_bytecode(address: str) -> str | None:
         return None
     try:
         resp = httpx.get(
-            "https://api.etherscan.io/api",
+            "https://api.etherscan.io/v2/api",
             params={
                 "module": "proxy",
                 "action": "eth_getCode",

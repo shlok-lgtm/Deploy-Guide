@@ -31,7 +31,15 @@ _client = httpx.AsyncClient(
 
 USD_THRESHOLD = 10_000
 MAX_CALLS_PER_RUN = 500
-ETHERSCAN_BASE = "https://api.etherscan.io/api"
+ETHERSCAN_V2_BASE = "https://api.etherscan.io/v2/api"
+
+ETHERSCAN_CHAIN_IDS = {
+    "ethereum": 1,
+    "arbitrum": 42161,
+    "base": 8453,
+    "optimism": 10,
+    "polygon": 137,
+}
 
 # Well-known governance token contracts (Ethereum mainnet)
 GOVERNANCE_TOKENS = {
@@ -131,16 +139,19 @@ async def _fetch_holders_etherscan(
     client: httpx.AsyncClient,
     contract: str,
     api_key: str,
+    chain: str = "ethereum",
     page: int = 1,
     offset: int = 10000,
 ) -> list[dict]:
-    """Fetch top holders from Etherscan PRO API."""
+    """Fetch top holders from Etherscan V2 API."""
     from app.shared_rate_limiter import rate_limiter
     logger.error(f"[holder_ingestion] _fetch_etherscan: acquiring rate limiter for {contract[:12]}...")
     await rate_limiter.acquire("etherscan")
     logger.error(f"[holder_ingestion] _fetch_etherscan: rate limiter acquired, making HTTP GET")
 
-    resp = await client.get(ETHERSCAN_BASE, params={
+    chain_id = ETHERSCAN_CHAIN_IDS.get(chain, 1)
+    resp = await client.get(ETHERSCAN_V2_BASE, params={
+        "chainid": chain_id,
         "module": "token",
         "action": "tokenholderlist",
         "contractaddress": contract,
@@ -239,7 +250,7 @@ async def run_holder_ingestion() -> dict:
                 holders = []
                 if chain == "ethereum":
                     logger.error(f"[holder_ingestion] step C.{i}: acquiring etherscan rate limit")
-                    holders = await _fetch_holders_etherscan(client, contract, api_key)
+                    holders = await _fetch_holders_etherscan(client, contract, api_key, chain=chain)
                     logger.error(f"[holder_ingestion] step D.{i}: etherscan returned {len(holders)} holders")
                     total_calls += 1
                 if not holders:

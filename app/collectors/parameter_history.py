@@ -67,7 +67,7 @@ def _eth_call_sync(contract: str, data: str, chain: str = "ethereum") -> str:
         if api_key:
             try:
                 resp = httpx.get(
-                    "https://api.etherscan.io/api",
+                    "https://api.etherscan.io/v2/api",
                     params={
                         "module": "proxy",
                         "action": "eth_call",

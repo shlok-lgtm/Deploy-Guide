@@ -22,7 +22,7 @@ from app.database import fetch_all, fetch_one, execute
 
 logger = logging.getLogger(__name__)
 
-ETHERSCAN_API = "https://api.etherscan.io/api"
+ETHERSCAN_API = "https://api.etherscan.io/v2/api"
 
 # Known oracle/governance dependencies per protocol (supplementary)
 KNOWN_DEPENDENCIES = {

@@ -119,7 +119,7 @@ def _build_url(provider: str, endpoint: str) -> str:
     base_urls = {
         "coingecko": "https://pro-api.coingecko.com/api/v3",
         "defillama": "https://api.llama.fi",
-        "etherscan": "https://api.etherscan.io/api",
+        "etherscan": "https://api.etherscan.io/v2/api",
         "snapshot": "https://hub.snapshot.org",
         "blockscout": "https://eth.blockscout.com/api",
         "tally": "https://api.tally.xyz",
