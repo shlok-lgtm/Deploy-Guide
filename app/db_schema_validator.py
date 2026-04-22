@@ -200,6 +200,11 @@ EXPECTED_COLUMNS = {
         "id", "oracle_id", "round_id", "answer", "updated_at_block",
         "updated_at_timestamp", "observed_at", "gap_from_previous_seconds", "content_hash",
     ],
+    "wallet_holder_discovery": [
+        "id", "wallet_address", "entity_type", "entity_id", "entity_contract",
+        "chain", "balance_raw", "balance_usd", "rank_in_entity",
+        "discovered_at", "source",
+    ],
 }
 
 

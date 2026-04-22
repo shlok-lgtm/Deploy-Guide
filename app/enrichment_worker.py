@@ -823,6 +823,23 @@ async def run_enrichment_pipeline() -> dict:
     ))
 
     # =========================================================================
+    # Phase 2 Sprint 1: Wallet holder ingestion (weekly)
+    # =========================================================================
+
+    async def _run_holder_ingestion():
+        from app.data_layer.holder_ingestion_collector import run_holder_ingestion
+        return await run_holder_ingestion()
+
+    pipeline.add(EnrichmentTask(
+        name="holder_ingestion", func=_run_holder_ingestion,
+        timeout_seconds=900, group="growth", priority=3,
+        gate_check=make_db_gate(
+            "SELECT MAX(discovered_at) AS latest FROM wallet_holder_discovery",
+            min_hours=168,  # weekly
+        ),
+    ))
+
+    # =========================================================================
     # LLL Phase 1 Pipelines (daily, low-priority)
     # =========================================================================
 

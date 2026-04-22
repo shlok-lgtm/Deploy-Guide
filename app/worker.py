@@ -2857,6 +2857,7 @@ async def main():
         "CREATE TABLE IF NOT EXISTS protocol_trace_observations (id BIGSERIAL PRIMARY KEY, tx_hash TEXT NOT NULL, protocol_slug TEXT NOT NULL, chain TEXT NOT NULL DEFAULT 'ethereum', block_number BIGINT NOT NULL, value_usd NUMERIC, trace_json JSONB NOT NULL, trace_depth INTEGER, internal_call_count INTEGER, revert_reason TEXT, content_hash TEXT, captured_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(tx_hash, chain))",
         "CREATE TABLE IF NOT EXISTS token_approval_snapshots (id BIGSERIAL PRIMARY KEY, wallet_address TEXT NOT NULL, token_address TEXT NOT NULL, spender_address TEXT NOT NULL, allowance NUMERIC NOT NULL, allowance_usd NUMERIC, chain TEXT NOT NULL DEFAULT 'ethereum', snapshot_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), previous_allowance NUMERIC, UNIQUE(wallet_address, token_address, spender_address, chain, snapshot_at))",
         "CREATE TABLE IF NOT EXISTS oracle_update_cadence (id BIGSERIAL PRIMARY KEY, oracle_id TEXT NOT NULL, round_id BIGINT NOT NULL, answer NUMERIC, updated_at_block BIGINT NOT NULL, updated_at_timestamp TIMESTAMPTZ NOT NULL, observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), gap_from_previous_seconds INTEGER, content_hash TEXT, UNIQUE(oracle_id, round_id))",
+        "CREATE TABLE IF NOT EXISTS wallet_holder_discovery (id BIGSERIAL PRIMARY KEY, wallet_address TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, entity_contract TEXT NOT NULL, chain TEXT NOT NULL DEFAULT 'ethereum', balance_raw NUMERIC, balance_usd NUMERIC, rank_in_entity INTEGER, discovered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), source TEXT NOT NULL DEFAULT 'etherscan_pro', UNIQUE(wallet_address, entity_id, entity_contract, chain))",
     ]
     _data_layer_alters = [
         "ALTER TABLE governance_voters ADD COLUMN IF NOT EXISTS source TEXT",
@@ -2941,6 +2942,7 @@ async def main():
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_tas_unique ON token_approval_snapshots (wallet_address, token_address, spender_address, chain, snapshot_at)",
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_ouc_unique ON oracle_update_cadence (oracle_id, round_id)",
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_gov_proposals_collector ON governance_proposals (protocol, source, proposal_id) WHERE protocol IS NOT NULL AND source IS NOT NULL",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_whd_unique ON wallet_holder_discovery (wallet_address, entity_id, entity_contract, chain)",
     ]
     for _ui in _unique_indexes:
         try:
