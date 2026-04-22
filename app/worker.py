@@ -2845,6 +2845,9 @@ async def main():
         "CREATE TABLE IF NOT EXISTS wallet_behavior_tags (id BIGSERIAL PRIMARY KEY, wallet_address TEXT NOT NULL, behavior_type TEXT NOT NULL, confidence NUMERIC, metrics JSONB, computed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(wallet_address, behavior_type, computed_at))",
         "CREATE TABLE IF NOT EXISTS dex_pool_ohlcv (id BIGSERIAL PRIMARY KEY, pool_address TEXT NOT NULL, chain TEXT NOT NULL, dex TEXT, asset_id TEXT, timestamp TIMESTAMPTZ NOT NULL, open NUMERIC, high NUMERIC, low NUMERIC, close NUMERIC, volume NUMERIC, trades_count INTEGER, UNIQUE(pool_address, chain, timestamp))",
         "CREATE TABLE IF NOT EXISTS volatility_surfaces (id BIGSERIAL PRIMARY KEY, asset_id TEXT NOT NULL, realized_vol_1d NUMERIC, realized_vol_7d NUMERIC, realized_vol_30d NUMERIC, realized_vol_90d NUMERIC, max_drawdown_7d NUMERIC, max_drawdown_30d NUMERIC, max_drawdown_90d NUMERIC, recovery_time_hours NUMERIC, raw_prices JSONB, computed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(asset_id, computed_at))",
+        "CREATE TABLE IF NOT EXISTS protocol_trace_observations (id BIGSERIAL PRIMARY KEY, tx_hash TEXT NOT NULL, protocol_slug TEXT NOT NULL, chain TEXT NOT NULL DEFAULT 'ethereum', block_number BIGINT NOT NULL, value_usd NUMERIC, trace_json JSONB NOT NULL, trace_depth INTEGER, internal_call_count INTEGER, revert_reason TEXT, content_hash TEXT, captured_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(tx_hash, chain))",
+        "CREATE TABLE IF NOT EXISTS token_approval_snapshots (id BIGSERIAL PRIMARY KEY, wallet_address TEXT NOT NULL, token_address TEXT NOT NULL, spender_address TEXT NOT NULL, allowance NUMERIC NOT NULL, allowance_usd NUMERIC, chain TEXT NOT NULL DEFAULT 'ethereum', snapshot_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), previous_allowance NUMERIC, UNIQUE(wallet_address, token_address, spender_address, chain, snapshot_at))",
+        "CREATE TABLE IF NOT EXISTS oracle_update_cadence (id BIGSERIAL PRIMARY KEY, oracle_id TEXT NOT NULL, round_id BIGINT NOT NULL, answer NUMERIC, updated_at_block BIGINT NOT NULL, updated_at_timestamp TIMESTAMPTZ NOT NULL, observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), gap_from_previous_seconds INTEGER, content_hash TEXT, UNIQUE(oracle_id, round_id))",
     ]
     _data_layer_alters = [
         "ALTER TABLE governance_voters ADD COLUMN IF NOT EXISTS source TEXT",
@@ -2925,6 +2928,9 @@ async def main():
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_behavior_unique ON wallet_behavior_tags (wallet_address, behavior_type, computed_at)",
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_ohlcv_unique ON dex_pool_ohlcv (pool_address, chain, timestamp)",
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_vol_surface_unique ON volatility_surfaces (asset_id, computed_at)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_ptr_unique ON protocol_trace_observations (tx_hash, chain)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_tas_unique ON token_approval_snapshots (wallet_address, token_address, spender_address, chain, snapshot_at)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_ouc_unique ON oracle_update_cadence (oracle_id, round_id)",
     ]
     for _ui in _unique_indexes:
         try:
@@ -3275,6 +3281,15 @@ async def main():
         elif args.loop:
             logger.info(f"Starting worker loop (interval: {args.interval} min)")
             asyncio.create_task(_diagnostic_loop())
+
+            # LLL Phase 1 Pipeline 3: Oracle cadence sampling (5-min independent loop)
+            try:
+                from app.data_layer.oracle_cadence_collector import run_oracle_cadence_loop
+                asyncio.create_task(run_oracle_cadence_loop())
+                logger.error("[startup] oracle cadence loop launched (5-min sampling)")
+            except Exception as _oc_err:
+                logger.error(f"[startup] oracle cadence loop failed to launch: {_oc_err}")
+
             cycle_counter = 0
             while True:
                 # Fast cycle — runs every interval

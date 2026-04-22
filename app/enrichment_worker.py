@@ -823,6 +823,36 @@ async def run_enrichment_pipeline() -> dict:
     ))
 
     # =========================================================================
+    # LLL Phase 1 Pipelines (daily, low-priority)
+    # =========================================================================
+
+    async def _run_trace_collection():
+        from app.data_layer.trace_collector import run_trace_collection
+        return await run_trace_collection()
+
+    pipeline.add(EnrichmentTask(
+        name="protocol_traces", func=_run_trace_collection,
+        timeout_seconds=600, group="data_layer", priority=4,
+        gate_check=make_db_gate(
+            "SELECT MAX(captured_at) AS latest FROM protocol_trace_observations",
+            min_hours=24,
+        ),
+    ))
+
+    async def _run_approval_collection():
+        from app.data_layer.approval_collector import run_approval_collection
+        return await run_approval_collection()
+
+    pipeline.add(EnrichmentTask(
+        name="token_approvals", func=_run_approval_collection,
+        timeout_seconds=600, group="data_layer", priority=4,
+        gate_check=make_db_gate(
+            "SELECT MAX(snapshot_at) AS latest FROM token_approval_snapshots",
+            min_hours=24,
+        ),
+    ))
+
+    # =========================================================================
     # Wave 5: Computed surfaces
     # =========================================================================
 

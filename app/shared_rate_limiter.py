@@ -142,6 +142,7 @@ class SharedRateLimiter:
         "firecrawl": (2.0, 5),
         "parallel": (2.0, 5),
         "exchange_health": (10.0, 30),  # health checks, generous
+        "alchemy": (3.0, 10),  # ~260K calls/day max, well within 1M CU budget
     }
 
     def __init__(self):

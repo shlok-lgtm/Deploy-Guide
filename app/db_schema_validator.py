@@ -184,6 +184,19 @@ EXPECTED_COLUMNS = {
         "protocol_slug", "stablecoin_symbol", "chain", "wallet_address",
         "pool_contract_address", "discovered_at", "last_seen",
     ],
+    "protocol_trace_observations": [
+        "id", "tx_hash", "protocol_slug", "chain", "block_number",
+        "value_usd", "trace_json", "trace_depth", "internal_call_count",
+        "revert_reason", "content_hash", "captured_at",
+    ],
+    "token_approval_snapshots": [
+        "id", "wallet_address", "token_address", "spender_address",
+        "allowance", "allowance_usd", "chain", "snapshot_at", "previous_allowance",
+    ],
+    "oracle_update_cadence": [
+        "id", "oracle_id", "round_id", "answer", "updated_at_block",
+        "updated_at_timestamp", "observed_at", "gap_from_previous_seconds", "content_hash",
+    ],
 }
 
 
