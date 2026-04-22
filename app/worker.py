@@ -867,6 +867,15 @@ def run_cycle_diagnostics():
     except Exception as _e:
         logger.debug(f"[rpc_capabilities] diagnostic skipped: {_e}")
 
+    # 3e. Mempool observations — 24h SUMMARY line expected by the
+    # mempool-watcher acceptance checklist. Silently skips if migration 091
+    # hasn't run yet or if no rows have landed.
+    try:
+        from app.data_layer.mempool_watcher import emit_24h_summary as _mp_summary
+        _mp_summary()
+    except Exception as _e:
+        logger.debug(f"[mempool_observations] diagnostic skipped: {_e}")
+
     # 4. API usage table verification
     try:
         _hourly = fetch_one("SELECT COUNT(*) as cnt, MAX(hour) as latest FROM api_usage_hourly")
@@ -3234,6 +3243,18 @@ async def main():
         await probe_rpc_capabilities(chain="ethereum")
     except Exception as e:
         logger.error(f"[startup] rpc_probe skipped: {type(e).__name__}: {e}")
+
+    # Mempool observation watcher — long-lived WebSocket subscription to
+    # Alchemy's alchemy_pendingTransactions with server-side address
+    # filtering. Runs as two background asyncio tasks (watcher +
+    # reconciliation loop). Launch never blocks — mempool is a telemetry
+    # feature and failure must not affect the scoring worker. See
+    # app/data_layer/mempool_watcher.py and migrations/091_mempool_observations.sql.
+    try:
+        from app.data_layer.mempool_watcher import start_mempool_tasks
+        await start_mempool_tasks()
+    except Exception as e:
+        logger.error(f"[mempool_watcher] startup skipped: {type(e).__name__}: {e}")
 
     # Seed email alert channel if not configured
     try:
