@@ -4,9 +4,9 @@
 CREATE TABLE IF NOT EXISTS oracle_update_cadence (
     id BIGSERIAL PRIMARY KEY,
     oracle_id TEXT NOT NULL,
-    round_id BIGINT NOT NULL,
+    round_id NUMERIC(78,0) NOT NULL,
     answer NUMERIC,
-    updated_at_block BIGINT NOT NULL,
+    updated_at_block NUMERIC(78,0) NOT NULL,
     updated_at_timestamp TIMESTAMPTZ NOT NULL,
     observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     gap_from_previous_seconds INTEGER,
