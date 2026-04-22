@@ -13,6 +13,21 @@ from threading import Lock
 logger = logging.getLogger(__name__)
 
 
+def _shorten_path(endpoint: str) -> str:
+    """Turn '/api/v3/coins/usd-coin/market_chart?days=1' into 'coins/market_chart'."""
+    path = endpoint.split("?")[0].strip("/")
+    parts = [p for p in path.split("/") if p and p not in ("api", "v3", "v2", "v1", "onchain")]
+    # Drop path params that look like addresses or IDs (hex, long numeric, slugs with hyphens)
+    kept = []
+    for p in parts:
+        if len(p) > 20:
+            continue
+        if p.startswith("0x"):
+            continue
+        kept.append(p)
+    return "/".join(kept[:3]) or "unknown"
+
+
 class APITracker:
     def __init__(self):
         self._lock = Lock()
@@ -22,9 +37,11 @@ class APITracker:
         })
 
     def record(self, provider: str, endpoint: str, status: int,
-               latency_ms: int, caller: str = "unknown"):
+               latency_ms: int, caller: str = ""):
         hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
         key = (provider, hour)
+        # Derive a short caller key from the endpoint path if none provided
+        caller_key = caller or _shorten_path(endpoint)
         with self._lock:
             c = self._counters[key]
             c["total"] += 1
@@ -34,7 +51,7 @@ class APITracker:
                 c["error"] += 1
             if latency_ms:
                 c["latencies"].append(latency_ms)
-            c["callers"][caller] += 1
+            c["callers"][caller_key] += 1
 
     def get_budget_summary(self) -> dict:
         """Return per-provider call totals for the current day (in-memory)."""

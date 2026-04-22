@@ -757,19 +757,32 @@ def run_cycle_diagnostics():
         else:
             logger.error("[api_usage_7d] no hourly data in last 7 days")
 
-        # Endpoint hotspots (last 24h)
+        # Endpoint hotspots (last 24h) — unnest callers JSON dict
         _ep_rows = fetch_all("""
-            SELECT provider, callers, SUM(total_calls) AS calls
+            SELECT provider, callers
             FROM api_usage_hourly
             WHERE hour > NOW() - INTERVAL '24 hours'
               AND callers IS NOT NULL
-            GROUP BY provider, callers
-            ORDER BY calls DESC
-            LIMIT 20
         """)
         if _ep_rows:
-            _ep_parts = [f"{_r['provider']}/{_r['callers']}={int(_r['calls']):,}" for _r in _ep_rows]
-            logger.error(f"[api_hotspots_24h] {', '.join(_ep_parts)}")
+            import json as _json_ep
+            _ep_agg = {}
+            for _r in _ep_rows:
+                _prov = _r["provider"]
+                _cdata = _r["callers"]
+                if isinstance(_cdata, str):
+                    try:
+                        _cdata = _json_ep.loads(_cdata)
+                    except Exception:
+                        continue
+                if isinstance(_cdata, dict):
+                    for _ep, _cnt in _cdata.items():
+                        _k = f"{_prov}/{_ep}"
+                        _ep_agg[_k] = _ep_agg.get(_k, 0) + int(_cnt)
+            _top = sorted(_ep_agg.items(), key=lambda x: -x[1])[:15]
+            if _top:
+                _lines = [f"  {_k}: {_v:,}" for _k, _v in _top]
+                logger.error("[api_hotspots_24h]\n" + "\n".join(_lines))
     except Exception as _e:
         logger.error(f"[api_usage_7d] failed: {_e}")
 
