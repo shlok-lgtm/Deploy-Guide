@@ -724,6 +724,55 @@ def run_cycle_diagnostics():
     except Exception as _e:
         logger.error(f"[api_budget] failed: {_e}")
 
+    # 3b. 7-day historical API usage from api_usage_hourly
+    try:
+        _limits = {"coingecko": 16_600, "etherscan": 200_000, "blockscout": 100_000,
+                    "defillama": 50_000, "snapshot": 10_000, "tally": 5_000}
+        _7d_rows = fetch_all("""
+            SELECT provider, DATE(hour) AS day,
+                   SUM(total_calls) AS calls,
+                   SUM(error_calls) AS errors,
+                   MAX(p95_latency_ms) AS p95_ms
+            FROM api_usage_hourly
+            WHERE hour > NOW() - INTERVAL '7 days'
+            GROUP BY provider, DATE(hour)
+            ORDER BY provider, day DESC
+        """)
+        if _7d_rows:
+            _by_provider = {}
+            for _r in _7d_rows:
+                _by_provider.setdefault(_r["provider"], []).append(_r)
+            for _prov, _days in sorted(_by_provider.items()):
+                _day_parts = []
+                for _d in _days[:7]:
+                    _calls = int(_d["calls"])
+                    _errs = int(_d["errors"] or 0)
+                    _p95 = int(_d["p95_ms"] or 0)
+                    _lim = _limits.get(_prov)
+                    _pct = f" — {round(_calls / _lim * 100)}%" if _lim else ""
+                    _day_parts.append(f"{_d['day']}: {_calls:,} calls ({_errs} err, p95={_p95}ms){_pct}")
+                    if _lim and _calls / _lim >= 0.80:
+                        logger.error(f"[api_usage_7d] WARN: {_prov} at {round(_calls / _lim * 100)}% of budget on {_d['day']}")
+                logger.error(f"[api_usage_7d] {_prov}: {' | '.join(_day_parts)}")
+        else:
+            logger.error("[api_usage_7d] no hourly data in last 7 days")
+
+        # Endpoint hotspots (last 24h)
+        _ep_rows = fetch_all("""
+            SELECT provider, callers, SUM(total_calls) AS calls
+            FROM api_usage_hourly
+            WHERE hour > NOW() - INTERVAL '24 hours'
+              AND callers IS NOT NULL
+            GROUP BY provider, callers
+            ORDER BY calls DESC
+            LIMIT 20
+        """)
+        if _ep_rows:
+            _ep_parts = [f"{_r['provider']}/{_r['callers']}={int(_r['calls']):,}" for _r in _ep_rows]
+            logger.error(f"[api_hotspots_24h] {', '.join(_ep_parts)}")
+    except Exception as _e:
+        logger.error(f"[api_usage_7d] failed: {_e}")
+
     # 4. API usage table verification
     try:
         _hourly = fetch_one("SELECT COUNT(*) as cnt, MAX(hour) as latest FROM api_usage_hourly")
