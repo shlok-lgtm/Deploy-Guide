@@ -476,7 +476,7 @@ async def reconcile_once() -> dict:
     """
     from app.utils.rpc_provider import call as rpc_call, RPCError
 
-    counts = {"checked": 0, "confirmed": 0, "dropped": 0, "errors": 0}
+    counts = {"checked": 0, "confirmed": 0, "dropped": 0, "still_pending": 0, "errors": 0}
 
     try:
         rows = fetch_all(
@@ -551,6 +551,8 @@ async def reconcile_once() -> dict:
                 except Exception as e:
                     counts["errors"] += 1
                     logger.debug(f"[mempool_watcher] drop mark failed: {e}")
+            else:
+                counts["still_pending"] += 1
 
     return counts
 
@@ -565,6 +567,7 @@ async def run_reconciliation_loop() -> None:
                 logger.error(
                     f"[mempool_watcher] reconcile: "
                     f"checked={counts['checked']} confirmed={counts['confirmed']} "
+                    f"still_pending={counts['still_pending']} "
                     f"dropped={counts['dropped']} errors={counts['errors']}"
                 )
         except asyncio.CancelledError:

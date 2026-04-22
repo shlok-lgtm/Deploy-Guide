@@ -1,15 +1,59 @@
 """
 Alert system — sends notifications via Telegram or email
 when health failures, engagement responses, or milestone changes occur.
+
+Rate limiting:
+- Per-topic dedup: same alert content won't fire more than once per hour
+- Daily cap: max 20 emails/day (50 for critical), tracked in DB
+- Critical alerts bypass dedup but still count against daily cap
 """
+import hashlib
 import os
 import json
 import logging
 import httpx
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from app.database import fetch_all, fetch_one, execute
 
 logger = logging.getLogger(__name__)
+
+_recent_alerts: dict[str, datetime] = {}
+DAILY_CAP_NORMAL = 20
+DAILY_CAP_CRITICAL = 50
+
+
+def _topic_hash(alert_type: str, message: str) -> str:
+    return hashlib.sha256(f"{alert_type}|{message[:500]}".encode()).hexdigest()[:16]
+
+
+def _should_send(alert_type: str, message: str) -> bool:
+    h = _topic_hash(alert_type, message)
+    last = _recent_alerts.get(h)
+    if last and (datetime.now(timezone.utc) - last) < timedelta(hours=1):
+        return False
+    _recent_alerts[h] = datetime.now(timezone.utc)
+    return True
+
+
+def _get_daily_count() -> int:
+    try:
+        row = fetch_one("SELECT count FROM alert_rate_limit WHERE day = CURRENT_DATE")
+        return int(row["count"]) if row else 0
+    except Exception:
+        return 0
+
+
+def _increment_daily_count():
+    try:
+        execute("""
+            INSERT INTO alert_rate_limit (day, count, last_sent_at)
+            VALUES (CURRENT_DATE, 1, NOW())
+            ON CONFLICT (day) DO UPDATE SET
+                count = alert_rate_limit.count + 1,
+                last_sent_at = NOW()
+        """)
+    except Exception:
+        pass
 
 
 def _get_active_channels():
@@ -20,11 +64,23 @@ def _get_active_channels():
         return []
 
 
-async def send_alert(alert_type: str, message: str, context: dict = None):
+async def send_alert(alert_type: str, message: str, context: dict = None, severity: str = "info"):
     """
     Send alert to all configured channels that subscribe to this alert_type.
-    Logs the alert regardless of delivery success.
+    Rate-limited: dedup per topic (1/hour), daily cap (20 normal, 50 critical).
     """
+    # Dedup: skip if same content sent in last hour (critical bypasses)
+    if severity != "critical" and not _should_send(alert_type, message):
+        logger.warning(f"[alerter] deduplicated: {alert_type}")
+        return False
+
+    # Daily cap
+    daily_count = _get_daily_count()
+    cap = DAILY_CAP_CRITICAL if severity == "critical" else DAILY_CAP_NORMAL
+    if daily_count >= cap:
+        logger.warning(f"[alerter] daily cap reached ({daily_count}/{cap}), dropping {severity}: {alert_type}")
+        return False
+
     channels = _get_active_channels()
     sent_any = False
 
@@ -41,6 +97,10 @@ async def send_alert(alert_type: str, message: str, context: dict = None):
                 sent_any = True
         except Exception as e:
             logger.error(f"Alert send failed ({ch['channel']}): {e}")
+
+    # Track daily count
+    if sent_any:
+        _increment_daily_count()
 
     # Always log the alert
     try:
