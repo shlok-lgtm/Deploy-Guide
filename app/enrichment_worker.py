@@ -836,34 +836,17 @@ async def run_enrichment_pipeline() -> dict:
     # moved to independent background loops in worker.py main() — see ZZZ sidestep.
 
     # =========================================================================
-    # LLL Phase 1 Pipelines (daily, low-priority)
+    # LLL Phase 1 Pipelines — MIGRATED to independent background loops
     # =========================================================================
-
-    async def _run_trace_collection():
-        from app.data_layer.trace_collector import run_trace_collection
-        return await run_trace_collection()
-
-    pipeline.add(EnrichmentTask(
-        name="protocol_traces", func=_run_trace_collection,
-        timeout_seconds=600, group="data_layer", priority=4,
-        gate_check=make_db_gate(
-            "SELECT MAX(captured_at) AS latest FROM protocol_trace_observations",
-            min_hours=24,
-        ),
-    ))
-
-    async def _run_approval_collection():
-        from app.data_layer.approval_collector import run_approval_collection
-        return await run_approval_collection()
-
-    pipeline.add(EnrichmentTask(
-        name="token_approvals", func=_run_approval_collection,
-        timeout_seconds=600, group="data_layer", priority=4,
-        gate_check=make_db_gate(
-            "SELECT MAX(snapshot_at) AS latest FROM token_approval_snapshots",
-            min_hours=24,
-        ),
-    ))
+    # protocol_traces and token_approvals used to run here via pipeline.add()
+    # with a gate_check, but both hung after "starting: N..." logs (same
+    # failure mode as the previously-sidestepped SSS / multichain /
+    # presence collectors). They now run as independent asyncio.create_task
+    # background loops launched from app/worker.py's main() around the
+    # existing Phase 2 loop launches. See:
+    #   app/data_layer/trace_collector.py::trace_collector_background_loop
+    #   app/data_layer/approval_collector.py::approval_collector_background_loop
+    # Do NOT re-register them here — that would double-execute the scan.
 
     # =========================================================================
     # Wave 5: Computed surfaces

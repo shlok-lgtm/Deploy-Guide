@@ -5,9 +5,11 @@ Diff-capture of ERC-20 approval state for top wallets via Blockscout v2.
 Budget: ~500 Blockscout calls/day (<0.5% of 100K daily budget).
 """
 
+import asyncio
 import hashlib
 import logging
 import time
+from datetime import datetime, timezone
 
 import httpx
 
@@ -182,3 +184,47 @@ async def run_approval_collection() -> dict:
         "errors": total_errors,
         "blockscout_calls": total_calls,
     }
+
+
+# ---------------------------------------------------------------------------
+# Independent background loop — sidestep pattern (matches trace_collector_bg,
+# holder_ingestion_bg, multichain_holder_bg, wallet_presence_bg)
+# ---------------------------------------------------------------------------
+
+LOOP_CHECK_INTERVAL = 3600       # hourly tick
+LOOP_GATE_HOURS = 24             # run at most daily
+
+
+async def approval_collector_background_loop():
+    logger.error("[approval_bg] background loop started")
+    await asyncio.sleep(120)      # initial delay — let pool init + trace_bg start
+    while True:
+        try:
+            last = fetch_one(
+                "SELECT MAX(snapshot_at) AS latest FROM token_approval_snapshots"
+            )
+            latest = last.get("latest") if last else None
+            if latest is None:
+                age_h = float("inf")
+            else:
+                if latest.tzinfo is None:
+                    latest = latest.replace(tzinfo=timezone.utc)
+                age_h = (datetime.now(timezone.utc) - latest).total_seconds() / 3600
+
+            if age_h >= LOOP_GATE_HOURS:
+                logger.error(
+                    f"[approval_bg] gate open (last_run={age_h:.1f}h ago, "
+                    f"threshold={LOOP_GATE_HOURS}h) — running scan"
+                )
+                result = await run_approval_collection()
+                logger.error(f"[approval_bg] scan complete: {result}")
+            else:
+                logger.error(
+                    f"[approval_bg] gate closed (last_run={age_h:.1f}h ago, "
+                    f"threshold={LOOP_GATE_HOURS}h) — sleeping 1h"
+                )
+        except Exception as e:
+            logger.error(f"[approval_bg] loop error: {type(e).__name__}: {e}")
+            await asyncio.sleep(300)
+            continue
+        await asyncio.sleep(LOOP_CHECK_INTERVAL)

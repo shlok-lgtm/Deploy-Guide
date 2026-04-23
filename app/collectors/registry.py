@@ -160,19 +160,29 @@ class CycleStats:
         self._data[name]["error"] += 1
 
     def log_summary(self):
+        # Bumped from logger.info to logger.error so Railway surfaces this
+        # prominently. Prior level meant the fast-cycle 30-min timeout
+        # diagnosis was invisible to operators — exactly when we need it.
         if not self._data:
-            logger.info("CycleStats: no collector data recorded")
+            logger.error("[cycle_stats] no collector data recorded")
             return
-        logger.info("=== Collector cycle stats ===")
-        for name, d in sorted(self._data.items()):
+        logger.error("=== [cycle_stats] Collector cycle stats ===")
+        # Sort by avg latency descending so slowest collectors surface first.
+        rows = []
+        for name, d in self._data.items():
             avg_ms = (
                 int(sum(d["latencies"]) / len(d["latencies"]))
                 if d["latencies"]
                 else 0
             )
-            logger.info(
+            max_ms = max(d["latencies"]) if d["latencies"] else 0
+            rows.append((name, d, avg_ms, max_ms))
+        rows.sort(key=lambda r: -r[2])
+        for name, d, avg_ms, max_ms in rows:
+            logger.error(
                 f"  {name:30s}  ok={d['ok']:3d}  timeout={d['timeout']:2d}  "
-                f"error={d['error']:2d}  avg={avg_ms:5d}ms  components={d['components']}"
+                f"error={d['error']:2d}  avg={avg_ms:5d}ms  max={max_ms:5d}ms  "
+                f"components={d['components']}"
             )
 
     def store(self):
@@ -307,6 +317,13 @@ async def run_all_collectors(
     # --- async collectors (parallel with per-collector timeout) ---
     async_collectors = _make_async_collectors()
 
+    # Per-collector call that exceeds this fraction of its timeout is
+    # logged as a slow call so fast-cycle 30-min timeouts can be
+    # attributed to specific (collector, stablecoin) pairs without
+    # re-running the cycle.
+    SLOW_CALL_FRACTION = 0.75
+    slow_threshold_ms = int(timeout * SLOW_CALL_FRACTION * 1000)
+
     async def _instrumented(name, coro):
         t0 = time.monotonic()
         try:
@@ -315,6 +332,11 @@ async def run_all_collectors(
             count = len(result) if result else 0
             if cycle_stats:
                 cycle_stats.record_ok(name, elapsed_ms, count)
+            if elapsed_ms >= slow_threshold_ms:
+                logger.error(
+                    f"[slow_collector] {name} took {elapsed_ms}ms for {stablecoin_id} "
+                    f"(>={int(SLOW_CALL_FRACTION*100)}% of {int(timeout*1000)}ms timeout)"
+                )
             return result or []
         except asyncio.TimeoutError:
             logger.warning(f"{name} timed out for {stablecoin_id}")

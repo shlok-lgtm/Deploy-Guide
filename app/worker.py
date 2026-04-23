@@ -923,25 +923,35 @@ async def run_fast_cycle():
     logger.info(f"Starting scoring cycle for {len(stablecoins)} stablecoins")
 
     results = []
+    # Per-stablecoin elapsed at error level for fast-cycle timeout
+    # attribution. Combined with [slow_collector] lines from the registry,
+    # this lets operators identify which (stablecoin, collector) pair is
+    # driving the 30-min cycle limit without re-running.
+    SLOW_SID_THRESHOLD_SEC = 60  # half of the per-sid 120s timeout
     async with httpx.AsyncClient(timeout=30) as client:
         for sid in stablecoins:
-            # For promoted coins (not in hardcoded registry), mark in_progress
             is_promoted = sid not in STABLECOIN_REGISTRY
             if is_promoted:
                 cfg = get_stablecoin_config(sid)
                 if cfg:
                     _mark_scoring_status(cfg["coingecko_id"], "in_progress")
+            sid_t0 = time.time()
             try:
                 result = await asyncio.wait_for(
                     score_stablecoin(client, sid), timeout=120
                 )
                 results.append(result)
-                # After success, mark scored for promoted coins
                 if is_promoted and "score" in result:
                     cfg = get_stablecoin_config(sid)
                     if cfg:
                         _mark_scoring_status(cfg["coingecko_id"], "scored")
-                # Rate limit: pause between coins
+                sid_elapsed = time.time() - sid_t0
+                if sid_elapsed >= SLOW_SID_THRESHOLD_SEC:
+                    logger.error(
+                        f"[slow_stablecoin] {sid} scored in {sid_elapsed:.1f}s "
+                        f"(>={SLOW_SID_THRESHOLD_SEC}s threshold — see [slow_collector] "
+                        f"lines above for the slow collector attribution)"
+                    )
                 await asyncio.sleep(2.0)
             except asyncio.TimeoutError:
                 logger.warning(f"Timeout scoring {sid} (>120s) — skipping")
@@ -3352,6 +3362,24 @@ async def main():
                 logger.error("[startup] wallet_presence background loop launched (daily)")
             except Exception as _wp_err:
                 logger.error(f"[startup] wallet_presence loop failed to launch: {_wp_err}")
+
+            # LLL Phase 1 Pipeline 1 & 2 — migrated from enrichment pipeline
+            # to independent background loops (same sidestep pattern). Both
+            # dispatch through their own _background_loop fn; enrichment_worker
+            # no longer registers them.
+            try:
+                from app.data_layer.trace_collector import trace_collector_background_loop
+                asyncio.create_task(trace_collector_background_loop(), name="trace_bg")
+                logger.error("[startup] trace_collector background loop launched (6h)")
+            except Exception as _tc_err:
+                logger.error(f"[startup] trace_collector loop failed to launch: {_tc_err}")
+
+            try:
+                from app.data_layer.approval_collector import approval_collector_background_loop
+                asyncio.create_task(approval_collector_background_loop(), name="approval_bg")
+                logger.error("[startup] approval_collector background loop launched (daily)")
+            except Exception as _ac_err:
+                logger.error(f"[startup] approval_collector loop failed to launch: {_ac_err}")
 
             cycle_counter = 0
             while True:

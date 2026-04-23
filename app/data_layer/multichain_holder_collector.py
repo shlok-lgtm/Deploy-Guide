@@ -76,12 +76,23 @@ async def _fetch_holders_blockscout(
     if not host:
         return []
 
-    resp = await client.get(
-        f"https://{host}/api/v2/tokens/{contract}/holders",
-        timeout=30,
-    )
+    url = f"https://{host}/api/v2/tokens/{contract}/holders"
+    resp = await client.get(url, timeout=30)
     if resp.status_code != 200:
-        logger.error(f"[multichain_holder] blockscout {chain} returned HTTP {resp.status_code} for {contract[:12]}...")
+        # Log URL + body truncation so ops sees the actual Blockscout error
+        # message without having to reproduce with curl. BBBB (3eee9c7)
+        # removed limit=50 and added follow_redirects=True; any remaining
+        # non-200 means the per-chain Blockscout instance has drifted URL
+        # shape or parameter contract, and the response body tells us what.
+        body_snippet = (resp.text or "")[:200].replace("\n", " ")
+        final_url = str(resp.url)
+        redirect_info = (
+            f" via_redirect={final_url}" if final_url != url else ""
+        )
+        logger.error(
+            f"[multichain_holder] blockscout {chain} returned HTTP {resp.status_code} "
+            f"for {contract[:12]}... url={url}{redirect_info} body={body_snippet!r}"
+        )
         return []
 
     items = resp.json().get("items", [])

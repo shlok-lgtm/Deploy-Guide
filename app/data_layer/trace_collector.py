@@ -5,10 +5,12 @@ Fetches raw traces for top PSI protocol transactions via Blockscout v2.
 Budget: ~143 Blockscout calls/day (<0.15% of 100K daily budget).
 """
 
+import asyncio
 import hashlib
 import json
 import logging
 import time
+from datetime import datetime, timezone
 
 import httpx
 
@@ -215,3 +217,52 @@ async def run_trace_collection() -> dict:
         "errors": total_errors,
         "blockscout_calls": total_calls,
     }
+
+
+# ---------------------------------------------------------------------------
+# Independent background loop — sidestep pattern
+# ---------------------------------------------------------------------------
+# The enrichment_worker pipeline path was dispatching this collector with a
+# `gate_check` that hung before the "starting: N..." log line could flush
+# (same failure mode as the now-sidestepped SSS / multichain / presence
+# collectors). This standalone loop runs the collector on its own cadence
+# and is launched from app/worker.py at startup. Logs one tick per hour
+# so Railway shows liveness.
+
+LOOP_CHECK_INTERVAL = 3600       # hourly tick
+LOOP_GATE_HOURS = 6              # run at most every 6h
+
+
+async def trace_collector_background_loop():
+    logger.error("[trace_bg] background loop started")
+    await asyncio.sleep(90)       # initial delay — let pool init complete
+    while True:
+        try:
+            last = fetch_one(
+                "SELECT MAX(captured_at) AS latest FROM protocol_trace_observations"
+            )
+            latest = last.get("latest") if last else None
+            if latest is None:
+                age_h = float("inf")
+            else:
+                if latest.tzinfo is None:
+                    latest = latest.replace(tzinfo=timezone.utc)
+                age_h = (datetime.now(timezone.utc) - latest).total_seconds() / 3600
+
+            if age_h >= LOOP_GATE_HOURS:
+                logger.error(
+                    f"[trace_bg] gate open (last_run={age_h:.1f}h ago, "
+                    f"threshold={LOOP_GATE_HOURS}h) — running scan"
+                )
+                result = await run_trace_collection()
+                logger.error(f"[trace_bg] scan complete: {result}")
+            else:
+                logger.error(
+                    f"[trace_bg] gate closed (last_run={age_h:.1f}h ago, "
+                    f"threshold={LOOP_GATE_HOURS}h) — sleeping 1h"
+                )
+        except Exception as e:
+            logger.error(f"[trace_bg] loop error: {type(e).__name__}: {e}")
+            await asyncio.sleep(300)
+            continue
+        await asyncio.sleep(LOOP_CHECK_INTERVAL)
