@@ -616,11 +616,12 @@ def detect_and_log_entries() -> dict:
         try:
             # Freshness gate
             if _is_domain_stale(source_domain):
-                logger.info(f"Skipped track_record rule {rule_name}: source domain {source_domain} stale")
+                logger.error(f"[track_record] rule {rule_name}: SKIPPED (source domain {source_domain} stale)")
                 skipped_stale += 1
                 continue
 
             entries = rule_fn()
+            logger.error(f"[track_record] rule {rule_name}: {len(entries)} candidates found")
             for entry in entries:
                 entry["state_root"] = state_root
                 if _entry_exists(entry["content_hash"]):
@@ -629,13 +630,14 @@ def detect_and_log_entries() -> dict:
                 try:
                     _insert_entry(entry)
                     all_entries.append(entry["trigger_kind"])
+                    logger.error(f"[track_record] INSERTED: {entry['entity_slug']}/{entry['trigger_kind']}")
                 except Exception as e:
-                    logger.warning(f"Failed to insert track_record entry: {e}")
+                    logger.error(f"[track_record] INSERT FAILED: {e}")
         except Exception as e:
-            logger.warning(f"Track record rule {rule_name} failed: {e}")
+            logger.error(f"[track_record] rule {rule_name} FAILED: {e}")
 
-    logger.info(
-        f"Track record: {len(all_entries)} entries logged, "
+    logger.error(
+        f"[track_record] SUMMARY: {len(all_entries)} entries logged, "
         f"{skipped_duplicate} duplicates skipped, "
         f"{skipped_stale} rules skipped (stale domain)"
     )
