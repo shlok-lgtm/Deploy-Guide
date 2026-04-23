@@ -16,7 +16,8 @@ from app.database import fetch_all, fetch_one, get_cursor
 logger = logging.getLogger(__name__)
 
 _client = httpx.AsyncClient(
-    timeout=30, limits=httpx.Limits(max_connections=20, max_keepalive_connections=10)
+    timeout=30, follow_redirects=True,
+    limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
 )
 
 CHAIN_HOSTS = {

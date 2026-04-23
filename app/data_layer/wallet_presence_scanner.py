@@ -21,7 +21,8 @@ from app.database import fetch_all, fetch_one, get_cursor
 logger = logging.getLogger(__name__)
 
 _client = httpx.AsyncClient(
-    timeout=15, limits=httpx.Limits(max_connections=20, max_keepalive_connections=10)
+    timeout=15, follow_redirects=True,
+    limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
 )
 
 CHAIN_HOSTS = {
@@ -191,21 +192,29 @@ async def wallet_presence_background_loop():
     while True:
         try:
             logger.error("[presence_bg] loop tick, checking gate")
-            last = fetch_one(
-                "SELECT MAX(last_verified_at) AS latest FROM wallet_chain_presence WHERE discovery_method = 'presence_check'"
-            )
-            latest = last.get("latest") if last else None
+            count_row = fetch_one("SELECT COUNT(*) AS cnt FROM wallet_chain_presence WHERE discovery_method = 'presence_check'")
+            row_count = int(count_row["cnt"]) if count_row else 0
 
-            if latest:
-                if latest.tzinfo is None:
-                    latest = latest.replace(tzinfo=datetime.now(timezone.utc).tzinfo)
-                age_h = (datetime.now(timezone.utc) - latest).total_seconds() / 3600
-                if age_h < 22:
-                    logger.error(f"[presence_bg] gate closed, last run {age_h:.0f}h ago")
-                    await asyncio.sleep(3600)
-                    continue
+            if row_count == 0:
+                logger.error(f"[presence_bg] gate open: no presence_check rows yet")
+            else:
+                last = fetch_one(
+                    "SELECT MAX(last_verified_at) AS latest FROM wallet_chain_presence WHERE discovery_method = 'presence_check'"
+                )
+                latest = last.get("latest") if last else None
+                if latest:
+                    if latest.tzinfo is None:
+                        latest = latest.replace(tzinfo=timezone.utc)
+                    age_h = (datetime.now(timezone.utc) - latest).total_seconds() / 3600
+                    if age_h < 22:
+                        logger.error(f"[presence_bg] gate closed: {row_count} rows, last run {age_h:.0f}h ago")
+                        await asyncio.sleep(3600)
+                        continue
+                    logger.error(f"[presence_bg] gate open: {row_count} rows, {age_h:.0f}h since last run")
+                else:
+                    logger.error(f"[presence_bg] gate open: {row_count} rows but no timestamp")
 
-            logger.error("[presence_bg] gate open, running scan")
+            logger.error("[presence_bg] running scan")
             result = await run_wallet_presence_scan()
             logger.error(f"[presence_bg] scan complete: {result}")
             await asyncio.sleep(22 * 3600)

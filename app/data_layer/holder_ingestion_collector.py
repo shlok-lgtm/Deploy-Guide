@@ -26,7 +26,8 @@ from app.database import fetch_all, fetch_one, get_cursor
 logger = logging.getLogger(__name__)
 
 _client = httpx.AsyncClient(
-    timeout=30, limits=httpx.Limits(max_connections=20, max_keepalive_connections=10)
+    timeout=30, follow_redirects=True,
+    limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
 )
 
 USD_THRESHOLD = 10_000
@@ -395,19 +396,27 @@ async def holder_ingestion_background_loop():
     while True:
         try:
             logger.error("[holder_ingestion_bg] loop tick, checking gate")
-            last = fetch_one("SELECT MAX(discovered_at) AS latest FROM wallet_holder_discovery")
-            latest = last.get("latest") if last else None
+            count_row = fetch_one("SELECT COUNT(*) AS cnt FROM wallet_holder_discovery")
+            row_count = int(count_row["cnt"]) if count_row else 0
 
-            if latest:
-                if latest.tzinfo is None:
-                    latest = latest.replace(tzinfo=timezone.utc)
-                age_h = (datetime.now(timezone.utc) - latest).total_seconds() / 3600
-                if age_h < 168:
-                    logger.error(f"[holder_ingestion_bg] gate closed, last run {age_h:.0f}h ago, sleeping")
-                    await asyncio.sleep(3600)
-                    continue
+            if row_count == 0:
+                logger.error(f"[holder_ingestion_bg] gate open: table empty ({row_count} rows)")
+            else:
+                last = fetch_one("SELECT MAX(discovered_at) AS latest FROM wallet_holder_discovery")
+                latest = last.get("latest") if last else None
+                if latest:
+                    if latest.tzinfo is None:
+                        latest = latest.replace(tzinfo=timezone.utc)
+                    age_h = (datetime.now(timezone.utc) - latest).total_seconds() / 3600
+                    if age_h < 168:
+                        logger.error(f"[holder_ingestion_bg] gate closed: {row_count} rows, last run {age_h:.0f}h ago")
+                        await asyncio.sleep(3600)
+                        continue
+                    logger.error(f"[holder_ingestion_bg] gate open: {row_count} rows but {age_h:.0f}h since last run")
+                else:
+                    logger.error(f"[holder_ingestion_bg] gate open: {row_count} rows but no discovered_at timestamp")
 
-            logger.error("[holder_ingestion_bg] gate open, running scan")
+            logger.error("[holder_ingestion_bg] running scan")
             result = await run_holder_ingestion()
             logger.error(f"[holder_ingestion_bg] scan complete: {result}")
             logger.error(f"[holder_ingestion_bg] sleeping {LOOP_INTERVAL // 3600}h")
