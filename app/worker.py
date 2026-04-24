@@ -2444,6 +2444,15 @@ async def run_slow_cycle():
     except Exception as e:
         logger.warning(f"Coherence sweep failed: {e}")
 
+    # Track record: also run in fallback slow cycle path
+    try:
+        from app.track_record import detect_and_log_entries
+        logger.error("[track_record] running detect_and_log_entries (fallback path)")
+        tr_result = detect_and_log_entries()
+        logger.error(f"[track_record] result: {tr_result}")
+    except Exception as e:
+        logger.error(f"[track_record] auto-log failed (fallback): {e}", exc_info=True)
+
     elapsed = time.time() - start
     logger.info(f"=== Slow cycle complete in {elapsed:.0f}s ===")
 
@@ -2765,10 +2774,11 @@ async def run_slow_cycle_parallel():
     # Track record: auto-log qualifying entries from this cycle's signals
     try:
         from app.track_record import detect_and_log_entries
+        logger.error("[track_record] running detect_and_log_entries")
         tr_result = detect_and_log_entries()
-        logger.info(f"Track record: {tr_result.get('entries_logged', 0)} entries logged")
+        logger.error(f"[track_record] result: {tr_result}")
     except Exception as e:
-        logger.error(f"track_record auto-log failed: {e}", exc_info=True)
+        logger.error(f"[track_record] auto-log failed: {e}", exc_info=True)
 
     # Track record: evaluate pending followups (daily)
     try:
@@ -3259,6 +3269,22 @@ async def main():
         logger.error(f"[schema_validator] failed to run: {e}")
 
     logger.error("[startup] schema fixes complete, diagnostics will fire in 60s via independent loop")
+
+    # Seed methodology hashes (idempotent — skips existing)
+    try:
+        from app.methodology_hashes import register_methodology
+        _meth_seeded = 0
+        _meth_skipped = 0
+        import scripts.seed_initial_methodology as _seed_meth
+        for _mid, _content, _desc in _seed_meth.METHODOLOGIES:
+            try:
+                register_methodology(_mid, _content, _desc)
+                _meth_seeded += 1
+            except ValueError:
+                _meth_skipped += 1
+        logger.error(f"[startup] methodology hashes: seeded={_meth_seeded}, skipped={_meth_skipped}")
+    except Exception as e:
+        logger.error(f"[startup] methodology seed failed: {e}")
 
     # Dwellir RPC capability probe — one-shot at boot. Never raises.
     # Records results in rpc_capabilities so ops can see what Dwellir's free
