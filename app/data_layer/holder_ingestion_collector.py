@@ -188,9 +188,11 @@ async def _fetch_holders_blockscout(
     }
     host = hosts.get(chain, hosts["ethereum"])
 
+    # Blockscout v9.0+ strictly validates parameters; `limit` is not in the
+    # supported set for /tokens/{contract}/holders. Default page size
+    # (~50 items) is sufficient for holder ingestion's breadth pass.
     resp = await client.get(
         f"https://{host}/api/v2/tokens/{contract}/holders",
-        params={"limit": 50},
         timeout=30,
     )
     if resp.status_code != 200:

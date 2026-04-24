@@ -247,11 +247,33 @@ def _make_async_collectors():
     async def _smart_contract(client, _cg_id, sid):
         return await collect_smart_contract_components(client, sid)
 
+    # Per-collector inner timeout. Production observation (PR #35 timing
+    # diagnostics) shows solana + actor_metrics regularly consume 30s+
+    # each per stablecoin, pushing the fast cycle past its 30-min outer
+    # budget (36 coins × 30s = ~18 min on these two alone). Capping the
+    # inner wait at 10s lets the registry's `_instrumented` timeout path
+    # record the miss and move on. Other collectors keep the default 20s.
+    _SLOW_COLLECTOR_TIMEOUT_SEC = 10.0
+
+    async def _with_inner_timeout(name, coro):
+        try:
+            return await asyncio.wait_for(coro, timeout=_SLOW_COLLECTOR_TIMEOUT_SEC)
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"{name} collector inner-timeout ({_SLOW_COLLECTOR_TIMEOUT_SEC:.0f}s) — "
+                f"skipping this cycle's reading"
+            )
+            return []
+
     async def _solana(client, _cg_id, sid):
-        return await collect_solana_components(client, sid)
+        return await _with_inner_timeout(
+            "solana", collect_solana_components(client, sid),
+        )
 
     async def _actor(client, _cg_id, sid):
-        return await collect_actor_metrics(client, sid)
+        return await _with_inner_timeout(
+            "actor_metrics", collect_actor_metrics(client, sid),
+        )
 
     return [
         ("peg", collect_peg_components),

@@ -83,7 +83,11 @@ async def run_approval_collection() -> dict:
             total_calls += 1
 
             url = f"https://{host}/api/v2/addresses/{addr}/token-transfers"
-            resp = await client.get(url, params={"type": "ERC-20", "filter": "from", "limit": 50})
+            # Blockscout v9.0+ strictly validates parameters; `limit` is not
+            # in the supported set for this endpoint. Pagination is cursor-
+            # based via `next_page_params` in the response body. First page
+            # (~50 items default) is sufficient for approval diff-capture.
+            resp = await client.get(url, params={"type": "ERC-20", "filter": "from"})
             if wi < 3:
                 logger.error(f"[approval_collector] step E.{wi}: HTTP {resp.status_code}")
 

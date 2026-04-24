@@ -106,16 +106,18 @@ async def run_trace_collection() -> dict:
 
     logger.error("[trace_collector] step 5: entering main loop (using module-level httpx client)")
     client = _client
-    for i, slug in enumerate(slugs):
-        addrs = proto_addrs.get(slug, [])
-        if not addrs:
-            continue
-
-        addr, chain = addrs[0]
+    # Pre-filter to only protocols that have on-chain addresses so the loop
+    # counter matches user-visible progress. Previously the log read
+    # "loop 0/33" → "step C.16" because `i` skipped protocols without
+    # addresses and looked like a skip bug. The addressable set is what
+    # actually drives API calls.
+    addressable = [(slug, proto_addrs[slug][0]) for slug in slugs if proto_addrs.get(slug)]
+    for i, (slug, addr_chain) in enumerate(addressable):
+        addr, chain = addr_chain
         host = CHAIN_HOSTS.get(chain, CHAIN_HOSTS["ethereum"])
 
         if i < 3 or i % 10 == 0:
-            logger.error(f"[trace_collector] loop {i}/{len(slugs)}: {slug} addr={addr[:12]}... chain={chain}")
+            logger.error(f"[trace_collector] loop {i}/{len(addressable)}: {slug} addr={addr[:12]}... chain={chain}")
 
         # Fetch recent txs for this protocol's primary address
         try:
@@ -125,8 +127,11 @@ async def run_trace_collection() -> dict:
             logger.error(f"[trace_collector] step D.{i}: rate limiter acquired, making HTTP GET")
             total_calls += 1
 
+            # Blockscout v9.0+ strictly validates parameters; `limit` is not
+            # in the supported set for /addresses/{addr}/transactions.
+            # Default page size is plenty for trace sampling.
             tx_url = f"https://{host}/api/v2/addresses/{addr}/transactions"
-            resp = await client.get(tx_url, params={"filter": "to", "limit": MAX_TXS_PER_PROTOCOL})
+            resp = await client.get(tx_url, params={"filter": "to"})
             logger.error(f"[trace_collector] step E.{i}: HTTP {resp.status_code}")
             if resp.status_code != 200:
                 total_errors += 1
