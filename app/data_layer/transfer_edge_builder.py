@@ -43,13 +43,14 @@ def _get_etherscan_24h_usage() -> int:
 
 def _get_wallets_for_scan(limit: int) -> list[str]:
     rows = fetch_all(f"""
-        SELECT DISTINCT w.address
+        SELECT w.address
         FROM wallet_graph.wallets w
-        INNER JOIN wallet_holder_discovery h ON w.address = h.wallet_address
+        INNER JOIN (
+            SELECT DISTINCT wallet_address FROM wallet_holder_discovery WHERE balance_usd > 10000
+        ) h ON w.address = h.wallet_address
         LEFT JOIN wallet_graph.edge_build_status s
             ON w.address = s.wallet_address AND s.chain = 'ethereum'
-        WHERE h.balance_usd > 10000
-          AND (s.wallet_address IS NULL OR s.last_built_at < NOW() - INTERVAL '24 hours')
+        WHERE s.wallet_address IS NULL OR s.last_built_at < NOW() - INTERVAL '24 hours'
         ORDER BY COALESCE(s.last_built_at, '1970-01-01') ASC
         LIMIT {limit}
     """)

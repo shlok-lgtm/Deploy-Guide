@@ -224,7 +224,7 @@ async def run_approval_collection() -> dict:
 # ---------------------------------------------------------------------------
 
 LOOP_CHECK_INTERVAL = 3600       # hourly tick
-LOOP_GATE_HOURS = 24             # run at most daily
+LOOP_GATE_HOURS = 2              # run every 2h until table stabilizes (was 24)
 
 
 async def approval_collector_background_loop():
