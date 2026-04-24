@@ -63,6 +63,12 @@ async def run_approval_collection() -> dict:
     total_calls = 0
     max_allowance_usd = 0.0
 
+    # Check if table is nearly empty — skip diff-capture to bootstrap data
+    bootstrap_row = fetch_one("SELECT COUNT(*) AS cnt FROM token_approval_snapshots")
+    bootstrap_mode = (int(bootstrap_row["cnt"]) if bootstrap_row else 0) < 100
+    if bootstrap_mode:
+        logger.error("[approval_collector] BOOTSTRAP MODE: table <100 rows, skipping diff-capture")
+
     logger.error("[approval_collector] step 3: entering main loop (using module-level httpx client)")
     client = _client
     for wi, wallet_row in enumerate(wallets):
@@ -136,17 +142,18 @@ async def run_approval_collection() -> dict:
                 total_approvals_seen += 1
                 parsed_count += 1
 
-                prev = fetch_one("""
-                    SELECT allowance FROM token_approval_snapshots
-                    WHERE wallet_address = %s AND token_address = %s AND spender_address = %s AND chain = %s
-                    ORDER BY snapshot_at DESC LIMIT 1
-                """, (addr.lower(), token_addr, to_addr, chain))
+                prev_allowance = None
+                if not bootstrap_mode:
+                    prev = fetch_one("""
+                        SELECT allowance FROM token_approval_snapshots
+                        WHERE wallet_address = %s AND token_address = %s AND spender_address = %s AND chain = %s
+                        ORDER BY snapshot_at DESC LIMIT 1
+                    """, (addr.lower(), token_addr, to_addr, chain))
+                    prev_allowance = float(prev["allowance"]) if prev else None
 
-                prev_allowance = float(prev["allowance"]) if prev else None
-
-                if prev_allowance is not None and abs(prev_allowance - allowance) < 0.01:
-                    skipped_unchanged += 1
-                    continue
+                    if prev_allowance is not None and abs(prev_allowance - allowance) < 0.01:
+                        skipped_unchanged += 1
+                        continue
 
                 allowance_usd = allowance
                 if allowance_usd > max_allowance_usd:

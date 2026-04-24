@@ -3397,6 +3397,14 @@ async def main():
             except Exception as _eb_err:
                 logger.error(f"[startup] edge_builder loop failed to launch: {_eb_err}")
 
+            # Sprint 3: Transfer edge builder (tokentx-based, complements shared-holder edges)
+            try:
+                from app.data_layer.transfer_edge_builder import transfer_edge_builder_background_loop
+                asyncio.create_task(transfer_edge_builder_background_loop())
+                logger.error("[startup] transfer_edge_builder background loop launched (30-min batches)")
+            except Exception as _te_err:
+                logger.error(f"[startup] transfer_edge_builder loop failed to launch: {_te_err}")
+
             # LLL Phase 1 Pipeline 1 & 2 — migrated from enrichment pipeline
             # to independent background loops (same sidestep pattern). Both
             # dispatch through their own _background_loop fn; enrichment_worker
