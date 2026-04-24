@@ -427,3 +427,77 @@ def prune_stale_edges() -> dict:
 
     logger.info(f"Edge pruning: {to_archive} edges archived, {remaining} remaining")
     return {"edges_archived": to_archive, "edges_remaining": remaining}
+
+
+# =============================================================================
+# Sprint 3 background loop — high-throughput edge building
+# =============================================================================
+
+EDGE_BUILDER_BATCH_SIZE = 2000
+EDGE_BUILDER_ETHERSCAN_CAP = 120_000
+
+
+def _get_etherscan_24h_usage() -> int:
+    try:
+        row = fetch_one("""
+            SELECT SUM(total_calls) AS total FROM api_usage_hourly
+            WHERE provider = 'etherscan' AND hour > NOW() - INTERVAL '24 hours'
+        """)
+        return int(row["total"]) if row and row.get("total") else 0
+    except Exception:
+        return 0
+
+
+async def edge_builder_background_loop():
+    """Independent background loop for Sprint 3 edge graph density."""
+    logger.error("[edge_builder_bg] background loop started")
+    await asyncio.sleep(240)  # stagger behind other Phase 2 loops
+
+    while True:
+        try:
+            logger.error("[edge_builder_bg] loop tick")
+
+            usage = _get_etherscan_24h_usage()
+            if usage > EDGE_BUILDER_ETHERSCAN_CAP:
+                logger.error(f"[edge_builder_bg] PAUSED: Etherscan 24h usage {usage:,}/{EDGE_BUILDER_ETHERSCAN_CAP:,}")
+                await asyncio.sleep(3600)
+                continue
+
+            # Check how many wallets are scannable
+            scannable = fetch_one("""
+                SELECT COUNT(*) AS cnt FROM wallet_graph.wallets w
+                LEFT JOIN wallet_graph.edge_build_status e
+                    ON w.address = e.wallet_address AND e.chain = 'ethereum'
+                WHERE e.wallet_address IS NULL
+                   OR e.last_built_at < NOW() - INTERVAL '24 hours'
+            """)
+            scannable_count = int(scannable["cnt"]) if scannable else 0
+
+            if scannable_count == 0:
+                logger.error("[edge_builder_bg] no wallets need scanning, sleeping 1h")
+                await asyncio.sleep(3600)
+                continue
+
+            batch = min(EDGE_BUILDER_BATCH_SIZE, scannable_count)
+            logger.error(f"[edge_builder_bg] {scannable_count} wallets need scanning, running batch of {batch}")
+
+            result = await run_edge_builder(
+                max_wallets=batch,
+                max_pages_per_wallet=10,
+                priority="value",
+                chain="ethereum",
+            )
+
+            logger.error(
+                f"[edge_builder_bg] BATCH SUMMARY: "
+                f"wallets={result.get('wallets_processed', 0)}, "
+                f"new_edges={result.get('total_edges_created', 0)}, "
+                f"transfers={result.get('total_transfers', 0)}"
+            )
+
+            # Short sleep before next batch — continuous while there are wallets to scan
+            await asyncio.sleep(300)
+
+        except Exception as e:
+            logger.error(f"[edge_builder_bg] ERROR: {type(e).__name__}: {e}")
+            await asyncio.sleep(600)

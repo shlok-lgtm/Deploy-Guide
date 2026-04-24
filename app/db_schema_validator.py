@@ -205,6 +205,15 @@ EXPECTED_COLUMNS = {
         "chain", "balance_raw", "balance_usd", "rank_in_entity",
         "discovered_at", "source",
     ],
+    "wallet_graph.wallet_edges": [
+        "id", "from_address", "to_address", "transfer_count",
+        "total_value_usd", "first_transfer_at", "last_transfer_at",
+        "weight", "tokens_transferred", "created_at", "updated_at",
+    ],
+    "wallet_graph.edge_build_status": [
+        "wallet_address", "chain", "last_built_at", "transfers_processed",
+        "edges_created", "pages_fetched", "status",
+    ],
     "wallet_chain_presence": [
         "id", "wallet_address", "chain", "chain_id", "first_seen_at",
         "last_verified_at", "tx_count", "native_balance_wei",

@@ -3389,6 +3389,14 @@ async def main():
             except Exception as _wp_err:
                 logger.error(f"[startup] wallet_presence loop failed to launch: {_wp_err}")
 
+            # Sprint 3: Edge builder — high-throughput edge graph density
+            try:
+                from app.indexer.edges import edge_builder_background_loop
+                asyncio.create_task(edge_builder_background_loop())
+                logger.error("[startup] edge_builder background loop launched (continuous)")
+            except Exception as _eb_err:
+                logger.error(f"[startup] edge_builder loop failed to launch: {_eb_err}")
+
             # LLL Phase 1 Pipeline 1 & 2 — migrated from enrichment pipeline
             # to independent background loops (same sidestep pattern). Both
             # dispatch through their own _background_loop fn; enrichment_worker
