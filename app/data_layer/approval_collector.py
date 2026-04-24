@@ -108,7 +108,7 @@ async def run_approval_collection() -> dict:
             seen_approvals = set()
             for ii, item in enumerate(items):
                 token_obj = item.get("token") or {}
-                token_addr = (token_obj.get("address") or "").lower()
+                token_addr = (token_obj.get("address_hash") or token_obj.get("address") or "").lower()
                 to_obj = item.get("to") or {}
                 to_addr = (to_obj.get("hash") or "").lower()
 
