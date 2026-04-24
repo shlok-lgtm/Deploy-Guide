@@ -577,6 +577,15 @@ async def startup():
     except Exception as e:
         logger.warning(f"Incident router registration failed: {e}")
 
+    # Analytic Engine — coverage endpoint (Component 1 / S0).
+    # Additional engine components register via the same umbrella router.
+    try:
+        from app.engine.router import router as engine_router
+        app.include_router(engine_router)
+        logger.info("Engine routes registered (/api/engine/*)")
+    except Exception as e:
+        logger.warning(f"Engine router registration failed: {e}")
+
     # Static share assets (Twitter/X cards for incident pages)
     try:
         _share_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "public", "share")
