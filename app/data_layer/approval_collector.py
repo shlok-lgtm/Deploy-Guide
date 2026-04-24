@@ -225,16 +225,24 @@ async def approval_collector_background_loop():
     await asyncio.sleep(120)      # initial delay — let pool init + trace_bg start
     while True:
         try:
-            last = fetch_one(
-                "SELECT MAX(snapshot_at) AS latest FROM token_approval_snapshots"
-            )
-            latest = last.get("latest") if last else None
-            if latest is None:
+            # Force-open gate if table has very few rows (FFFF fix verification)
+            count_row = fetch_one("SELECT COUNT(*) AS cnt FROM token_approval_snapshots")
+            row_count = int(count_row["cnt"]) if count_row else 0
+
+            if row_count < 100:
+                logger.error(f"[approval_bg] gate forced open: only {row_count} rows (< 100 threshold)")
                 age_h = float("inf")
             else:
-                if latest.tzinfo is None:
-                    latest = latest.replace(tzinfo=timezone.utc)
-                age_h = (datetime.now(timezone.utc) - latest).total_seconds() / 3600
+                last = fetch_one(
+                    "SELECT MAX(snapshot_at) AS latest FROM token_approval_snapshots"
+                )
+                latest = last.get("latest") if last else None
+                if latest is None:
+                    age_h = float("inf")
+                else:
+                    if latest.tzinfo is None:
+                        latest = latest.replace(tzinfo=timezone.utc)
+                    age_h = (datetime.now(timezone.utc) - latest).total_seconds() / 3600
 
             if age_h >= LOOP_GATE_HOURS:
                 logger.error(

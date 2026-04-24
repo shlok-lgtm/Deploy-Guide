@@ -287,11 +287,17 @@ async def run_edge_builder(
     total_transfers = 0
     wallets_processed = 0
 
-    async with httpx.AsyncClient() as client:
+    _edge_client = httpx.AsyncClient(
+        timeout=30, follow_redirects=True,
+        limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+    )
+    try:
         for i, w in enumerate(wallets):
+            if i < 5 or i % 50 == 0:
+                logger.error(f"[edge_builder] wallet {w['address'][:12]}... start ({i}/{len(wallets)})")
             try:
                 result = await build_edges_for_wallet(
-                    client, w["address"], api_key,
+                    _edge_client, w["address"], api_key,
                     max_pages=max_pages_per_wallet,
                     chain=chain,
                 )
@@ -299,13 +305,14 @@ async def run_edge_builder(
                 total_transfers += result["transfers_processed"]
                 wallets_processed += 1
 
-                if (i + 1) % 10 == 0:
-                    logger.info(
-                        f"Edge builder progress: {i + 1}/{len(wallets)} wallets, "
-                        f"{total_edges} edges, {total_transfers} transfers"
+                if i < 5 or (i + 1) % 50 == 0:
+                    logger.error(
+                        f"[edge_builder] wallet {w['address'][:12]}... done: "
+                        f"edges={result['edges_upserted']}, txs={result['transfers_processed']}, "
+                        f"pages={result['pages_fetched']} | running_total: {total_edges} edges, {wallets_processed} wallets"
                     )
             except Exception as e:
-                logger.error(f"Edge build failed for {w['address'][:10]}…: {e}")
+                logger.error(f"[edge_builder] wallet {w['address'][:12]}... FAILED: {type(e).__name__}: {e}")
                 execute(
                     """
                     INSERT INTO wallet_graph.edge_build_status (wallet_address, chain, status)
@@ -314,6 +321,8 @@ async def run_edge_builder(
                     """,
                     (w["address"], chain),
                 )
+    finally:
+        await _edge_client.aclose()
 
     logger.error(
         f"[edge_builder] {chain}: examined {wallets_processed} wallets, "
