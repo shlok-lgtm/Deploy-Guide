@@ -8447,6 +8447,104 @@ async def state_root_latest():
     }
 
 
+def _attestation_row_to_dict(row: dict) -> dict:
+    """Shape a state_attestations row for API output."""
+    ts = row.get("cycle_timestamp")
+    return {
+        "domain": row.get("domain"),
+        "entity_id": row.get("entity_id"),
+        "batch_hash": row.get("batch_hash"),
+        "record_count": row.get("record_count"),
+        "methodology_version": row.get("methodology_version"),
+        "cycle_timestamp": ts.isoformat() if hasattr(ts, "isoformat") else ts,
+    }
+
+
+@app.get("/api/attestation/{domain}/latest")
+async def attestation_domain_latest(
+    domain: str,
+    entity_id: str = Query(default=None),
+):
+    """Most-recent attestation row for a single domain.
+
+    Optional `entity_id` narrows to per-entity attestations (e.g.
+    `?entity_id=usdc` for sii_components, or `?entity_id=aave` for
+    psi_components / rpi_components). When omitted, returns the most
+    recent row regardless of entity_id (matches get_latest_attestation
+    when entity_id is None — domain-level batch attestations).
+    """
+    if entity_id:
+        row = fetch_one(
+            """
+            SELECT domain, entity_id, batch_hash, record_count,
+                   methodology_version, cycle_timestamp
+            FROM state_attestations
+            WHERE domain = %s AND entity_id = %s
+            ORDER BY cycle_timestamp DESC
+            LIMIT 1
+            """,
+            (domain, entity_id),
+        )
+    else:
+        row = fetch_one(
+            """
+            SELECT domain, entity_id, batch_hash, record_count,
+                   methodology_version, cycle_timestamp
+            FROM state_attestations
+            WHERE domain = %s
+            ORDER BY cycle_timestamp DESC
+            LIMIT 1
+            """,
+            (domain,),
+        )
+    if not row:
+        raise HTTPException(404, f"No attestation found for domain={domain}")
+    return _attestation_row_to_dict(row)
+
+
+@app.get("/api/attestation/{domain}/history")
+async def attestation_domain_history(
+    domain: str,
+    entity_id: str = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=1000),
+):
+    """Time-ordered (newest first) history of attestations for a domain.
+
+    Up to `limit` rows (max 1000). Optional `entity_id` filter behaves
+    the same way as the /latest endpoint.
+    """
+    if entity_id:
+        rows = fetch_all(
+            """
+            SELECT domain, entity_id, batch_hash, record_count,
+                   methodology_version, cycle_timestamp
+            FROM state_attestations
+            WHERE domain = %s AND entity_id = %s
+            ORDER BY cycle_timestamp DESC
+            LIMIT %s
+            """,
+            (domain, entity_id, limit),
+        )
+    else:
+        rows = fetch_all(
+            """
+            SELECT domain, entity_id, batch_hash, record_count,
+                   methodology_version, cycle_timestamp
+            FROM state_attestations
+            WHERE domain = %s
+            ORDER BY cycle_timestamp DESC
+            LIMIT %s
+            """,
+            (domain, limit),
+        )
+    return {
+        "domain": domain,
+        "entity_id": entity_id,
+        "count": len(rows or []),
+        "attestations": [_attestation_row_to_dict(r) for r in (rows or [])],
+    }
+
+
 # =============================================================================
 # Provenance Proofs
 # =============================================================================

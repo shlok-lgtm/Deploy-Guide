@@ -974,11 +974,27 @@ async def run_fast_cycle():
         logger.info("Running PSI scoring cycle...")
         psi_results = run_psi_scoring()
         logger.info(f"PSI scoring complete: {len(psi_results)} protocols scored")
-        # Attest PSI scores
+        # Attest PSI per-component scores per protocol — mirrors the
+        # sii_components pattern (entity_id=protocol_slug, payload is the
+        # full component vector). Lets a verifier reconstruct per-component
+        # scores from psi_components.component_scores and match the hash.
         try:
             from app.state_attestation import attest_state
-            if psi_results:
-                attest_state("psi_components", [{"slug": r.get("protocol_slug", ""), "score": r.get("overall_score")} for r in psi_results if isinstance(r, dict)])
+            for r in psi_results or []:
+                if not isinstance(r, dict):
+                    continue
+                slug = r.get("protocol_slug")
+                comp_scores = r.get("component_scores") or {}
+                if not slug or not comp_scores:
+                    continue
+                attest_state(
+                    "psi_components",
+                    [
+                        {"id": cid, "score": round(float(s) if s is not None else 0.0, 4)}
+                        for cid, s in sorted(comp_scores.items())
+                    ],
+                    entity_id=slug,
+                )
         except Exception as ae:
             logger.debug(f"PSI attestation skipped: {ae}")
     except Exception as e:
@@ -1742,14 +1758,27 @@ async def run_slow_cycle():
             rpi_results = run_rpi_scoring()
             logger.info(f"RPI scoring complete: {len(rpi_results)} protocols scored")
 
-            # Attest RPI scores (14th domain)
+            # Attest RPI per-component scores per protocol — mirrors the
+            # sii_components pattern (entity_id=protocol_slug, payload is the
+            # full component vector). Previously hashed only {slug, overall_score}
+            # which a verifier could not use to reproduce per-component output.
             try:
                 from app.state_attestation import attest_state
-                if rpi_results:
-                    attest_state("rpi_components", [
-                        {"slug": r.get("protocol_slug", ""), "score": r.get("overall_score")}
-                        for r in rpi_results if isinstance(r, dict)
-                    ])
+                for r in rpi_results or []:
+                    if not isinstance(r, dict):
+                        continue
+                    slug = r.get("protocol_slug")
+                    comp_scores = r.get("component_scores") or {}
+                    if not slug or not comp_scores:
+                        continue
+                    attest_state(
+                        "rpi_components",
+                        [
+                            {"id": cid, "score": round(float(s) if s is not None else 0.0, 4)}
+                            for cid, s in sorted(comp_scores.items())
+                        ],
+                        entity_id=slug,
+                    )
             except Exception as ae:
                 logger.debug(f"RPI attestation skipped: {ae}")
         else:
