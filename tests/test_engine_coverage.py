@@ -64,17 +64,53 @@ CANONICAL_ENTITIES = [
 
 
 @pytest.fixture(scope="session")
-def coverage_responses(api):
+def coverage_api(base_url, session):
+    """GET helper for /api/engine/coverage/* that injects X-Admin-Key when
+    ADMIN_KEY is in the environment.
+
+    Why: the coverage endpoint is public (10/min per IP), and a single
+    test session legitimately makes ~10 requests across the canonical
+    entities + fuzzy + cache tests. When the operator runs the broader
+    test session sequence (S2a engine tests, manual diagnostic curls,
+    then C1 tests), any prior public request from the same IP eats into
+    the 60-second window's budget and tips C1 tests into 429s.
+
+    The coverage handler doesn't check the admin header — sending it
+    has no semantic effect on the response. But the rate-limit
+    middleware (after PR #41) recognizes a valid X-Admin-Key and
+    exempts the request, sidestepping the public-tier flake.
+
+    No admin key in env → no header sent → public-tier behavior
+    preserved (tests still subject to 10/min, just like an anonymous
+    consumer would be).
+    """
+    import os
+    admin_key = os.environ.get("ADMIN_KEY") or os.environ.get("BASIS_ADMIN_KEY")
+    headers = {"x-admin-key": admin_key} if admin_key else {}
+
+    def _get(path: str, **kwargs):
+        kwargs.setdefault("timeout", 30)
+        # Allow callers to pass extra headers; admin-key takes precedence
+        # so a caller can't accidentally clobber it.
+        merged_headers = {**kwargs.get("headers", {}), **headers}
+        kwargs["headers"] = merged_headers
+        return session.get(f"{base_url}{path}", **kwargs)
+
+    return _get
+
+
+@pytest.fixture(scope="session")
+def coverage_responses(coverage_api):
     """Fetch each canonical entity once at session start; share across tests.
 
     Avoids hammering the public 10/min rate limit. Tests that just inspect
     response shape consume zero additional requests by reading from this
     dict. Tests that explicitly need fresh requests (cache behavior) make
-    their own calls separately.
+    their own calls separately via coverage_api.
     """
     responses = {}
     for slug in CANONICAL_ENTITIES:
-        responses[slug] = api(f"/api/engine/coverage/{slug}")
+        responses[slug] = coverage_api(f"/api/engine/coverage/{slug}")
     return responses
 
 
@@ -189,9 +225,9 @@ def test_coverage_unknown_entity_returns_404(coverage_responses):
 # preload. Each consumes one request — accounted for in the rate budget.
 # ═════════════════════════════════════════════════════════════════
 
-def test_coverage_fuzzy_match_rseth(api):
+def test_coverage_fuzzy_match_rseth(coverage_api):
     """`rseth` should match `kelp-rseth` via trigram similarity."""
-    resp = api("/api/engine/coverage/rseth")
+    resp = coverage_api("/api/engine/coverage/rseth")
     if resp.status_code == 200:
         data = resp.json()
         assert data["identifier"] == "kelp-rseth"
@@ -203,7 +239,7 @@ def test_coverage_fuzzy_match_rseth(api):
         )
 
 
-def test_coverage_fuzzy_no_false_positive_dai(api):
+def test_coverage_fuzzy_no_false_positive_dai(coverage_api):
     """`dai` must not falsely match `dailyusd` or similar long slugs.
 
     Expected outcomes:
@@ -213,7 +249,7 @@ def test_coverage_fuzzy_no_false_positive_dai(api):
     The one outcome the test rejects: a 200 response whose identifier is not
     'dai' — which would indicate a fuzzy-match false positive.
     """
-    resp = api("/api/engine/coverage/dai")
+    resp = coverage_api("/api/engine/coverage/dai")
     if resp.status_code == 200:
         data = resp.json()
         assert data["identifier"] == "dai", (
@@ -260,17 +296,17 @@ def test_coverage_days_since_last_record_present(coverage_responses):
 # doc §11.3.
 # ═════════════════════════════════════════════════════════════════
 
-def test_coverage_cache_hit_behavior(api):
+def test_coverage_cache_hit_behavior(coverage_api):
     """Two consecutive calls succeed. Timing comparison is relaxed because
     the in-memory cache is per-worker and may not provide a measurable
     speedup under multi-worker deployments. See Step 0 doc §11.3."""
     t0 = time.time()
-    r1 = api("/api/engine/coverage/drift")
+    r1 = coverage_api("/api/engine/coverage/drift")
     t1 = time.time()
     assert r1.status_code == 200
 
     t2 = time.time()
-    r2 = api("/api/engine/coverage/drift")
+    r2 = coverage_api("/api/engine/coverage/drift")
     t3 = time.time()
     assert r2.status_code == 200
 
