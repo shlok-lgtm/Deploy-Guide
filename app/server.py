@@ -244,9 +244,34 @@ async def rate_limit_and_track(request: Request, call_next):
     elif path.startswith("/api/discovery"):
         entity_type = "discovery"
 
-    # Admin / ops / provenance-write endpoints — exempt from rate limiting but still logged
-    if path.startswith("/api/admin") or path.startswith("/api/ops") or (
-        path.startswith("/api/provenance/") and request.method == "POST"
+    # Admin / ops / provenance-write endpoints — exempt from rate limiting but still logged.
+    #
+    # Path-based exemptions: /api/admin/*, /api/ops/*, POST /api/provenance/* — historic
+    # convention; these endpoints are admin-protected by their own _check_admin_key() calls.
+    #
+    # Auth-based exemption (added with /api/engine/* admin routes): any request that presents
+    # a valid X-Admin-Key (or ?key=) matching the ADMIN_KEY env var is treated as admin
+    # context, regardless of path. This generalizes the prior path-list approach so future
+    # admin-protected endpoints don't have to be added to a list to escape the public
+    # 10/min limit. Public endpoints called WITHOUT the admin key remain rate-limited
+    # normally — e.g., /api/engine/coverage/{id} called by an anonymous user still gets the
+    # public tier.
+    _admin_key_env = os.environ.get("ADMIN_KEY", "")
+    _provided_admin_key = (
+        request.headers.get("x-admin-key", "")
+        or request.query_params.get("key", "")
+    )
+    is_admin_authenticated = (
+        bool(_admin_key_env)
+        and bool(_provided_admin_key)
+        and hmac.compare_digest(_provided_admin_key, _admin_key_env)
+    )
+
+    if (
+        path.startswith("/api/admin")
+        or path.startswith("/api/ops")
+        or (path.startswith("/api/provenance/") and request.method == "POST")
+        or is_admin_authenticated
     ):
         response = await call_next(request)
         elapsed_ms = int((time.time() - start_time) * 1000)

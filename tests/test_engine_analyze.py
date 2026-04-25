@@ -7,16 +7,26 @@ skip cleanly if ADMIN_KEY isn't available in the environment.
 
 Run:
     ADMIN_KEY=<key> BASE_URL=https://basisprotocol.xyz \\
+      DATABASE_URL=<prod-or-replica-url> \\
       pytest tests/test_engine_analyze.py -v
 
-Rate-limit budget (admin tier, 120/min): well under. ~15 requests across
-the eight tests including cleanup.
+DATABASE_URL is optional — if set, teardown deletes test rows directly via
+psycopg2 (fast, doesn't trip rate limit, works on test failure). If unset,
+teardown falls back to HTTP DELETE with a 0.5s sleep between calls so the
+admin rate budget stays intact.
 
-Test cleanup: each test appends any analysis IDs it creates to a shared
-list. An autouse fixture runs after every test and DELETEs them all. If
-DELETE fails (transient, already-gone, or linked-artifact 409), the test
-logs and continues — cleanup best-effort; production operator can GC
-stragglers via GET /api/engine/analyses?status=archived if needed.
+Rate-limit budget: with the auth-based exemption fix in app/server.py,
+requests carrying a valid X-Admin-Key are exempt from rate limiting
+entirely. The HTTP-DELETE fallback path still includes inter-call sleeps
+in case the test is run against a server without that fix applied.
+
+Test cleanup (two layers):
+  1. Session-start orphan sweep — at the start of the pytest session,
+     DELETE every (entity, event_date) row from the canonical test set.
+     Catches debris from prior failed runs.
+  2. Per-test cleanup — each test appends any analysis IDs it creates to
+     a shared list. After each test, DELETE them by ID. Direct DB delete
+     when DATABASE_URL is set; HTTP DELETE with sleep fallback otherwise.
 
 Tests:
   1. test_analyze_drift_returns_202              — happy path
@@ -25,6 +35,8 @@ Tests:
   4. test_analyze_unknown_entity_returns_404     — coverage check
   5. test_analyze_duplicate_returns_409          — uniqueness constraint
   6. test_analyze_force_new_archives_previous    — revision chain
+  6a. test_analyze_force_new_archives_previous_uuid_adapter
+                                                  — psycopg2 UUID regression
   7. test_list_analyses_filters_by_entity        — list endpoint
   8. test_get_analysis_unknown_id_returns_404    — GET 404
 """
@@ -32,11 +44,96 @@ Tests:
 from __future__ import annotations
 
 import os
+import sys
 import time
 import uuid
-from typing import Any, Iterator
+from datetime import date
+from typing import Any, Iterator, Optional
 
 import pytest
+
+
+# ═════════════════════════════════════════════════════════════════
+# Test fixture row keys
+#
+# Every (entity, event_date) pair used by tests in this file plus any
+# operator-run diagnostic curls. The session-start orphan sweep DELETEs
+# all rows matching this set so a hard test crash leaves no debris next
+# session.
+#
+# Adding a new test that uses a new (entity, event_date)? Add it here too.
+# ═════════════════════════════════════════════════════════════════
+
+TEST_FIXTURE_KEYS: list[tuple[str, date]] = [
+    ("drift", date(2026, 4, 1)),    # test_analyze_drift_returns_202
+    ("drift", date(2026, 4, 2)),    # test_analyze_duplicate_returns_409
+    ("drift", date(2026, 4, 3)),    # test_analyze_force_new_archives_previous
+    ("kelp-rseth", date(2026, 4, 18)),  # test_analyze_pending_flips_to_draft
+    ("usdc", date(2026, 4, 5)),     # uuid-adapter regression
+    ("layerzero", date(2026, 4, 4)),    # test_list_analyses_filters_by_entity
+    ("layerzero", date(2026, 4, 15)),   # operator diagnostic curl debris
+    ("layerzero", date(2026, 4, 30)),   # operator verification curl
+]
+
+
+# ═════════════════════════════════════════════════════════════════
+# DB connection helpers (used by cleanup; optional)
+#
+# psycopg2 import is local so the test module still imports cleanly when
+# the host doesn't have psycopg2 installed. Cleanup degrades to HTTP-only
+# in that case.
+# ═════════════════════════════════════════════════════════════════
+
+def _db_delete_by_ids(ids: list[str]) -> bool:
+    """Direct DB delete by primary key. Returns True if cleanup succeeded
+    (or there was nothing to clean up), False if DATABASE_URL isn't set
+    or the connection/query failed — caller falls back to HTTP."""
+    conn_string = os.environ.get("DATABASE_URL")
+    if not conn_string:
+        return False
+    try:
+        import psycopg2  # local import — may not be installed in the test env
+        with psycopg2.connect(conn_string) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM engine_analyses WHERE id = ANY(%s::uuid[])",
+                    ([str(i) for i in ids],),
+                )
+            conn.commit()
+        return True
+    except Exception as exc:
+        print(f"cleanup: DB delete by id failed: {exc}", file=sys.stderr)
+        return False
+
+
+def _db_delete_by_fixture_keys() -> int:
+    """Session-start sweep: delete every row matching the canonical test
+    (entity, event_date) set. Returns the row count deleted on success,
+    -1 if cleanup wasn't performed (no DATABASE_URL or connection error).
+    """
+    conn_string = os.environ.get("DATABASE_URL")
+    if not conn_string:
+        return -1
+    try:
+        import psycopg2
+        with psycopg2.connect(conn_string) as conn:
+            with conn.cursor() as cur:
+                # Postgres tuple-IN: (entity, event_date) IN ((%s, %s), ...)
+                # Use a single bound tuple-of-tuples; psycopg2 renders this
+                # as a row-constructor IN list.
+                cur.execute(
+                    """
+                    DELETE FROM engine_analyses
+                    WHERE (entity, event_date) IN %s
+                    """,
+                    (tuple(TEST_FIXTURE_KEYS),),
+                )
+                deleted = cur.rowcount
+            conn.commit()
+        return deleted
+    except Exception as exc:
+        print(f"cleanup: session-start sweep failed: {exc}", file=sys.stderr)
+        return -1
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -46,7 +143,7 @@ import pytest
 # Accept either ADMIN_KEY (server convention) or BASIS_ADMIN_KEY (S2a
 # prompt variant). Tests skip if neither is present so CI without the
 # secret doesn't break the build.
-def _resolve_admin_key() -> str | None:
+def _resolve_admin_key() -> Optional[str]:
     return os.environ.get("ADMIN_KEY") or os.environ.get("BASIS_ADMIN_KEY")
 
 
@@ -98,23 +195,56 @@ def admin_api(base_url, session, admin_key) -> _AdminAPI:
     return _AdminAPI(session, base_url, admin_key)
 
 
+# Session-start orphan sweep — runs once per pytest session, before any
+# tests in this file. Catches debris from crashed prior runs by DELETEing
+# rows for every (entity, event_date) in the canonical test set.
+#
+# Silently skips if DATABASE_URL isn't set; per-test cleanup will do its
+# best via HTTP. If the sweep fails for any other reason, the session
+# continues — tests will still run, they'll just have to coexist with any
+# stale rows (and 409 on duplicates).
+@pytest.fixture(scope="session", autouse=True)
+def session_engine_cleanup():
+    deleted = _db_delete_by_fixture_keys()
+    if deleted > 0:
+        print(
+            f"\n[engine-tests] session-start sweep: deleted {deleted} stale row(s)",
+            file=sys.stderr,
+        )
+    yield
+    # End-of-session sweep: same cleanup, in case crashes left debris.
+    _db_delete_by_fixture_keys()
+
+
 # Shared list of analysis IDs created during a single test. Reset per test.
 _created_ids: list[str] = []
 
 
 @pytest.fixture(autouse=True)
 def cleanup_created_analyses(admin_api) -> Iterator[None]:
-    """After each test, DELETE every analysis it created. Best-effort;
-    failures are logged (via assertion message context) but don't fail
-    the test since we're already past the assertions."""
+    """Per-test cleanup. Direct DB DELETE if DATABASE_URL is set;
+    HTTP DELETE with sleeps as fallback. Best-effort — failures are
+    logged but don't fail the test."""
     _created_ids.clear()
     yield
-    for aid in list(_created_ids):
+    if not _created_ids:
+        return
+
+    ids_to_delete = list(_created_ids)
+    if _db_delete_by_ids(ids_to_delete):
+        _created_ids.clear()
+        return
+
+    # Fallback: HTTP DELETE with inter-call sleep so the admin rate budget
+    # stays intact even on a server without the auth-based rate-limit
+    # exemption. With the exemption applied, the sleep is unnecessary but
+    # harmless.
+    for aid in ids_to_delete:
         try:
             admin_api.delete(f"/api/engine/analyses/{aid}")
+            time.sleep(0.5)
         except Exception as exc:
-            # Don't let cleanup crash the test session; log via stderr.
-            print(f"cleanup: failed to delete {aid}: {exc}")
+            print(f"cleanup: HTTP delete failed for {aid}: {exc}", file=sys.stderr)
     _created_ids.clear()
 
 
