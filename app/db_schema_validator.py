@@ -209,6 +209,7 @@ EXPECTED_COLUMNS = {
         "id", "from_address", "to_address", "transfer_count",
         "total_value_usd", "first_transfer_at", "last_transfer_at",
         "weight", "tokens_transferred", "created_at", "updated_at",
+        "edge_type",
     ],
     "wallet_graph.edge_build_status": [
         "wallet_address", "chain", "last_built_at", "transfers_processed",

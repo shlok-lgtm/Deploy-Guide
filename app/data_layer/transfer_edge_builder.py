@@ -130,9 +130,9 @@ async def _process_wallet(wallet: str, api_key: str) -> dict:
             execute("""
                 INSERT INTO wallet_graph.wallet_edges
                     (from_address, to_address, chain, transfer_count, total_value_usd,
-                     first_transfer_at, last_transfer_at, weight, tokens_transferred)
-                VALUES (%s, %s, 'ethereum', %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (from_address, to_address, chain) DO UPDATE SET
+                     first_transfer_at, last_transfer_at, weight, tokens_transferred, edge_type)
+                VALUES (%s, %s, 'ethereum', %s, %s, %s, %s, %s, %s, 'transfer')
+                ON CONFLICT (from_address, to_address, chain, edge_type) DO UPDATE SET
                     transfer_count = wallet_graph.wallet_edges.transfer_count + EXCLUDED.transfer_count,
                     total_value_usd = wallet_graph.wallet_edges.total_value_usd + EXCLUDED.total_value_usd,
                     last_transfer_at = GREATEST(wallet_graph.wallet_edges.last_transfer_at, EXCLUDED.last_transfer_at),

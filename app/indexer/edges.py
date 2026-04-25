@@ -186,9 +186,9 @@ async def build_edges_for_wallet(
             """
             INSERT INTO wallet_graph.wallet_edges
                 (from_address, to_address, chain, transfer_count, total_value_usd,
-                 first_transfer_at, last_transfer_at, tokens_transferred, weight)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (from_address, to_address, chain) DO UPDATE SET
+                 first_transfer_at, last_transfer_at, tokens_transferred, weight, edge_type)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'shared_holder')
+            ON CONFLICT (from_address, to_address, chain, edge_type) DO UPDATE SET
                 transfer_count = wallet_graph.wallet_edges.transfer_count + EXCLUDED.transfer_count,
                 total_value_usd = wallet_graph.wallet_edges.total_value_usd + EXCLUDED.total_value_usd,
                 first_transfer_at = LEAST(wallet_graph.wallet_edges.first_transfer_at, EXCLUDED.first_transfer_at),

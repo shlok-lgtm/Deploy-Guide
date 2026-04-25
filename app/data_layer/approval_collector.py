@@ -111,6 +111,7 @@ async def run_approval_collection() -> dict:
             parsed_count = 0
             skipped_dedup = 0
             skipped_unchanged = 0
+            wallet_inserted = 0
             seen_approvals = set()
             for ii, item in enumerate(items):
                 token_obj = item.get("token") or {}
@@ -172,6 +173,7 @@ async def run_approval_collection() -> dict:
                             prev_allowance if prev_allowance is not None else 0,
                         ))
                     total_inserted += 1
+                    wallet_inserted += 1
                 except Exception as e:
                     total_errors += 1
                     if total_errors <= 5:
@@ -180,7 +182,8 @@ async def run_approval_collection() -> dict:
             if wi < 5 or wi % 100 == 0:
                 logger.error(
                     f"[approval_collector] wallet {addr[:12]}: parsed={parsed_count}/{len(items)} "
-                    f"dedup={skipped_dedup} unchanged={skipped_unchanged} inserted={total_inserted}"
+                    f"dedup={skipped_dedup} unchanged={skipped_unchanged} "
+                    f"wallet_inserted={wallet_inserted} total_inserted={total_inserted}"
                 )
 
         except Exception as e:
