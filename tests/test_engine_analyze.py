@@ -308,16 +308,34 @@ def test_analyze_pending_flips_to_draft(admin_api):
         f"status should have flipped to draft after 3.5s, still: "
         f"{analysis['status']}"
     )
-    # Stub interpretation is present and tagged correctly
+    # Stub interpretation is present and tagged correctly. The interpretation
+    # itself stays stubbed through S2b; S2c will replace these tags with the
+    # real LLM model_id + prompt_version.
     assert analysis["interpretation"]["model_id"] == "template:stub"
     assert analysis["interpretation"]["prompt_version"] == "stub-s2a"
     assert analysis["interpretation"]["confidence"] == "insufficient"
-    # Signal is empty (S2b populates)
-    assert analysis["signal"]["baseline"] == []
-    assert analysis["signal"]["pre_event"] == []
-    assert analysis["signal"]["event_window"] == []
-    assert analysis["signal"]["post_event"] == []
-    # Recommendation blocks all artifact types
+    # Stage stamp: bumped from v0.1-s2a-stub when S2b started populating real
+    # signal data. S2c will bump again when LLM interpretation lands.
+    assert analysis["analysis_version"] == "v0.1-s2b-real-signal"
+    # Signal is now populated (S2b shipped real observations). kelp-rseth has
+    # live LSTI coverage with deep history, so at least one event window has
+    # observations. Don't assert exact counts — production data evolves.
+    signal = analysis["signal"]
+    assert signal["baseline"] == [], (
+        "baseline must be empty when event_date is set (schema invariant)"
+    )
+    total_event_obs = (
+        len(signal["pre_event"])
+        + len(signal["event_window"])
+        + len(signal["post_event"])
+    )
+    assert total_event_obs > 0, (
+        f"expected populated signal post-S2b for kelp-rseth/2026-04-18; "
+        f"got pre={len(signal['pre_event'])}, "
+        f"event={len(signal['event_window'])}, "
+        f"post={len(signal['post_event'])}"
+    )
+    # Recommendation still blocks all artifact types — stays stub through S2c
     assert analysis["artifact_recommendation"]["recommended"] == "nothing"
 
 
