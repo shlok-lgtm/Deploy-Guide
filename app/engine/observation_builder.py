@@ -131,6 +131,20 @@ MEASURE_UNITS: dict[str, str] = {
     "oracle_score": "score_0_100",
     "governance_score": "score_0_100",
     "network_score": "score_0_100",
+
+    # Measures discovered during S2b verification — added in S2c.
+    # The "score" measure is ambiguous (different indexes use it for
+    # different things). Disambiguate it by index in a future cleanup;
+    # for v1 we keep a generic mapping so analyses don't 'unknown'-warn
+    # on it constantly.
+    "collateral_diversity": "score_0_100",
+    "compensation_transparency": "score_0_100",
+    "concentration_top3": "ratio_0_1",
+    "governance": "score_0_100",
+    "has_stablecoin_exposure": "boolean",
+    "meeting_cadence": "count",
+    "score": "score_0_100",  # FIXME: ambiguous — disambiguate by index in a future PR
+    "unique_tokens": "count",
 }
 
 

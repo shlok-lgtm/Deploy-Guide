@@ -11,6 +11,8 @@ Current state:
   - analyze_router   registered (Component 2a / S2a — skeleton with stub
                                  interpretation; S2b adds real Signal,
                                  S2c adds LLM interpretation)
+  - budget_router    registered (Component 2c / S2c — admin GET /budget
+                                 for cost observability)
 
 Future sessions add:
   - render_router    (Component 3)
@@ -22,11 +24,13 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.engine.analyze_router import router as analyze_router
+from app.engine.budget_router import router as budget_router
 from app.engine.coverage_router import router as coverage_router
 
 router = APIRouter()
 router.include_router(coverage_router)
 router.include_router(analyze_router)
+router.include_router(budget_router)
 
 # When C3 lands:
 # from app.engine.render_router import router as render_router
