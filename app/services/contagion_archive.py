@@ -44,9 +44,12 @@ def _run_contagion_traversal(
     seed_addrs = []
     if source_entity_type == "stablecoin":
         rows = fetch_all(
-            """SELECT DISTINCT wallet_address FROM wallet_graph.wallet_holdings
-               WHERE UPPER(symbol) = UPPER(%s)
-               ORDER BY value_usd DESC NULLS LAST LIMIT 50""",
+            """SELECT wallet_address FROM (
+                   SELECT DISTINCT ON (wallet_address) wallet_address, value_usd
+                   FROM wallet_graph.wallet_holdings
+                   WHERE UPPER(symbol) = UPPER(%s)
+                   ORDER BY wallet_address, value_usd DESC NULLS LAST
+               ) sub ORDER BY value_usd DESC NULLS LAST LIMIT 50""",
             (source_entity_id,),
         )
         seed_addrs = [r["wallet_address"] for r in (rows or [])]
@@ -80,7 +83,7 @@ def _run_contagion_traversal(
                     e.weight,
                     e.total_value_usd,
                     1 AS depth,
-                    ARRAY[e.from_address, e.to_address] AS path
+                    ARRAY[e.from_address, e.to_address]::varchar[] AS path
                 FROM wallet_graph.wallet_edges e
                 WHERE (e.from_address = ANY(%s) OR e.to_address = ANY(%s))
                   AND e.weight > 0.05

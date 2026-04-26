@@ -6610,7 +6610,7 @@ async def cqi_contagion(
                 e.weight,
                 e.total_value_usd,
                 1 AS depth,
-                ARRAY[e.from_address, e.to_address] AS path
+                ARRAY[e.from_address, e.to_address]::varchar[] AS path
             FROM wallet_graph.wallet_edges e
             WHERE (e.from_address = ANY(%s) OR e.to_address = ANY(%s))
               AND e.weight > 0.05

@@ -440,7 +440,7 @@ def register_wallet_routes(app: FastAPI) -> None:
                     1 AS depth,
                     ARRAY[%s,
                         CASE WHEN from_address = %s THEN to_address ELSE from_address END
-                    ] AS path
+                    ]::varchar[] AS path
                 FROM wallet_graph.wallet_edges
                 LEFT JOIN wallet_graph.actor_classifications src_ac
                     ON src_ac.wallet_address = %s
