@@ -15,10 +15,12 @@ import re
 import json
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone, date
 
 from app.database import fetch_all, fetch_one, execute
 from app.services import parallel_client, reducto_client, firecrawl_client
+from app.api_usage_tracker import track_api_call
 
 logger = logging.getLogger(__name__)
 
@@ -1066,7 +1068,21 @@ async def _collect_api_source(symbol: str, url: str, prefix: str) -> dict | None
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(url)
+            _t0 = time.monotonic()
+            _status = None
+            try:
+                resp = await client.get(url)
+                _status = resp.status_code
+            except Exception:
+                _status = 0
+                raise
+            finally:
+                try:
+                    from urllib.parse import urlparse as _urlparse
+                    _provider = _urlparse(url).netloc or "issuer"
+                    track_api_call(provider=_provider, endpoint="GET", caller="services.cda_collector", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
+                except Exception:
+                    pass
             resp.raise_for_status()
             data = resp.json()
 

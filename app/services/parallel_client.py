@@ -13,7 +13,9 @@ import os
 import asyncio
 import httpx
 import logging
+import time
 from typing import Optional, Dict, Any, List
+from app.api_usage_tracker import track_api_call
 
 logger = logging.getLogger(__name__)
 
@@ -53,11 +55,23 @@ async def extract(url: str, objective: str = None, full_content: bool = True) ->
             payload["objective"] = objective
 
         try:
-            resp = await client.post(
-                f"{API_HOST}/v1beta/extract",
-                headers=_headers(),
-                json=payload
-            )
+            _t0 = time.monotonic()
+            _status = None
+            try:
+                resp = await client.post(
+                    f"{API_HOST}/v1beta/extract",
+                    headers=_headers(),
+                    json=payload
+                )
+                _status = resp.status_code
+            except Exception:
+                _status = 0
+                raise
+            finally:
+                try:
+                    track_api_call(provider="parallel", endpoint="/v1beta/extract", caller="services.parallel_client", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
+                except Exception:
+                    pass
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
@@ -82,11 +96,23 @@ async def extract_batch(urls: List[str], objective: str = None, full_content: bo
             payload["objective"] = objective
 
         try:
-            resp = await client.post(
-                f"{API_HOST}/v1beta/extract",
-                headers=_headers(),
-                json=payload
-            )
+            _t0 = time.monotonic()
+            _status = None
+            try:
+                resp = await client.post(
+                    f"{API_HOST}/v1beta/extract",
+                    headers=_headers(),
+                    json=payload
+                )
+                _status = resp.status_code
+            except Exception:
+                _status = 0
+                raise
+            finally:
+                try:
+                    track_api_call(provider="parallel", endpoint="/v1beta/extract_batch", caller="services.parallel_client", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
+                except Exception:
+                    pass
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
@@ -107,11 +133,23 @@ async def search(query: str, num_results: int = 10) -> dict:
 
     async with httpx.AsyncClient(timeout=30) as client:
         try:
-            resp = await client.post(
-                f"{API_HOST}/v1beta/search",
-                headers=_headers(),
-                json={"search_queries": [query]}
-            )
+            _t0 = time.monotonic()
+            _status = None
+            try:
+                resp = await client.post(
+                    f"{API_HOST}/v1beta/search",
+                    headers=_headers(),
+                    json={"search_queries": [query]}
+                )
+                _status = resp.status_code
+            except Exception:
+                _status = 0
+                raise
+            finally:
+                try:
+                    track_api_call(provider="parallel", endpoint="/v1beta/search", caller="services.parallel_client", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
+                except Exception:
+                    pass
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
@@ -167,11 +205,23 @@ async def task(
     async with httpx.AsyncClient(timeout=poll_timeout + 30) as client:
         # Step 1: Create run
         try:
-            resp = await client.post(
-                f"{API_HOST}/v1/tasks/runs",
-                headers=_headers(),
-                json=body,
-            )
+            _t0 = time.monotonic()
+            _status = None
+            try:
+                resp = await client.post(
+                    f"{API_HOST}/v1/tasks/runs",
+                    headers=_headers(),
+                    json=body,
+                )
+                _status = resp.status_code
+            except Exception:
+                _status = 0
+                raise
+            finally:
+                try:
+                    track_api_call(provider="parallel", endpoint="/v1/tasks/runs", caller="services.parallel_client", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
+                except Exception:
+                    pass
             resp.raise_for_status()
             run_data = resp.json()
         except Exception as e:
@@ -187,11 +237,23 @@ async def task(
 
         # Step 2: Poll for result (blocking endpoint with server-side timeout)
         try:
-            resp = await client.get(
-                f"{API_HOST}/v1/tasks/runs/{run_id}/result",
-                headers=_headers(),
-                params={"timeout": poll_timeout},
-            )
+            _t0 = time.monotonic()
+            _status = None
+            try:
+                resp = await client.get(
+                    f"{API_HOST}/v1/tasks/runs/{run_id}/result",
+                    headers=_headers(),
+                    params={"timeout": poll_timeout},
+                )
+                _status = resp.status_code
+            except Exception:
+                _status = 0
+                raise
+            finally:
+                try:
+                    track_api_call(provider="parallel", endpoint="/v1/tasks/runs/result", caller="services.parallel_client", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
+                except Exception:
+                    pass
             resp.raise_for_status()
             result = resp.json()
         except httpx.HTTPStatusError as e:
@@ -249,11 +311,23 @@ async def monitor_create(
 
     async with httpx.AsyncClient(timeout=30) as client:
         try:
-            resp = await client.post(
-                f"{API_HOST}/v1alpha/monitors",
-                headers=_headers(),
-                json=payload,
-            )
+            _t0 = time.monotonic()
+            _status = None
+            try:
+                resp = await client.post(
+                    f"{API_HOST}/v1alpha/monitors",
+                    headers=_headers(),
+                    json=payload,
+                )
+                _status = resp.status_code
+            except Exception:
+                _status = 0
+                raise
+            finally:
+                try:
+                    track_api_call(provider="parallel", endpoint="/v1alpha/monitors", caller="services.parallel_client", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
+                except Exception:
+                    pass
             resp.raise_for_status()
             return resp.json()
         except httpx.HTTPStatusError as e:
@@ -272,10 +346,22 @@ async def monitor_list() -> dict:
 
     async with httpx.AsyncClient(timeout=30) as client:
         try:
-            resp = await client.get(
-                f"{API_HOST}/v1alpha/monitors",
-                headers=_headers(),
-            )
+            _t0 = time.monotonic()
+            _status = None
+            try:
+                resp = await client.get(
+                    f"{API_HOST}/v1alpha/monitors",
+                    headers=_headers(),
+                )
+                _status = resp.status_code
+            except Exception:
+                _status = 0
+                raise
+            finally:
+                try:
+                    track_api_call(provider="parallel", endpoint="/v1alpha/monitors", caller="services.parallel_client", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
+                except Exception:
+                    pass
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
@@ -290,10 +376,22 @@ async def monitor_delete(monitor_id: str) -> dict:
 
     async with httpx.AsyncClient(timeout=30) as client:
         try:
-            resp = await client.delete(
-                f"{API_HOST}/v1alpha/monitors/{monitor_id}",
-                headers=_headers(),
-            )
+            _t0 = time.monotonic()
+            _status = None
+            try:
+                resp = await client.delete(
+                    f"{API_HOST}/v1alpha/monitors/{monitor_id}",
+                    headers=_headers(),
+                )
+                _status = resp.status_code
+            except Exception:
+                _status = 0
+                raise
+            finally:
+                try:
+                    track_api_call(provider="parallel", endpoint=f"/v1alpha/monitors/{monitor_id}", caller="services.parallel_client", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
+                except Exception:
+                    pass
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
@@ -308,11 +406,23 @@ async def monitor_events(monitor_id: str, lookback: str = "10d") -> dict:
 
     async with httpx.AsyncClient(timeout=30) as client:
         try:
-            resp = await client.get(
-                f"{API_HOST}/v1alpha/monitors/{monitor_id}/events",
-                headers=_headers(),
-                params={"lookback_period": lookback},
-            )
+            _t0 = time.monotonic()
+            _status = None
+            try:
+                resp = await client.get(
+                    f"{API_HOST}/v1alpha/monitors/{monitor_id}/events",
+                    headers=_headers(),
+                    params={"lookback_period": lookback},
+                )
+                _status = resp.status_code
+            except Exception:
+                _status = 0
+                raise
+            finally:
+                try:
+                    track_api_call(provider="parallel", endpoint=f"/v1alpha/monitors/{monitor_id}/events", caller="services.parallel_client", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
+                except Exception:
+                    pass
             resp.raise_for_status()
             return resp.json()
         except Exception as e:

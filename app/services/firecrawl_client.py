@@ -14,7 +14,9 @@ import base64
 import os
 import re
 import logging
+import time
 import httpx
+from app.api_usage_tracker import track_api_call
 
 try:
     from firecrawl import Firecrawl
@@ -98,7 +100,19 @@ def discover_framer_pdfs(page_url: str) -> list[str]:
     all_pdfs = []
     for mod_url in component_modules:
         try:
-            resp = httpx.get(mod_url, timeout=15, follow_redirects=True)
+            _t0 = time.monotonic()
+            _status = None
+            try:
+                resp = httpx.get(mod_url, timeout=15, follow_redirects=True)
+                _status = resp.status_code
+            except Exception:
+                _status = 0
+                raise
+            finally:
+                try:
+                    track_api_call(provider="firecrawl", endpoint="framer_module", caller="services.firecrawl_client", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
+                except Exception:
+                    pass
             pdf_urls = re.findall(
                 r'https://framerusercontent\.com/assets/[A-Za-z0-9_]+\.pdf',
                 resp.text,
@@ -145,7 +159,19 @@ def identify_most_recent_attestation(pdf_urls: list[str]) -> str | None:
 
     for url in candidates:
         try:
-            resp = httpx.get(url, timeout=30, follow_redirects=True)
+            _t0 = time.monotonic()
+            _status = None
+            try:
+                resp = httpx.get(url, timeout=30, follow_redirects=True)
+                _status = resp.status_code
+            except Exception:
+                _status = 0
+                raise
+            finally:
+                try:
+                    track_api_call(provider="firecrawl", endpoint="pdf_probe", caller="services.firecrawl_client", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
+                except Exception:
+                    pass
             if len(resp.content) < 100_000:
                 continue  # Too small for an attestation report
 

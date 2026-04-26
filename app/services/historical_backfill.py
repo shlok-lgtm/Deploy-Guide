@@ -15,6 +15,7 @@ import httpx
 
 from app.database import execute, fetch_one, fetch_all, get_conn
 from app.config import STABLECOIN_REGISTRY
+from app.api_usage_tracker import track_api_call
 
 logger = logging.getLogger(__name__)
 
@@ -134,12 +135,24 @@ def backfill_coin_sync(
             data = None
             for attempt in range(2):
                 try:
-                    resp = client.get(
-                        f"{BASE_URL}/coins/{coingecko_id}/market_chart/range",
-                        params={"vs_currency": "usd", "from": from_ts, "to": to_ts},
-                        headers=_headers(),
-                        timeout=30,
-                    )
+                    _t0 = time.monotonic()
+                    _status = None
+                    try:
+                        resp = client.get(
+                            f"{BASE_URL}/coins/{coingecko_id}/market_chart/range",
+                            params={"vs_currency": "usd", "from": from_ts, "to": to_ts},
+                            headers=_headers(),
+                            timeout=30,
+                        )
+                        _status = resp.status_code
+                    except Exception:
+                        _status = 0
+                        raise
+                    finally:
+                        try:
+                            track_api_call(provider="coingecko", endpoint=f"/coins/{coingecko_id}/market_chart/range", caller="services.historical_backfill", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
+                        except Exception:
+                            pass
                     resp.raise_for_status()
                     data = resp.json()
                     break

@@ -12,9 +12,12 @@ spec file that contains everything needed to build the collector:
 
 import os
 import logging
+import time
 from datetime import datetime, timezone
 
 import httpx
+
+from app.api_usage_tracker import track_api_call
 
 logger = logging.getLogger(__name__)
 
@@ -58,12 +61,24 @@ def _get_stablecoin_addresses_on_chain(chain_name: str) -> list:
 
     for stable in TARGET_STABLECOINS:
         try:
-            resp = httpx.get(
-                f"{CG_BASE}/coins/{stable['coingecko_id']}",
-                headers=headers,
-                params={"localization": "false", "tickers": "false", "market_data": "false"},
-                timeout=15,
-            )
+            _t0 = time.monotonic()
+            _status = None
+            try:
+                resp = httpx.get(
+                    f"{CG_BASE}/coins/{stable['coingecko_id']}",
+                    headers=headers,
+                    params={"localization": "false", "tickers": "false", "market_data": "false"},
+                    timeout=15,
+                )
+                _status = resp.status_code
+            except Exception:
+                _status = 0
+                raise
+            finally:
+                try:
+                    track_api_call(provider="coingecko", endpoint=f"/coins/{stable['coingecko_id']}", caller="services.chain_spec_generator", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
+                except Exception:
+                    pass
             if resp.status_code != 200:
                 continue
 
