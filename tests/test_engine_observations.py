@@ -173,9 +173,14 @@ def _track(analysis_id: str) -> str:
     return analysis_id
 
 
-def _wait_for_draft(admin_api, analysis_id: str, timeout: float = 6.0) -> dict:
+def _wait_for_draft(admin_api, analysis_id: str, timeout: float = 30.0) -> dict:
     """Poll GET /api/engine/analyses/{id} until status != 'pending'.
-    Returns the final response body."""
+    Returns the final response body.
+
+    Timeout bumped from 6s to 30s for S2c-async: the LLM roundtrip in
+    finalize_analysis can take 5–15s on a cache miss before status
+    flips to draft. Cache hits and fallback paths complete in <1s.
+    """
     deadline = time.time() + timeout
     body: dict = {}
     while time.time() < deadline:
@@ -341,10 +346,25 @@ def test_drift_analysis_populates_real_observations(admin_api):
     ]
     assert len(psi_obs) > 0, "expected PSI observations from backfill"
 
-    # version stamp: real-signal flavor
-    assert body_full["analysis_version"] == "v0.1-s2b-real-signal"
-    # interpretation is still stub
-    assert body_full["interpretation"]["model_id"] == "template:stub"
+    # Stage stamp: bumped to the S2c value when LLM interpretation
+    # landed. Forward-stable detector continues to flag drift if a
+    # future stage ships without bumping the stamp.
+    assert body_full["analysis_version"] == "v0.1-s2c-llm-interpretation"
+
+    # Real LLM interpretation tags (S2c). Accept the fallback path so
+    # CI doesn't fail on a known-degraded production state (no
+    # ANTHROPIC_API_KEY, budget exhausted). Skip with a clear reason
+    # rather than failing — operator sees the cause.
+    interp_model_id = body_full["interpretation"]["model_id"]
+    assert interp_model_id in ("claude-sonnet-4-6", "template:fallback"), (
+        f"unexpected model_id: {interp_model_id!r}"
+    )
+    if interp_model_id == "template:fallback":
+        pytest.skip(
+            f"LLM unavailable (fallback returned). Reason: "
+            f"{body_full['interpretation'].get('confidence_reasoning')!r}. "
+            "Set ANTHROPIC_API_KEY and ensure budget headroom, then re-run."
+        )
 
 
 # ═════════════════════════════════════════════════════════════════

@@ -28,8 +28,6 @@ from typing import Optional
 from uuid import UUID
 
 from app.engine.coverage import get_entity_coverage
-from app.engine.interpretation import get_or_call_interpretation
-from app.engine.observation_builder import build_signal
 from app.engine.schemas import (
     AnalysisCreate,
     ArtifactRecommendation,
@@ -38,11 +36,15 @@ from app.engine.schemas import (
     Signal,
 )
 
-# Bumped from v0.1-s2b-real-signal: interpretation is now LLM-generated (per
-# S2c). artifact_recommendation remains stubbed; the renderer in C3/S3 fills
-# that in based on coverage_quality + signal + interpretation.
+# Stage stamp on the persisted analysis. Bumped each time the engine's
+# behavior shifts so a future reviewer can tell which version produced
+# any given row.
 ANALYSIS_VERSION_S2A = "v0.1-s2c-llm-interpretation"
-STUB_PROMPT_VERSION = "stub-s2a"  # legacy constants — only used if LLM path is bypassed
+# Stub identifiers — used by the skeleton AnalysisCreate that gets INSERTed
+# at status=pending. The background task replaces signal/interpretation
+# with real values before flipping to draft, so persisted draft rows
+# never have these tags.
+STUB_PROMPT_VERSION = "stub-s2a"
 STUB_MODEL_ID = "template:stub"
 
 
@@ -155,41 +157,28 @@ def build_stub_analysis(
     previous_analysis_id: Optional[UUID] = None,
     supersedes_reason: Optional[str] = None,
 ) -> AnalysisCreate:
-    """Assemble an AnalysisCreate.
+    """Build the SKELETON AnalysisCreate that gets INSERTed at status=pending.
 
-    S2c: Signal is real (S2b) AND interpretation is real (LLM-generated
-    via app.engine.interpretation.get_or_call_interpretation). Only
-    artifact_recommendation remains a stub; C3/S3 ships the renderer
-    that picks it.
+    Signal and interpretation are stubs at this stage. The background task
+    (app.engine.background_tasks.finalize_analysis) replaces them with
+    real values asynchronously and then flips status pending → draft.
 
-    Function name preserved from S2a so analyze_router doesn't need to
-    change. The "stub" qualifier now applies only to
-    artifact_recommendation.
+    This was previously doing the heavy work synchronously, which meant
+    POST /api/engine/analyze blocked for ~5–15 seconds on the LLM
+    roundtrip — defeating the async pending→draft contract from S2a.
+    Restoring the original contract: POST returns 202 in <1s; the
+    background task does signal computation + LLM interpretation.
+
+    Function name preserved so analyze_router doesn't change.
 
     Callers: POST /api/engine/analyze handler. Coverage is fetched once
-    by the handler and passed here. Signal and interpretation are both
-    built synchronously inside this call — DB reads + (potentially) one
-    Anthropic API roundtrip; LLM cache hits are fast (single SELECT).
+    by the handler and passed here. No DB reads, no API calls — fast.
     """
     inputs_hash = compute_inputs_hash(
         entity=entity,
         event_date=event_date,
         peer_set=peer_set,
         coverage_snapshot_hash=coverage.data_snapshot_hash,
-    )
-    signal = build_signal(
-        entity=entity,
-        event_date=event_date,
-        peer_set=peer_set,
-        coverage=coverage,
-    )
-    interpretation = get_or_call_interpretation(
-        entity=entity,
-        event_date=event_date,
-        peer_set=peer_set,
-        coverage=coverage,
-        signal=signal,
-        context=context,
     )
     return AnalysisCreate(
         analysis_version=ANALYSIS_VERSION_S2A,
@@ -198,8 +187,8 @@ def build_stub_analysis(
         peer_set=peer_set,
         context=context,
         coverage=coverage,
-        signal=signal,
-        interpretation=interpretation,
+        signal=_stub_signal(),
+        interpretation=_stub_interpretation(entity, inputs_hash),
         methodology_observations=[],
         follow_ups=[],
         artifact_recommendation=_stub_artifact_recommendation(),
