@@ -28,6 +28,7 @@ from typing import Optional
 from uuid import UUID
 
 from app.engine.coverage import get_entity_coverage
+from app.engine.interpretation import get_or_call_interpretation
 from app.engine.observation_builder import build_signal
 from app.engine.schemas import (
     AnalysisCreate,
@@ -37,10 +38,11 @@ from app.engine.schemas import (
     Signal,
 )
 
-# Bumped from v0.1-s2a-stub: signal is now real data (per S2b). Interpretation
-# and artifact_recommendation remain stubs until S2c lands the LLM path.
-ANALYSIS_VERSION_S2A = "v0.1-s2b-real-signal"
-STUB_PROMPT_VERSION = "stub-s2a"
+# Bumped from v0.1-s2b-real-signal: interpretation is now LLM-generated (per
+# S2c). artifact_recommendation remains stubbed; the renderer in C3/S3 fills
+# that in based on coverage_quality + signal + interpretation.
+ANALYSIS_VERSION_S2A = "v0.1-s2c-llm-interpretation"
+STUB_PROMPT_VERSION = "stub-s2a"  # legacy constants — only used if LLM path is bypassed
 STUB_MODEL_ID = "template:stub"
 
 
@@ -155,17 +157,19 @@ def build_stub_analysis(
 ) -> AnalysisCreate:
     """Assemble an AnalysisCreate.
 
-    S2b: Signal is now real (computed by app.engine.observation_builder
-    from production data). Interpretation and artifact_recommendation
-    remain stubs; S2c lands real LLM interpretation.
+    S2c: Signal is real (S2b) AND interpretation is real (LLM-generated
+    via app.engine.interpretation.get_or_call_interpretation). Only
+    artifact_recommendation remains a stub; C3/S3 ships the renderer
+    that picks it.
 
     Function name preserved from S2a so analyze_router doesn't need to
-    change. The "stub" qualifier still applies to interpretation +
-    artifact_recommendation, just no longer to signal.
+    change. The "stub" qualifier now applies only to
+    artifact_recommendation.
 
     Callers: POST /api/engine/analyze handler. Coverage is fetched once
-    by the handler and passed here; the signal build does its own DB
-    reads (sync, runs synchronously inside this call).
+    by the handler and passed here. Signal and interpretation are both
+    built synchronously inside this call — DB reads + (potentially) one
+    Anthropic API roundtrip; LLM cache hits are fast (single SELECT).
     """
     inputs_hash = compute_inputs_hash(
         entity=entity,
@@ -179,6 +183,14 @@ def build_stub_analysis(
         peer_set=peer_set,
         coverage=coverage,
     )
+    interpretation = get_or_call_interpretation(
+        entity=entity,
+        event_date=event_date,
+        peer_set=peer_set,
+        coverage=coverage,
+        signal=signal,
+        context=context,
+    )
     return AnalysisCreate(
         analysis_version=ANALYSIS_VERSION_S2A,
         entity=entity,
@@ -187,7 +199,7 @@ def build_stub_analysis(
         context=context,
         coverage=coverage,
         signal=signal,
-        interpretation=_stub_interpretation(entity, inputs_hash),
+        interpretation=interpretation,
         methodology_observations=[],
         follow_ups=[],
         artifact_recommendation=_stub_artifact_recommendation(),

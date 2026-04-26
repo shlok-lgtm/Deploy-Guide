@@ -296,28 +296,47 @@ def test_analyze_pending_flips_to_draft(admin_api):
     assert resp.status_code == 202, resp.text[:400]
     aid = _track(resp.json()["analysis_id"])
 
-    # Background task sleeps STUB_FINALIZE_DELAY_SECONDS (2s). Poll a bit
-    # longer than that to account for scheduler jitter.
-    time.sleep(3.5)
+    # Background task: ~2s scheduler delay + up to ~15s for the LLM
+    # roundtrip in S2c. Poll until the status leaves pending or we
+    # hit the 30s ceiling.
+    deadline = time.time() + 30.0
+    analysis: dict = {}
+    while time.time() < deadline:
+        get_resp = admin_api.get(f"/api/engine/analyses/{aid}")
+        assert get_resp.status_code == 200, get_resp.text[:400]
+        analysis = get_resp.json()
+        if analysis.get("status") != "pending":
+            break
+        time.sleep(0.7)
 
-    get_resp = admin_api.get(f"/api/engine/analyses/{aid}")
-    assert get_resp.status_code == 200, get_resp.text[:400]
-    analysis = get_resp.json()
-
-    assert analysis["status"] == "draft", (
-        f"status should have flipped to draft after 3.5s, still: "
-        f"{analysis['status']}"
+    assert analysis.get("status") == "draft", (
+        f"status should have flipped to draft within 30s, still: "
+        f"{analysis.get('status')}"
     )
-    # Stub interpretation is present and tagged correctly. The interpretation
-    # itself stays stubbed through S2b; S2c will replace these tags with the
-    # real LLM model_id + prompt_version.
-    assert analysis["interpretation"]["model_id"] == "template:stub"
-    assert analysis["interpretation"]["prompt_version"] == "stub-s2a"
-    assert analysis["interpretation"]["confidence"] == "insufficient"
+
+    # Real LLM interpretation tags (S2c). Fallback path is template:fallback
+    # when the API is unavailable; accept both, skip the strict checks if
+    # the production server fell back so the operator sees the cause without
+    # CI failing on a known-degraded path.
+    interp = analysis["interpretation"]
+    assert interp["model_id"] in ("claude-sonnet-4-6", "template:fallback"), (
+        f"unexpected model_id: {interp['model_id']!r}"
+    )
+    if interp["model_id"] == "template:fallback":
+        pytest.skip(
+            f"LLM unavailable (fallback returned). Reason: "
+            f"{interp.get('confidence_reasoning')!r}. Set ANTHROPIC_API_KEY "
+            "and ensure budget headroom, then re-run."
+        )
+    assert interp["prompt_version"] == "v1"
+    # confidence is one of the four valid levels — actual value depends on
+    # production data and the LLM's call; don't pin it.
+    assert interp["confidence"] in ("high", "medium", "low", "insufficient")
+
     # Stage stamp: bumped from v0.1-s2a-stub when S2b started populating real
-    # signal data. S2c will bump again when LLM interpretation lands.
-    assert analysis["analysis_version"] == "v0.1-s2b-real-signal"
-    # Signal is now populated (S2b shipped real observations). kelp-rseth has
+    # signal data; bumped again to v0.1-s2c when LLM interpretation landed.
+    assert analysis["analysis_version"] == "v0.1-s2c-llm-interpretation"
+    # Signal is populated (S2b shipped real observations). kelp-rseth has
     # live LSTI coverage with deep history, so at least one event window has
     # observations. Don't assert exact counts — production data evolves.
     signal = analysis["signal"]
