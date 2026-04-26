@@ -319,6 +319,50 @@ async def update_analysis_status(
 
 
 # ─────────────────────────────────────────────────────────────────
+# Background-task finalization
+#
+# Atomically swaps the stub signal + stub interpretation with real values
+# and flips status pending → draft. Used by background_tasks.finalize_analysis
+# after build_signal + get_or_call_interpretation complete.
+# ─────────────────────────────────────────────────────────────────
+
+def _update_analysis_finalization_sync(
+    analysis_id: UUID,
+    signal: "Signal",  # forward type — avoids extra import
+    interpretation: "Interpretation",
+) -> None:
+    from app.engine.schemas import Signal, Interpretation  # local to defer cycle
+    signal_json = psycopg2.extras.Json(signal.model_dump(mode="json"))
+    interp_json = psycopg2.extras.Json(interpretation.model_dump(mode="json"))
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            UPDATE engine_analyses
+            SET signal = %s,
+                interpretation = %s,
+                status = 'draft'
+            WHERE id = %s
+            """,
+            (signal_json, interp_json, str(analysis_id)),
+        )
+
+
+async def update_analysis_finalization(
+    analysis_id: UUID,
+    signal,
+    interpretation,
+) -> None:
+    """Replace the stub signal + interpretation with real values and flip
+    status pending → draft, in a single UPDATE. artifact_recommendation
+    is left untouched (still derives from coverage_quality at INSERT time
+    until S3a ships the renderer)."""
+    await asyncio.to_thread(
+        _update_analysis_finalization_sync,
+        analysis_id, signal, interpretation,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────
 # Archive (for force_new flow) + link superseded_by_id on old row
 # ─────────────────────────────────────────────────────────────────
 
