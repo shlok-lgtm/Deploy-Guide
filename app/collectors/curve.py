@@ -9,6 +9,7 @@ import logging
 import httpx
 
 from app.scoring import normalize_log
+from app.api_usage_tracker import track_api_call
 
 logger = logging.getLogger(__name__)
 

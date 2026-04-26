@@ -22,6 +22,7 @@ from datetime import datetime, timezone, timedelta
 import httpx
 
 from app.database import fetch_all, fetch_one
+from app.api_usage_tracker import track_api_call
 
 logger = logging.getLogger(__name__)
 

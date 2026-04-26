@@ -27,6 +27,7 @@ import requests
 from app.database import execute, fetch_all, fetch_one
 from app.index_definitions.lsti_v01 import LSTI_V01_DEFINITION, LST_ENTITIES
 from app.scoring_engine import score_entity
+from app.api_usage_tracker import track_api_call
 
 logger = logging.getLogger(__name__)
 

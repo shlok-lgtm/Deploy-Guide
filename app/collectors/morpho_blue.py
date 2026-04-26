@@ -32,6 +32,7 @@ import httpx
 
 from app.collectors.psi_collector import _is_stablecoin_token
 from app.database import execute, get_cursor
+from app.api_usage_tracker import track_api_call
 
 logger = logging.getLogger(__name__)
 

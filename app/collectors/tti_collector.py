@@ -28,6 +28,7 @@ import requests
 from app.database import execute, fetch_all, fetch_one
 from app.index_definitions.tti_v01 import TTI_V01_DEFINITION, TTI_ENTITIES
 from app.scoring_engine import score_entity
+from app.api_usage_tracker import track_api_call
 
 logger = logging.getLogger(__name__)
 

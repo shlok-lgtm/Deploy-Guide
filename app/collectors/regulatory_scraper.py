@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 import requests
 
 from app.database import execute, fetch_one
+from app.api_usage_tracker import track_api_call
 
 logger = logging.getLogger(__name__)
 
