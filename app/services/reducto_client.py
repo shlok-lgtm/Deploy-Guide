@@ -5,9 +5,11 @@ Used for attestation PDFs (Grant Thornton, BDO, Deloitte reports).
 Docs: https://docs.reducto.ai
 """
 import os
+import time
 import httpx
 import logging
 from typing import Optional, Dict, Any
+from app.api_usage_tracker import track_api_call
 
 logger = logging.getLogger(__name__)
 
@@ -275,20 +277,32 @@ async def parse_pdf(pdf_url: str, schema: dict = None, disclosure_type: str = No
 
     async with httpx.AsyncClient(timeout=180) as client:
         try:
-            resp = await client.post(
-                f"{REDUCTO_BASE}/extract",
-                headers=_headers(),
-                json={
-                    "input": pdf_url,
-                    "instructions": {
-                        "schema": schema,
-                        "system_prompt": system_prompt,
-                    },
-                    "settings": {
-                        "citations": {"enabled": True},
-                    },
-                }
-            )
+            _t0 = time.monotonic()
+            _status = None
+            try:
+                resp = await client.post(
+                    f"{REDUCTO_BASE}/extract",
+                    headers=_headers(),
+                    json={
+                        "input": pdf_url,
+                        "instructions": {
+                            "schema": schema,
+                            "system_prompt": system_prompt,
+                        },
+                        "settings": {
+                            "citations": {"enabled": True},
+                        },
+                    }
+                )
+                _status = resp.status_code
+            except Exception:
+                _status = 0
+                raise
+            finally:
+                try:
+                    track_api_call(provider="reducto", endpoint="/extract", caller="services.reducto_client", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
+                except Exception:
+                    pass
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
@@ -307,11 +321,23 @@ async def parse_to_markdown(pdf_url: str) -> dict:
 
     async with httpx.AsyncClient(timeout=180) as client:
         try:
-            resp = await client.post(
-                f"{REDUCTO_BASE}/parse",
-                headers=_headers(),
-                json={"input": pdf_url}
-            )
+            _t0 = time.monotonic()
+            _status = None
+            try:
+                resp = await client.post(
+                    f"{REDUCTO_BASE}/parse",
+                    headers=_headers(),
+                    json={"input": pdf_url}
+                )
+                _status = resp.status_code
+            except Exception:
+                _status = 0
+                raise
+            finally:
+                try:
+                    track_api_call(provider="reducto", endpoint="/parse", caller="services.reducto_client", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
+                except Exception:
+                    pass
             resp.raise_for_status()
             return resp.json()
         except Exception as e:

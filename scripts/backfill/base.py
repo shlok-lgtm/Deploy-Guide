@@ -2,6 +2,7 @@
 Backfill Base — shared utilities for all backfill scripts.
 """
 
+import argparse
 import asyncio
 import logging
 import os
@@ -13,6 +14,14 @@ from datetime import datetime, timezone, timedelta
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 logger = logging.getLogger(__name__)
+
+
+def parse_args():
+    """Parse common CLI arguments for backfill scripts."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--limit", type=int, default=0, help="Limit to N entities (0=all)")
+    parser.add_argument("--days-back", type=int, default=365, help="Days of history")
+    return parser.parse_args()
 
 
 def init_db():

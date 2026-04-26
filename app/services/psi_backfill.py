@@ -19,6 +19,7 @@ import httpx
 from app.database import execute, fetch_one
 from app.index_definitions.psi_v01 import TARGET_PROTOCOLS
 from app.collectors.psi_collector import PROTOCOL_GOVERNANCE_TOKENS
+from app.api_usage_tracker import track_api_call
 
 logger = logging.getLogger(__name__)
 
@@ -64,8 +65,20 @@ def _ensure_table():
 
 def backfill_protocol_tvl(slug: str) -> int:
     """Fetch full TVL history from DeFiLlama /protocol/{slug}."""
+    _t0 = time.monotonic()
+    _status = None
     try:
-        resp = httpx.get(f"{DEFILLAMA_BASE}/protocol/{slug}", timeout=45)
+        try:
+            resp = httpx.get(f"{DEFILLAMA_BASE}/protocol/{slug}", timeout=45)
+            _status = resp.status_code
+        except Exception:
+            _status = 0
+            raise
+        finally:
+            try:
+                track_api_call(provider="defillama", endpoint=f"/protocol/{slug}", caller="services.psi_backfill", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
+            except Exception:
+                pass
         if resp.status_code != 200:
             logger.warning(f"DeFiLlama {slug} returned {resp.status_code}")
             return 0
@@ -128,13 +141,25 @@ def backfill_protocol_token(slug: str, gecko_id: str, from_date: str = "2024-01-
         from_ts = int(current.timestamp())
         to_ts = int(chunk_end.timestamp())
 
+        _t0 = time.monotonic()
+        _status = None
         try:
-            resp = httpx.get(
-                f"{CG_BASE}/coins/{gecko_id}/market_chart/range",
-                params={"vs_currency": "usd", "from": from_ts, "to": to_ts},
-                headers=_cg_headers(),
-                timeout=30,
-            )
+            try:
+                resp = httpx.get(
+                    f"{CG_BASE}/coins/{gecko_id}/market_chart/range",
+                    params={"vs_currency": "usd", "from": from_ts, "to": to_ts},
+                    headers=_cg_headers(),
+                    timeout=30,
+                )
+                _status = resp.status_code
+            except Exception:
+                _status = 0
+                raise
+            finally:
+                try:
+                    track_api_call(provider="coingecko", endpoint=f"/coins/{gecko_id}/market_chart/range", caller="services.psi_backfill", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
+                except Exception:
+                    pass
             if resp.status_code == 429:
                 logger.warning("CoinGecko rate limit — sleeping 60s")
                 time.sleep(5)

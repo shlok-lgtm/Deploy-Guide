@@ -24,6 +24,7 @@ import time
 from datetime import date, datetime, timezone
 
 from app.database import execute, fetch_one
+from app.api_usage_tracker import track_api_call
 
 logger = logging.getLogger(__name__)
 
@@ -323,7 +324,21 @@ def _try_scrape_page(url: str, entity_slug: str = "") -> str | None:
     # Last resort: plain requests
     try:
         import requests
-        resp = requests.get(url, timeout=15, allow_redirects=True)
+        _t0 = time.monotonic()
+        _status = None
+        try:
+            resp = requests.get(url, timeout=15, allow_redirects=True)
+            _status = resp.status_code
+        except Exception:
+            _status = 0
+            raise
+        finally:
+            try:
+                from urllib.parse import urlparse as _urlparse
+                _provider = _urlparse(url).netloc or "unknown"
+                track_api_call(provider=_provider, endpoint="GET", caller="services.tti_disclosure_collector", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
+            except Exception:
+                pass
         if resp.status_code == 200:
             text = re.sub(r'<[^>]+>', ' ', resp.text)
             return re.sub(r'\s+', ' ', text).strip()

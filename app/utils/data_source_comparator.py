@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 import httpx
 
 from app.database import execute, fetch_one, fetch_all
+from app.api_usage_tracker import track_api_call
 from app.utils.blockscout_client import (
     get_contract_abi as bs_get_abi,
     get_token_transfers as bs_get_transfers,
@@ -150,17 +151,25 @@ async def compare_contract_abi(
 
     # Etherscan call
     es_start = time.monotonic()
+    _es_status = None
     try:
         es_resp = await client.get(ETHERSCAN_V2_BASE, params={
             "chainid": chain_id, "module": "contract", "action": "getabi",
             "address": address, "apikey": api_key,
         }, timeout=20)
+        _es_status = es_resp.status_code
         es_data = es_resp.json()
         es_ms = int((time.monotonic() - es_start) * 1000)
     except Exception as e:
+        _es_status = 0
         _store_comparison("contract/getabi", {"address": address}, "", "",
                           "etherscan_error", 0, 0)
         return
+    finally:
+        try:
+            track_api_call(provider="etherscan", endpoint="contract/getabi", caller="utils.data_source_comparator", status=_es_status, latency_ms=int((time.monotonic() - es_start) * 1000))
+        except Exception:
+            pass
 
     # Blockscout call
     try:
@@ -210,14 +219,22 @@ async def compare_token_transfers(
         params["contractaddress"] = contract_address
 
     es_start = time.monotonic()
+    _es_status = None
     try:
         es_resp = await client.get(ETHERSCAN_V2_BASE, params=params, timeout=20)
+        _es_status = es_resp.status_code
         es_data = es_resp.json()
         es_ms = int((time.monotonic() - es_start) * 1000)
     except Exception:
+        _es_status = 0
         _store_comparison("account/tokentx", {"address": address}, "", "",
                           "etherscan_error", 0, 0)
         return
+    finally:
+        try:
+            track_api_call(provider="etherscan", endpoint="account/tokentx", caller="utils.data_source_comparator", status=_es_status, latency_ms=int((time.monotonic() - es_start) * 1000))
+        except Exception:
+            pass
 
     try:
         bs_data = await bs_get_transfers(client, address, contract_address, chain_id)
@@ -255,17 +272,25 @@ async def compare_token_holder_count(
         return
 
     es_start = time.monotonic()
+    _es_status = None
     try:
         es_resp = await client.get(ETHERSCAN_V2_BASE, params={
             "chainid": chain_id, "module": "token", "action": "tokenholdercount",
             "contractaddress": contract_address, "apikey": api_key,
         }, timeout=20)
+        _es_status = es_resp.status_code
         es_data = es_resp.json()
         es_ms = int((time.monotonic() - es_start) * 1000)
     except Exception:
+        _es_status = 0
         _store_comparison("token/tokenholdercount", {"contract": contract_address},
                           "", "", "etherscan_error", 0, 0)
         return
+    finally:
+        try:
+            track_api_call(provider="etherscan", endpoint="token/tokenholdercount", caller="utils.data_source_comparator", status=_es_status, latency_ms=int((time.monotonic() - es_start) * 1000))
+        except Exception:
+            pass
 
     try:
         bs_data = await bs_get_holder_count(client, contract_address, chain_id)
