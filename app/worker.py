@@ -3358,6 +3358,32 @@ async def main():
                 print(result)
         elif args.loop:
             logger.info(f"Starting worker loop (interval: {args.interval} min)")
+
+            async def _supervised_loop(name: str, coro_fn, max_consecutive_db_failures: int = 10):
+                """Wrap a background loop with DB failure escalation."""
+                import psycopg2
+                consecutive_db_failures = 0
+                while True:
+                    try:
+                        await coro_fn()
+                        consecutive_db_failures = 0
+                    except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
+                        consecutive_db_failures += 1
+                        if consecutive_db_failures >= max_consecutive_db_failures:
+                            logger.critical(f"[{name}] {consecutive_db_failures} consecutive DB failures — exiting for restart")
+                            raise SystemExit(1)
+                        elif consecutive_db_failures >= 3:
+                            logger.error(f"[{name}] DB failure #{consecutive_db_failures}: {e}")
+                        else:
+                            logger.warning(f"[{name}] DB failure (will retry): {e}")
+                        await asyncio.sleep(60)
+                    except SystemExit:
+                        raise
+                    except Exception as e:
+                        logger.error(f"[{name}] unexpected error: {type(e).__name__}: {e}")
+                        consecutive_db_failures = 0
+                        await asyncio.sleep(300)
+
             asyncio.create_task(_diagnostic_loop())
 
             # LLL Phase 1 Pipeline 3: Oracle cadence sampling (5-min independent loop)
