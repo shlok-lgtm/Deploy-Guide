@@ -63,7 +63,7 @@ from app.engine.schemas import (
 # ═════════════════════════════════════════════════════════════════
 
 TEST_FIXTURE_KEYS: list[tuple[str, date]] = [
-    ("drift", date(2026, 4, 8)),       # test_drift_analysis_produces_real_interpretation
+    ("drift", date(2099, 1, 1)),       # test_drift_analysis_produces_real_interpretation (sentinel future date — see test docstring)
     ("drift", date(2026, 4, 9)),       # test_cache_hit_on_second_identical_call (first POST)
 ]
 
@@ -365,10 +365,23 @@ def test_canonicalize_signal_observation_order_independent():
 def test_drift_analysis_produces_real_interpretation(admin_api):
     """POST analyze for drift; after pending→draft flip, interpretation
     has populated content fields (not the stub) and is tagged with the
-    Sonnet 4.6 model_id and prompt v1."""
+    Sonnet 4.6 model_id and prompt v1.
+
+    event_date=2099-01-01 is a sentinel "never analyzed before" value
+    that guarantees a cache miss on the first run after this PR
+    deploys, so from_cache=False is reachable. The signal will be
+    empty (no observations exist for any 2099 window), so the
+    interpretation runs against coverage + empty signal — the LLM
+    should still mention drift by name and produce a valid response.
+
+    Caveat: subsequent runs of this test against the same database
+    will cache the 2099-01-01 entry and from_cache becomes True. If
+    that becomes a recurring nuisance, a follow-up should clear the
+    interpretation cache row in the per-test teardown.
+    """
     body = {
         "entity": "drift",
-        "event_date": "2026-04-08",
+        "event_date": "2099-01-01",
         "peer_set": ["jupiter-perpetual-exchange"],
     }
     resp = admin_api.post("/api/engine/analyze", body)
