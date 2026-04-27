@@ -64,6 +64,7 @@ TEST_FIXTURE_EVENT_KEYS: list[tuple[str, str, date]] = [
     ("manual", "layerzero", date(2026, 5, 2)),   # test_post_manual_event_no_trigger
     ("manual", "drift", date(2026, 5, 3)),       # test_get_events_filters_by_entity
     ("manual", "kelp-rseth", date(2026, 5, 4)),  # test_get_events_filters_by_entity
+    ("manual", "drift", date(2099, 9, 1)),       # test_event_idempotency_via_unique_constraint
 ]
 
 
@@ -310,58 +311,54 @@ def test_cooldown_prevents_re_trigger_within_24h():
 
 
 # ═════════════════════════════════════════════════════════════════
-# 6. Unit: event idempotency via unique constraint (DB-required, skips
-#    cleanly if DATABASE_URL absent)
+# 6. Integration: event idempotency via unique constraint
+#
+# Originally written as a unit test calling insert_manual_event() directly,
+# which assumed the psycopg2 pool was already initialized — but tests
+# don't bring up the FastAPI startup hooks that call init_pool(), so the
+# direct path failed with a "Database pool not initialized" error.
+#
+# Converted to HTTP path through POST /api/engine/events. Same surface
+# real users hit; pool init happens naturally because the running
+# api-server already initialized it. Cleanup is handled by the
+# session-end sweep against TEST_FIXTURE_EVENT_KEYS (sentinel date
+# 2099-09-01 added to that list above).
 # ═════════════════════════════════════════════════════════════════
 
-@pytest.mark.parametrize("dummy", [1])  # parametrize keeps signature pytest-friendly
-def test_event_idempotency_via_unique_constraint(dummy):
-    """Insert the same manual event twice. The second insert returns
-    None (unique constraint suppressed it); the lookup returns the
-    pre-existing row id."""
-    if not os.environ.get("DATABASE_URL"):
-        pytest.skip("DATABASE_URL not set — DB integration unavailable")
-    import asyncio
-    from app.engine.event_sources.manual import insert_manual_event
+def test_event_idempotency_via_unique_constraint(admin_api):
+    """First POST inserts a manual event. Second POST with identical
+    (source, entity, event_date, event_type) returns the same event_id
+    with was_new=False — the unique constraint suppressed the INSERT
+    and insert_manual_event's lookup path returned the pre-existing
+    row's id so the caller can still link to it."""
+    body = {
+        "source": "manual",
+        "event_type": "other",
+        "entity": "drift",
+        "event_date": "2099-09-01",  # sentinel; in TEST_FIXTURE_EVENT_KEYS
+        "severity": "low",
+        "raw_event_data": {"idempotency_test": "first"},
+        "trigger_analysis": False,
+    }
 
-    async def _run():
-        # Use a sentinel future date to avoid colliding with prod data
-        sentinel = date(2099, 9, 1)
-        first_id, was_new_1 = await insert_manual_event(
-            event_type="other",
-            entity="drift",
-            event_date=sentinel,
-            severity="low",
-            raw_event_data={"test": "idempotency"},
-        )
-        assert first_id is not None
-        assert was_new_1 is True
-        try:
-            second_id, was_new_2 = await insert_manual_event(
-                event_type="other",
-                entity="drift",
-                event_date=sentinel,
-                severity="low",
-                raw_event_data={"test": "idempotency-second-call"},
-            )
-            assert second_id == first_id
-            assert was_new_2 is False
-        finally:
-            # Cleanup: delete the sentinel row
-            import psycopg2
-            with psycopg2.connect(os.environ["DATABASE_URL"]) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        DELETE FROM engine_events
-                        WHERE source='manual' AND entity='drift'
-                          AND event_date = %s AND event_type='other'
-                        """,
-                        (sentinel,),
-                    )
-                conn.commit()
+    r1 = admin_api.post("/api/engine/events", body)
+    assert r1.status_code == 202, r1.text[:400]
+    d1 = r1.json()
+    assert d1["was_new"] is True, f"first insert should be new; got {d1}"
+    first_id = d1["event_id"]
 
-    asyncio.run(_run())
+    # Second submission — different raw_event_data, same idempotency key.
+    body_second = dict(body, raw_event_data={"idempotency_test": "second"})
+    r2 = admin_api.post("/api/engine/events", body_second)
+    assert r2.status_code == 202, r2.text[:400]
+    d2 = r2.json()
+    assert d2["was_new"] is False, (
+        f"second insert with identical idempotency key should be deduped; got {d2}"
+    )
+    assert d2["event_id"] == first_id, (
+        f"deduped insert should return same event_id; first={first_id}, "
+        f"second={d2['event_id']}"
+    )
 
 
 # ═════════════════════════════════════════════════════════════════
