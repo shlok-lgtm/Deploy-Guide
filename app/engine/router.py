@@ -15,9 +15,8 @@ Current state:
                                  for cost observability)
   - render_router    registered (Component 3 / S3 — POST /render plus
                                  artifact GET endpoints)
-
-Future sessions add:
-  - admin-style endpoints for events and watchlist (Component 4)
+  - events_router    registered (Component 4 / S4 — manual events,
+                                 watchlist CRUD, scheduler diagnostic)
 """
 
 from __future__ import annotations
@@ -27,6 +26,7 @@ from fastapi import APIRouter
 from app.engine.analyze_router import router as analyze_router
 from app.engine.budget_router import router as budget_router
 from app.engine.coverage_router import router as coverage_router
+from app.engine.events_router import router as events_router
 from app.engine.render_router import router as render_router
 
 router = APIRouter()
@@ -34,3 +34,4 @@ router.include_router(coverage_router)
 router.include_router(analyze_router)
 router.include_router(budget_router)
 router.include_router(render_router)
+router.include_router(events_router)

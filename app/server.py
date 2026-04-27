@@ -697,6 +697,30 @@ async def shutdown():
     logger.info("Basis Protocol API stopped")
 
 
+# Analytic Engine — APScheduler lifecycle (Component 4 / S4).
+# Two scheduled jobs: poll_defillama_hacks (15min), evaluate_watchlist
+# (15min). Runs in-process. ⚠ Multi-worker concern: this scheduler runs
+# IN EACH worker uvicorn spawns. Set Railway env var WEB_CONCURRENCY=1
+# to keep things sane for v1; the GET /api/engine/scheduler diagnostic
+# endpoint reports the worker pid so duplication is observable in logs.
+@app.on_event("startup")
+async def _engine_scheduler_startup():
+    try:
+        from app.engine.scheduler import start_scheduler
+        await start_scheduler()
+    except Exception as e:
+        logger.exception(f"Engine scheduler startup failed: {e}")
+
+
+@app.on_event("shutdown")
+async def _engine_scheduler_shutdown():
+    try:
+        from app.engine.scheduler import stop_scheduler
+        await stop_scheduler()
+    except Exception as e:
+        logger.warning(f"Engine scheduler shutdown error: {e}")
+
+
 # Atexit fallback for non-graceful shutdowns (SIGKILL, Replit restarts, etc.)
 try:
     from app.usage_tracker import flush as _flush_usage_atexit
