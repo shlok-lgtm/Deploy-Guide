@@ -330,20 +330,29 @@ def _update_analysis_finalization_sync(
     analysis_id: UUID,
     signal: "Signal",  # forward type — avoids extra import
     interpretation: "Interpretation",
+    artifact_recommendation: "ArtifactRecommendation",
 ) -> None:
-    from app.engine.schemas import Signal, Interpretation  # local to defer cycle
+    from app.engine.schemas import (  # local to defer cycle
+        ArtifactRecommendation,
+        Interpretation,
+        Signal,
+    )
     signal_json = psycopg2.extras.Json(signal.model_dump(mode="json"))
     interp_json = psycopg2.extras.Json(interpretation.model_dump(mode="json"))
+    rec_json = psycopg2.extras.Json(
+        artifact_recommendation.model_dump(mode="json")
+    )
     with get_cursor() as cur:
         cur.execute(
             """
             UPDATE engine_analyses
             SET signal = %s,
                 interpretation = %s,
+                artifact_recommendation = %s,
                 status = 'draft'
             WHERE id = %s
             """,
-            (signal_json, interp_json, str(analysis_id)),
+            (signal_json, interp_json, rec_json, str(analysis_id)),
         )
 
 
@@ -351,14 +360,15 @@ async def update_analysis_finalization(
     analysis_id: UUID,
     signal,
     interpretation,
+    artifact_recommendation,
 ) -> None:
-    """Replace the stub signal + interpretation with real values and flip
-    status pending → draft, in a single UPDATE. artifact_recommendation
-    is left untouched (still derives from coverage_quality at INSERT time
-    until S3a ships the renderer)."""
+    """Replace the stub signal + interpretation + artifact_recommendation
+    with real values and flip status pending → draft, in a single UPDATE.
+    All three derived fields land atomically so a reader never sees a
+    half-finalized row (real signal, stub recommendation, etc.)."""
     await asyncio.to_thread(
         _update_analysis_finalization_sync,
-        analysis_id, signal, interpretation,
+        analysis_id, signal, interpretation, artifact_recommendation,
     )
 
 

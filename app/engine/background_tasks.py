@@ -64,6 +64,7 @@ from app.engine.analysis_persistence import (
 )
 from app.engine.interpretation import get_or_call_interpretation
 from app.engine.observation_builder import build_signal
+from app.engine.recommendation import derive_recommendation
 
 logger = logging.getLogger(__name__)
 
@@ -133,11 +134,29 @@ async def finalize_analysis(analysis_id: UUID) -> None:
             interpretation.from_cache, interpretation.confidence,
         )
 
+        # Derive the real artifact_recommendation now that signal +
+        # interpretation are real. Pure function — no I/O. Replaces the
+        # stub recommendation that was INSERTed at pending time.
+        recommendation = derive_recommendation(
+            coverage=analysis.coverage,
+            signal=signal,
+            interpretation=interpretation,
+        )
         logger.info(
-            "finalize_analysis: about to UPDATE id=%s (signal + interpretation, status=draft)",
+            "finalize_analysis: derived recommendation id=%s primary=%s "
+            "supports=%s blocked=%s",
+            analysis_id, recommendation.recommended,
+            recommendation.supports, recommendation.blocked,
+        )
+
+        logger.info(
+            "finalize_analysis: about to UPDATE id=%s "
+            "(signal + interpretation + recommendation, status=draft)",
             analysis_id,
         )
-        await update_analysis_finalization(analysis_id, signal, interpretation)
+        await update_analysis_finalization(
+            analysis_id, signal, interpretation, recommendation,
+        )
         logger.info(
             "finalize_analysis: UPDATE complete id=%s — analysis is now status=draft",
             analysis_id,
