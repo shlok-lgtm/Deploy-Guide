@@ -173,13 +173,14 @@ def _track(analysis_id: str) -> str:
     return analysis_id
 
 
-def _wait_for_draft(admin_api, analysis_id: str, timeout: float = 30.0) -> dict:
+def _wait_for_draft(admin_api, analysis_id: str, timeout: float = 60.0) -> dict:
     """Poll GET /api/engine/analyses/{id} until status != 'pending'.
     Returns the final response body.
 
-    Timeout bumped from 6s to 30s for S2c-async: the LLM roundtrip in
-    finalize_analysis can take 5–15s on a cache miss before status
-    flips to draft. Cache hits and fallback paths complete in <1s.
+    Default timeout 60s: background task includes the LLM roundtrip
+    (5–15s) plus signal build, recommendation derivation, and an
+    UPDATE. Sequential test runs can serialize a few of these and
+    accumulate latency; 30s was too tight in practice.
     """
     deadline = time.time() + timeout
     body: dict = {}

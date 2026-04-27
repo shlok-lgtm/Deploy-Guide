@@ -203,8 +203,8 @@ def _track(analysis_id: str) -> str:
     return analysis_id
 
 
-def _wait_for_draft(admin_api, analysis_id: str, timeout: float = 30.0) -> dict:
-    """Same pattern as test_engine_observations.py — poll up to 30s for
+def _wait_for_draft(admin_api, analysis_id: str, timeout: float = 60.0) -> dict:
+    """Same pattern as test_engine_observations.py — poll up to 60s for
     the background finalize task to flip status to draft."""
     deadline = time.time() + timeout
     body: dict = {}

@@ -297,9 +297,10 @@ def test_analyze_pending_flips_to_draft(admin_api):
     aid = _track(resp.json()["analysis_id"])
 
     # Background task: ~2s scheduler delay + up to ~15s for the LLM
-    # roundtrip in S2c. Poll until the status leaves pending or we
-    # hit the 30s ceiling.
-    deadline = time.time() + 30.0
+    # roundtrip + signal build + recommendation derivation. Poll until
+    # the status leaves pending or we hit the 60s ceiling (was 30s pre-C3,
+    # but sequential test runs serialize enough work to need the headroom).
+    deadline = time.time() + 60.0
     analysis: dict = {}
     while time.time() < deadline:
         get_resp = admin_api.get(f"/api/engine/analyses/{aid}")
@@ -354,8 +355,17 @@ def test_analyze_pending_flips_to_draft(admin_api):
         f"event={len(signal['event_window'])}, "
         f"post={len(signal['post_event'])}"
     )
-    # Recommendation still blocks all artifact types — stays stub through S2c
-    assert analysis["artifact_recommendation"]["recommended"] == "nothing"
+    # Real recommendation (post-C3): kelp-rseth has partial-live LSTI
+    # coverage with deep history, so the recommendation primary should
+    # be retrospective_internal. If the LLM returned confidence=
+    # insufficient (sparse signal or fallback path), the floor logic
+    # in derive_recommendation collapses to internal_memo. Accept
+    # either; reject the S2a stub value of "nothing".
+    recommended = analysis["artifact_recommendation"]["recommended"]
+    assert recommended in ("retrospective_internal", "internal_memo"), (
+        f"expected real C3 recommendation; got {recommended!r}. "
+        f"Recommendation: {analysis['artifact_recommendation']}"
+    )
 
 
 # ═════════════════════════════════════════════════════════════════
