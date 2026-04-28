@@ -925,9 +925,10 @@ async def run_fast_cycle():
 
     results = []
     SLOW_SID_THRESHOLD_SEC = 45
-    PER_COIN_TIMEOUT_SEC = 60
-    CYCLE_HARD_LIMIT_SEC = 25 * 60  # 25 min hard cap
+    PER_COIN_TIMEOUT_SEC = 90
+    CYCLE_HARD_LIMIT_SEC = 25 * 60
     KNOWN_HANGING_COINS = {"busd0"}
+    _runtime_blacklist: set = set()
 
     _scoring_client = httpx.AsyncClient(
         timeout=30, follow_redirects=True,
@@ -935,9 +936,9 @@ async def run_fast_cycle():
     )
     try:
         for idx, sid in enumerate(stablecoins):
-            if sid in KNOWN_HANGING_COINS:
-                logger.error(f"[fc-skip] {sid} skipped (known hanger)")
-                results.append({"stablecoin": sid, "error": "skipped_known_hanger"})
+            if sid in KNOWN_HANGING_COINS or sid in _runtime_blacklist:
+                logger.error(f"[fc-skip] {sid} skipped (blacklisted)")
+                results.append({"stablecoin": sid, "error": "skipped_blacklisted"})
                 continue
             if time.time() - fast_start > CYCLE_HARD_LIMIT_SEC:
                 logger.critical(f"[fast_cycle] cycle exceeded {CYCLE_HARD_LIMIT_SEC}s hard limit, breaking at {sid}")
@@ -962,14 +963,17 @@ async def run_fast_cycle():
                     if cfg:
                         _mark_scoring_status(cfg["coingecko_id"], "scored")
                 if sid_elapsed >= SLOW_SID_THRESHOLD_SEC:
-                    logger.error(
-                        f"[slow_stablecoin] {sid} scored in {sid_elapsed:.1f}s "
-                        f"(>={SLOW_SID_THRESHOLD_SEC}s threshold)"
-                    )
+                    logger.error(f"[slow_stablecoin] {sid} scored in {sid_elapsed:.1f}s")
                 await asyncio.sleep(0.5)
             except asyncio.TimeoutError:
-                logger.error(f"[fc-X] coin {sid} TIMED OUT after {PER_COIN_TIMEOUT_SEC}s — moving on")
+                elapsed = time.time() - sid_t0
+                logger.critical(
+                    f"[fc-blacklist] {sid} hung for {elapsed:.0f}s — "
+                    f"adding to runtime blacklist"
+                )
+                _runtime_blacklist.add(sid)
                 results.append({"stablecoin": sid, "error": f"timeout_{PER_COIN_TIMEOUT_SEC}s"})
+                await asyncio.sleep(0.1)
             except Exception as e:
                 logger.error(f"[fc-Y] coin {sid} FAILED: {type(e).__name__}: {e}")
                 results.append({"stablecoin": sid, "error": str(e)})
