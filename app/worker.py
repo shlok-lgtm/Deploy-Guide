@@ -926,6 +926,7 @@ async def run_fast_cycle():
     SLOW_SID_THRESHOLD_SEC = 45
     PER_COIN_TIMEOUT_SEC = 60
     CYCLE_HARD_LIMIT_SEC = 25 * 60  # 25 min hard cap
+    KNOWN_HANGING_COINS = {"busd0"}
 
     _scoring_client = httpx.AsyncClient(
         timeout=30, follow_redirects=True,
@@ -933,6 +934,10 @@ async def run_fast_cycle():
     )
     try:
         for idx, sid in enumerate(stablecoins):
+            if sid in KNOWN_HANGING_COINS:
+                logger.error(f"[fc-skip] {sid} skipped (known hanger)")
+                results.append({"stablecoin": sid, "error": "skipped_known_hanger"})
+                continue
             if time.time() - fast_start > CYCLE_HARD_LIMIT_SEC:
                 logger.critical(f"[fast_cycle] cycle exceeded {CYCLE_HARD_LIMIT_SEC}s hard limit, breaking at {sid}")
                 break
