@@ -380,18 +380,28 @@ async def run_all_collectors(
         if result:
             all_components.extend(result)
 
-    # --- sync collectors (sequential, from config/scraped data) ---
+    # --- sync collectors (run in thread pool to avoid blocking event loop) ---
     sync_collectors = _make_sync_collectors()
+    loop = asyncio.get_event_loop()
     for name, fn in sync_collectors:
         t0 = time.monotonic()
         try:
-            result = fn(stablecoin_id)
+            result = await asyncio.wait_for(
+                loop.run_in_executor(None, fn, stablecoin_id),
+                timeout=15.0,
+            )
             elapsed_ms = int((time.monotonic() - t0) * 1000)
+            if elapsed_ms >= 15000:
+                logger.error(f"[slow_collector] {name} took {elapsed_ms}ms for {stablecoin_id} (>=75% of 20000ms timeout)")
             count = len(result) if result else 0
             if cycle_stats:
                 cycle_stats.record_ok(name, elapsed_ms, count)
             if result:
                 all_components.extend(result)
+        except asyncio.TimeoutError:
+            logger.error(f"{name} sync collector timed out (15s) for {stablecoin_id}")
+            if cycle_stats:
+                cycle_stats.record_timeout(name)
         except Exception as e:
             logger.error(f"{name} error for {stablecoin_id}: {e}")
             if cycle_stats:

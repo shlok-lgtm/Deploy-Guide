@@ -587,11 +587,12 @@ async def score_stablecoin(client: httpx.AsyncClient, stablecoin_id: str) -> dic
     current = await fetch_current(client, _cg_fix_score.get(cfg["coingecko_id"], cfg["coingecko_id"]))
     price_ctx = extract_price_context(current) if current else {}
 
-    # 4. Store everything
-    store_component_readings(components)
-    store_score(stablecoin_id, score_data, price_ctx)
-    store_history_snapshot(stablecoin_id, score_data)
-    store_provenance(components)
+    # 4. Store everything (run in thread pool to avoid blocking event loop)
+    _loop = asyncio.get_event_loop()
+    await _loop.run_in_executor(None, store_component_readings, components)
+    await _loop.run_in_executor(None, store_score, stablecoin_id, score_data, price_ctx)
+    await _loop.run_in_executor(None, store_history_snapshot, stablecoin_id, score_data)
+    await _loop.run_in_executor(None, store_provenance, components)
 
     # State attestation for component readings
     try:
