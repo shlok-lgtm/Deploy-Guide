@@ -920,7 +920,7 @@ async def run_fast_cycle():
     # SII scoring — score all stablecoins
     # -------------------------------------------------------------------------
     stablecoins = get_scoring_ids_from_db()
-    logger.info(f"Starting scoring cycle for {len(stablecoins)} stablecoins")
+    logger.error(f"[fc-1] entering scoring loop, coins to score: {len(stablecoins)}")
 
     results = []
     SLOW_SID_THRESHOLD_SEC = 45
@@ -932,11 +932,12 @@ async def run_fast_cycle():
         limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
     )
     try:
-        for sid in stablecoins:
+        for idx, sid in enumerate(stablecoins):
             if time.time() - fast_start > CYCLE_HARD_LIMIT_SEC:
                 logger.critical(f"[fast_cycle] cycle exceeded {CYCLE_HARD_LIMIT_SEC}s hard limit, breaking at {sid}")
                 break
 
+            logger.error(f"[fc-2] starting coin {idx+1}/{len(stablecoins)}: {sid}")
             is_promoted = sid not in STABLECOIN_REGISTRY
             if is_promoted:
                 cfg = get_stablecoin_config(sid)
@@ -947,33 +948,31 @@ async def run_fast_cycle():
                 result = await asyncio.wait_for(
                     score_stablecoin(_scoring_client, sid), timeout=PER_COIN_TIMEOUT_SEC
                 )
+                sid_elapsed = time.time() - sid_t0
+                logger.error(f"[fc-3] coin {sid} computed in {sid_elapsed:.1f}s, score={'score' in result}")
                 results.append(result)
                 if is_promoted and "score" in result:
                     cfg = get_stablecoin_config(sid)
                     if cfg:
                         _mark_scoring_status(cfg["coingecko_id"], "scored")
-                sid_elapsed = time.time() - sid_t0
                 if sid_elapsed >= SLOW_SID_THRESHOLD_SEC:
                     logger.error(
                         f"[slow_stablecoin] {sid} scored in {sid_elapsed:.1f}s "
-                        f"(>={SLOW_SID_THRESHOLD_SEC}s threshold — see [slow_collector] "
-                        f"lines above for the slow collector attribution)"
+                        f"(>={SLOW_SID_THRESHOLD_SEC}s threshold)"
                     )
                 await asyncio.sleep(0.5)
             except asyncio.TimeoutError:
-                logger.error(f"[fast_cycle] {sid} TIMED OUT after {PER_COIN_TIMEOUT_SEC}s — moving on")
+                logger.error(f"[fc-X] coin {sid} TIMED OUT after {PER_COIN_TIMEOUT_SEC}s — moving on")
                 results.append({"stablecoin": sid, "error": f"timeout_{PER_COIN_TIMEOUT_SEC}s"})
             except Exception as e:
-                logger.error(f"[fast_cycle] {sid} FAILED: {type(e).__name__}: {e}")
+                logger.error(f"[fc-Y] coin {sid} FAILED: {type(e).__name__}: {e}")
                 results.append({"stablecoin": sid, "error": str(e)})
     finally:
         await _scoring_client.aclose()
 
     sii_elapsed = time.time() - fast_start
     successes = sum(1 for r in results if "score" in r)
-    logger.info(
-        f"Scoring cycle complete: {successes}/{len(stablecoins)} scored in {sii_elapsed:.0f}s"
-    )
+    logger.error(f"[fc-end] cycle complete: {successes}/{len(stablecoins)} scored in {sii_elapsed:.0f}s")
 
     # -------------------------------------------------------------------------
     # PSI scoring — runs after SII, uses DeFiLlama (no explorer budget)
