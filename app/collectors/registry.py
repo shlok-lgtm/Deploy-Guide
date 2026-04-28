@@ -14,6 +14,7 @@ To add a new sync collector:
 import asyncio
 import json
 import logging
+import os
 import time
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -215,6 +216,15 @@ class CycleStats:
 # Collector descriptors
 # ---------------------------------------------------------------------------
 
+DISABLED_COLLECTORS = set(
+    c.strip() for c in os.environ.get("SCORING_COLLECTORS_DISABLED", "").split(",")
+    if c.strip()
+)
+
+# ---------------------------------------------------------------------------
+# Collector definitions
+# ---------------------------------------------------------------------------
+
 def _make_async_collectors():
     """
     Return list of (name, callable) for async collectors.
@@ -275,7 +285,7 @@ def _make_async_collectors():
             "actor_metrics", collect_actor_metrics(client, sid),
         )
 
-    return [
+    _all = [
         ("peg", collect_peg_components),
         ("liquidity", collect_liquidity_components),
         ("market", collect_market_activity_components),
@@ -287,6 +297,10 @@ def _make_async_collectors():
         ("solana", _solana),
         ("actor_metrics", _actor),
     ]
+    if DISABLED_COLLECTORS:
+        logger.error(f"[registry] DISABLED async collectors: {DISABLED_COLLECTORS}")
+        return [(n, f) for n, f in _all if n not in DISABLED_COLLECTORS]
+    return _all
 
 
 def _make_sync_collectors():
@@ -303,7 +317,7 @@ def _make_sync_collectors():
     )
     from app.collectors.derived import collect_derived_components
 
-    return [
+    _all = [
         ("transparency", collect_transparency_components),
         ("regulatory", collect_regulatory_components),
         ("governance", collect_governance_components),
@@ -311,6 +325,10 @@ def _make_sync_collectors():
         ("network", collect_network_components),
         ("derived", collect_derived_components),
     ]
+    if DISABLED_COLLECTORS:
+        logger.error(f"[registry] DISABLED sync collectors: {DISABLED_COLLECTORS}")
+        return [(n, f) for n, f in _all if n not in DISABLED_COLLECTORS]
+    return _all
 
 
 # ---------------------------------------------------------------------------
