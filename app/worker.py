@@ -3318,7 +3318,8 @@ async def main():
     # app/data_layer/mempool_watcher.py and migrations/091_mempool_observations.sql.
     try:
         from app.data_layer.mempool_watcher import start_mempool_tasks
-        await start_mempool_tasks()
+        asyncio.create_task(start_mempool_tasks(), name="mempool_startup")
+        logger.error("[startup] mempool_watcher tasks launched (non-blocking)")
     except Exception as e:
         logger.error(f"[mempool_watcher] startup skipped: {type(e).__name__}: {e}")
 
