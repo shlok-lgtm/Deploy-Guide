@@ -933,7 +933,7 @@ async def run_fast_cycle():
     SLOW_SID_THRESHOLD_SEC = 45
     PER_COIN_TIMEOUT_SEC = 90
     CYCLE_HARD_LIMIT_SEC = 25 * 60
-    KNOWN_HANGING_COINS = {"busd0", "dai", "dola", "eurc", "frax", "fdusd"}
+    KNOWN_HANGING_COINS = {"busd0", "crvusd", "dai", "dola", "eurc", "frax", "fdusd"}
     _runtime_blacklist: set = set()
 
     _scoring_client = httpx.AsyncClient(
