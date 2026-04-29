@@ -366,6 +366,21 @@ async def run_all_collectors(
 
     async def _instrumented(name, coro):
         t0 = time.monotonic()
+        logger.error(f"[diag-start] {name} for {stablecoin_id}")
+        _done_event = asyncio.Event()
+        async def _watchdog():
+            try:
+                seconds = 0
+                while not _done_event.is_set():
+                    try:
+                        await asyncio.wait_for(_done_event.wait(), timeout=5.0)
+                        return
+                    except asyncio.TimeoutError:
+                        seconds += 5
+                        logger.error(f"[diag-stuck] {name} for {stablecoin_id} still running at {seconds}s")
+            except asyncio.CancelledError:
+                pass
+        _wd_task = asyncio.create_task(_watchdog())
         try:
             result = await asyncio.wait_for(coro, timeout=timeout)
             elapsed_ms = int((time.monotonic() - t0) * 1000)
@@ -377,17 +392,29 @@ async def run_all_collectors(
                     f"[slow_collector] {name} took {elapsed_ms}ms for {stablecoin_id} "
                     f"(>={int(SLOW_CALL_FRACTION*100)}% of {int(timeout*1000)}ms timeout)"
                 )
+            logger.error(f"[diag-end] {name} for {stablecoin_id} ok in {elapsed_ms}ms count={count}")
             return result or []
         except asyncio.TimeoutError:
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
             logger.warning(f"{name} timed out for {stablecoin_id}")
+            logger.error(f"[diag-end] {name} for {stablecoin_id} timeout after {elapsed_ms}ms")
             if cycle_stats:
                 cycle_stats.record_timeout(name)
             return []
         except Exception as e:
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
             logger.error(f"{name} error for {stablecoin_id}: {e}")
+            logger.error(f"[diag-end] {name} for {stablecoin_id} error after {elapsed_ms}ms: {type(e).__name__}")
             if cycle_stats:
                 cycle_stats.record_error(name)
             return []
+        finally:
+            _done_event.set()
+            _wd_task.cancel()
+            try:
+                await _wd_task
+            except (asyncio.CancelledError, Exception):
+                pass
 
     tasks = [
         _instrumented(name, fn(client, cg_id, stablecoin_id))
@@ -403,6 +430,7 @@ async def run_all_collectors(
     loop = asyncio.get_event_loop()
     for name, fn in sync_collectors:
         t0 = time.monotonic()
+        logger.error(f"[diag-start] sync:{name} for {stablecoin_id}")
         try:
             result = await asyncio.wait_for(
                 loop.run_in_executor(None, fn, stablecoin_id),
@@ -414,14 +442,19 @@ async def run_all_collectors(
             count = len(result) if result else 0
             if cycle_stats:
                 cycle_stats.record_ok(name, elapsed_ms, count)
+            logger.error(f"[diag-end] sync:{name} for {stablecoin_id} ok in {elapsed_ms}ms count={count}")
             if result:
                 all_components.extend(result)
         except asyncio.TimeoutError:
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
             logger.error(f"{name} sync collector timed out (15s) for {stablecoin_id}")
+            logger.error(f"[diag-end] sync:{name} for {stablecoin_id} timeout after {elapsed_ms}ms")
             if cycle_stats:
                 cycle_stats.record_timeout(name)
         except Exception as e:
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
             logger.error(f"{name} error for {stablecoin_id}: {e}")
+            logger.error(f"[diag-end] sync:{name} for {stablecoin_id} error after {elapsed_ms}ms: {type(e).__name__}")
             if cycle_stats:
                 cycle_stats.record_error(name)
 

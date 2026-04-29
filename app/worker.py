@@ -552,9 +552,11 @@ async def score_stablecoin(client: httpx.AsyncClient, stablecoin_id: str) -> dic
         return {"error": f"Unknown stablecoin: {stablecoin_id}"}
     
     start = time.time()
-    
+
     # 1. Collect all components
+    logger.error(f"[score-phase] {stablecoin_id}: collect_all_components start")
     components = await collect_all_components(client, stablecoin_id)
+    logger.error(f"[score-phase] {stablecoin_id}: collect_all_components end, n={len(components) if components else 0}")
     
     if not components:
         logger.warning(f"No components collected for {stablecoin_id}")
@@ -583,19 +585,25 @@ async def score_stablecoin(client: httpx.AsyncClient, stablecoin_id: str) -> dic
         }
 
     # 2. Compute SII score
+    logger.error(f"[score-phase] {stablecoin_id}: compute_sii start")
     score_data = compute_sii_from_components(components)
+    logger.error(f"[score-phase] {stablecoin_id}: compute_sii end")
 
     # 3. Get price context
+    logger.error(f"[score-phase] {stablecoin_id}: fetch_current start")
     _cg_fix_score = {"susd": "nusd", "spark": "spark-protocol"}
     current = await fetch_current(client, _cg_fix_score.get(cfg["coingecko_id"], cfg["coingecko_id"]))
     price_ctx = extract_price_context(current) if current else {}
+    logger.error(f"[score-phase] {stablecoin_id}: fetch_current end")
 
     # 4. Store everything (run in thread pool to avoid blocking event loop)
+    logger.error(f"[score-phase] {stablecoin_id}: store_* start")
     _loop = asyncio.get_event_loop()
     await _loop.run_in_executor(None, store_component_readings, components)
     await _loop.run_in_executor(None, store_score, stablecoin_id, score_data, price_ctx)
     await _loop.run_in_executor(None, store_history_snapshot, stablecoin_id, score_data)
     await _loop.run_in_executor(None, store_provenance, components)
+    logger.error(f"[score-phase] {stablecoin_id}: store_* end")
 
     # State attestation for component readings (run in thread pool)
     try:
@@ -912,21 +920,27 @@ async def run_fast_cycle():
 
     # Sync provenance source registry so new collectors get prover coverage
     try:
+        logger.error("[prelude-phase] sync_provenance_sources start")
         sync_provenance_sources()
+        logger.error("[prelude-phase] sync_provenance_sources end")
     except Exception as e:
         logger.warning(f"Provenance source sync failed (non-critical): {e}")
 
     # Seed any missing provenance sources from local config (idempotent)
     try:
         from app.data_layer.prover_source_registry import seed_from_local_config
+        logger.error("[prelude-phase] seed_from_local_config start")
         seed_from_local_config()
+        logger.error("[prelude-phase] seed_from_local_config end")
     except Exception as e:
         logger.debug(f"Provenance seed from local config skipped: {e}")
 
     # -------------------------------------------------------------------------
     # SII scoring — score all stablecoins
     # -------------------------------------------------------------------------
+    logger.error("[prelude-phase] get_scoring_ids_from_db start")
     stablecoins = get_scoring_ids_from_db()
+    logger.error(f"[prelude-phase] get_scoring_ids_from_db end, n={len(stablecoins)}")
     logger.error(f"[fc-1] entering scoring loop, coins to score: {len(stablecoins)}")
 
     results = []
