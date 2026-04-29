@@ -12,6 +12,7 @@ Usage:
 
 import asyncio
 import json
+import concurrent.futures
 import functools
 import logging
 import sys
@@ -2852,6 +2853,21 @@ async def main():
     parser.add_argument("--coin", type=str, help="Score single coin")
     parser.add_argument("--interval", type=int, default=COLLECTION_INTERVAL_MINUTES, help="Minutes between cycles")
     args = parser.parse_args()
+
+    # Saturation fix: default ThreadPoolExecutor on 8 vCPU is only 12 threads.
+    # 32 run_in_executor call sites funnel through it, causing queue waits that
+    # showed up as 6s asyncio blocking warnings at worker.py:956 (a wrapped
+    # SELECT that itself runs in <100ms). 64 workers gives I/O headroom.
+    _default_executor = concurrent.futures.ThreadPoolExecutor(
+        max_workers=64,
+        thread_name_prefix="worker-default",
+    )
+    asyncio.get_running_loop().set_default_executor(_default_executor)
+    _prev_default_size = min(32, (os.cpu_count() or 1) + 4)
+    logger.error(
+        f"[startup] default executor pool sized to 64 workers "
+        f"(was default min(32, cpu+4)={_prev_default_size})"
+    )
 
     logger.error("[startup] worker main() entered — initializing pool")
     init_pool()
