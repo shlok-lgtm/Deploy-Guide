@@ -344,6 +344,7 @@ async def _subscribe_and_consume(ws, watchlist: list[str]) -> int:
         raise RuntimeError("subscription id not received")
 
     event_count = 0
+    _loop = asyncio.get_event_loop()
     async for raw in ws:
         try:
             msg = json.loads(raw)
@@ -355,9 +356,14 @@ async def _subscribe_and_consume(ws, watchlist: list[str]) -> int:
         if msg.get("method") == "eth_subscription":
             params = msg.get("params") or {}
             tx = params.get("result") or {}
-            if tx and _insert_observation(tx):
-                event_count += 1
-                _attest_observation(tx.get("hash", ""), int(time.time() * 1000))
+            if tx:
+                inserted = await _loop.run_in_executor(None, _insert_observation, tx)
+                if inserted:
+                    event_count += 1
+                    await _loop.run_in_executor(
+                        None, _attest_observation,
+                        tx.get("hash", ""), int(time.time() * 1000),
+                    )
 
     return event_count
 
