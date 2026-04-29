@@ -12,6 +12,7 @@ Usage:
 
 import asyncio
 import json
+import functools
 import logging
 import sys
 import os
@@ -544,7 +545,8 @@ def _store_component_batch_hash(entity_id: str, entity_type: str,
 
 async def score_stablecoin(client: httpx.AsyncClient, stablecoin_id: str) -> dict:
     """Full pipeline: collect → compute → store for one stablecoin."""
-    cfg = get_stablecoin_config(stablecoin_id)
+    _loop = asyncio.get_running_loop()
+    cfg = await _loop.run_in_executor(None, get_stablecoin_config, stablecoin_id)
     if not cfg:
         return {"error": f"Unknown stablecoin: {stablecoin_id}"}
     
@@ -563,7 +565,7 @@ async def score_stablecoin(client: httpx.AsyncClient, stablecoin_id: str) -> dic
 
     if not is_complete:
         # Store component readings for future attempts but skip scoring
-        store_component_readings(components)
+        await _loop.run_in_executor(None, store_component_readings, components)
         elapsed = time.time() - start
         logger.info(
             f"{stablecoin_id}: SKIPPED (category-incomplete) — "
