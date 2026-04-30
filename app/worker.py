@@ -1316,10 +1316,12 @@ async def run_fast_cycle():
             _mt = _mb_last["t"]
             if _mt.tzinfo is None: _mt = _mt.replace(tzinfo=timezone.utc)
             _mb_age = (datetime.now(timezone.utc) - _mt).total_seconds() / 3600
+        logger.error(f"[mintburn-diag] gate: last_write_age={_mb_age:.1f}h, threshold=20h, will_run={_mb_age >= 20}")
         if _mb_age >= 20:
             ETH_KEY = os.environ.get("ETHERSCAN_API_KEY", "")
             _mb_ok, _mb_err = 0, 0
             _mb_coins = _dl_fa("SELECT id, contract FROM stablecoins WHERE scoring_enabled = TRUE AND contract IS NOT NULL") or []
+            logger.error(f"[mintburn-diag] coins_to_scan={len(_mb_coins)}, has_api_key={bool(ETH_KEY)}")
             async with httpx.AsyncClient(timeout=15) as _mbc:
                 for _sc in _mb_coins:
                     _contract = _sc.get("contract","")
@@ -1329,14 +1331,24 @@ async def run_fast_cycle():
                             params={"chainid":1,"module":"account","action":"tokentx",
                                     "contractaddress":_contract,"page":1,"offset":100,
                                     "sort":"desc","apikey":ETH_KEY})
+                        logger.error(f"[mintburn-diag] {_sc['id']}: http={_r.status_code}")
                         if _r.status_code != 200: continue
-                        _txs = _r.json().get("result",[]) if _r.json().get("status")=="1" else []
+                        _body = _r.json()
+                        _txs = _body.get("result",[]) if _body.get("status")=="1" else []
+                        logger.error(
+                            f"[mintburn-diag] {_sc['id']}: body status={_body.get('status')!r} "
+                            f"message={_body.get('message')!r} "
+                            f"result_count={len(_txs) if isinstance(_txs, list) else 'n/a'}"
+                        )
+                        _mb_mints, _mb_burns = 0, 0
                         for _tx in _txs:
                             _from = (_tx.get("from","")).lower()
                             _to = (_tx.get("to","")).lower()
                             if _from != "0x0000000000000000000000000000000000000000" and _to != "0x0000000000000000000000000000000000000000":
                                 continue
                             _evt = "mint" if _from == "0x0000000000000000000000000000000000000000" else "burn"
+                            if _evt == "mint": _mb_mints += 1
+                            else: _mb_burns += 1
                             try:
                                 _raw_val = int(_tx.get("value","0"))
                                 _dec = int(_tx.get("tokenDecimal","18"))
@@ -1360,8 +1372,9 @@ async def run_fast_cycle():
                             except Exception as _e:
                                 _mb_err += 1
                                 if _mb_err <= 3: logger.error(f"mintburn fail: {_e}")
+                        logger.error(f"[mintburn-diag] {_sc['id']}: inserted={_mb_ok} mints={_mb_mints} burns={_mb_burns}")
                     except Exception as _e:
-                        logger.error(f"mintburn fetch fail {_sc['id']}: {_e}")
+                        logger.error(f"[mintburn-diag] {_sc['id']}: EXCEPTION {type(_e).__name__}: {_e}")
                     await asyncio.sleep(0.15)
             logger.error(f"=== MINTBURN: {_mb_ok} ok, {_mb_err} err, coins={len(_mb_coins)}, total={_dl_fo('SELECT COUNT(*) as c FROM mint_burn_events')} ===")
         else:
