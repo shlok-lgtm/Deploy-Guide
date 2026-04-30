@@ -115,10 +115,18 @@ def _compute_wallet_metrics(address: str) -> dict:
 
     # Risk score data
     risk = fetch_one(
-        """SELECT risk_score, concentration_hhi, last_indexed_at, created_at
+        """SELECT
+               risk_score,
+               concentration_hhi,
+               computed_at AS last_indexed_at,
+               (SELECT MIN(computed_at)
+                FROM wallet_graph.wallet_risk_scores
+                WHERE wallet_address = %s) AS created_at
            FROM wallet_graph.wallet_risk_scores
-           WHERE wallet_address = %s""",
-        (address,),
+           WHERE wallet_address = %s
+           ORDER BY computed_at DESC
+           LIMIT 1""",
+        (address, address),
     )
 
     if risk:
