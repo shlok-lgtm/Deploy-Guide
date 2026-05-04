@@ -591,7 +591,7 @@ async def collect_treasury_events(
 
                 # Store events
                 for event in wallet_events:
-                    _store_event(addr, event)
+                    await asyncio.to_thread(_store_event, addr, event)
                     all_events.append({**event, "wallet_address": addr, "entity_name": entity})
 
                 logger.info(f"Treasury flows: {entity} — {len(wallet_events)} events detected")

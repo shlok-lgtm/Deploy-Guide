@@ -337,7 +337,7 @@ async def run_edge_builder(
     try:
         from app.state_attestation import attest_state
         if total_edges > 0:
-            attest_state("edges", [{"chain": chain, "wallets": wallets_processed, "edges": total_edges}], entity_id=chain)
+            await asyncio.to_thread(attest_state, "edges", [{"chain": chain, "wallets": wallets_processed, "edges": total_edges}], chain)
     except Exception as ae:
         logger.debug(f"Edge attestation skipped for {chain}: {ae}")
 

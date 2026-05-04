@@ -222,7 +222,7 @@ async def run_approval_collection() -> dict:
     try:
         from app.data_layer.provenance_scaling import attest_data_batch
         if total_inserted > 0:
-            attest_data_batch("token_approvals", [{"inserted": total_inserted}])
+            await asyncio.to_thread(attest_data_batch, "token_approvals", [{"inserted": total_inserted}])
     except Exception:
         pass
 

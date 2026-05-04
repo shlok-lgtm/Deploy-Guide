@@ -490,7 +490,7 @@ async def collect_governance_proposals() -> dict:
 
                 for proposal in proposals:
                     try:
-                        _upsert_proposal(proposal, protocol_id, protocol_slug, results)
+                        await asyncio.to_thread(_upsert_proposal, proposal, protocol_id, protocol_slug, results)
                     except Exception as e:
                         logger.debug(f"Failed to upsert proposal: {e}")
 

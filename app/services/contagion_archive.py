@@ -7,6 +7,7 @@ at detection time.  Integrates into the divergence signal emission pipeline.
 Never raises — all errors logged and skipped so the main pipeline is not blocked.
 """
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -265,7 +266,7 @@ async def archive_contagion_event(
         # Attest
         try:
             from app.state_attestation import attest_state
-            attest_state("contagion_events", [{
+            await asyncio.to_thread(attest_state, "contagion_events", [{
                 "event_type": event_type,
                 "source_entity_id": source_entity_id,
                 "trigger_metric": trigger_metric,

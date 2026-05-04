@@ -11,6 +11,7 @@ Sources:
 Schedule: Daily
 """
 
+import asyncio
 import json
 import logging
 import math
@@ -373,7 +374,7 @@ async def run_governance_collection() -> dict:
                         },
                     })
 
-                _store_proposals(proposal_records)
+                await asyncio.to_thread(_store_proposals, proposal_records)
                 total_proposals += len(proposal_records)
 
                 # Fetch voters for recent active proposals (top 3 by recency)
@@ -393,7 +394,7 @@ async def run_governance_collection() -> dict:
                                 }
                                 for v in voters
                             ]
-                            _store_voters(voter_records)
+                            await asyncio.to_thread(_store_voters, voter_records)
                             total_voters += len(voter_records)
                     except Exception as e:
                         logger.debug(f"Voter collection failed for {prop['id']}: {e}")
@@ -447,7 +448,7 @@ async def run_governance_collection() -> dict:
                         "raw_data": {"quorum": p.get("quorum")},
                     })
 
-                _store_proposals(proposal_records)
+                await asyncio.to_thread(_store_proposals, proposal_records)
                 tally_proposals += len(proposal_records)
                 total_proposals += len(proposal_records)
 
@@ -458,7 +459,7 @@ async def run_governance_collection() -> dict:
     try:
         from app.data_layer.provenance_scaling import attest_data_batch, link_batch_to_proof
         if total_proposals > 0:
-            attest_data_batch("governance_proposals", [{"proposals": total_proposals, "voters": total_voters}])
+            await asyncio.to_thread(attest_data_batch, "governance_proposals", [{"proposals": total_proposals, "voters": total_voters}])
             await link_batch_to_proof("governance_proposals", "governance_proposals")
             await link_batch_to_proof("governance_voters", "governance_voters")
     except Exception as e:

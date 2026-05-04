@@ -101,7 +101,7 @@ async def run_wallet_expansion(max_etherscan_calls: int) -> dict:
         logger.warning("No ETHERSCAN_API_KEY — skipping wallet expansion")
         return {"etherscan_calls_used": 0, "new_wallets_seeded": 0}
 
-    coverage = _get_coverage_gaps()
+    coverage = await asyncio.to_thread(_get_coverage_gaps)
     if not coverage:
         logger.info("No stablecoins with contracts found for expansion (all exhausted or none enabled)")
         return {"etherscan_calls_used": 0, "new_wallets_seeded": 0}

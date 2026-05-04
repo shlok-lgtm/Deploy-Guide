@@ -11,6 +11,7 @@ start composing.
 Schedule: After each scoring cycle
 """
 
+import asyncio
 import json
 import logging
 import math
@@ -168,7 +169,7 @@ async def run_materialized_compositions() -> dict:
     try:
         cqi_scores = await _compute_cqi_scores()
         if cqi_scores:
-            _store_materialized_scores(cqi_scores)
+            await asyncio.to_thread(_store_materialized_scores, cqi_scores)
             results["cqi"] = {
                 "pairs_computed": len(cqi_scores),
                 "avg_score": round(

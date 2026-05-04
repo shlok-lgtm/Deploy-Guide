@@ -227,6 +227,23 @@ async def _fetch_holders_blockscout(
     ]
 
 
+def _promote_addresses_sync(addresses: list[str], source_label: str) -> int:
+    """Sync helper: promote addresses to wallet_graph.wallets.
+
+    Called via asyncio.to_thread from run_holder_ingestion to keep
+    psycopg2 blocking calls off the event loop.
+    """
+    from psycopg2.extras import execute_values
+    with get_cursor() as cur:
+        execute_values(cur, """
+            INSERT INTO wallet_graph.wallets (address, source, created_at)
+            VALUES %s
+            ON CONFLICT (address) DO NOTHING
+        """, [(a, source_label, datetime.now(timezone.utc)) for a in addresses],
+            page_size=1000)
+        return cur.rowcount
+
+
 def _parse_holder_balance(raw_qty: str, decimals: int = 18) -> float:
     try:
         return float(int(raw_qty)) / (10 ** decimals)
@@ -346,17 +363,9 @@ async def run_holder_ingestion() -> dict:
                 if addresses:
                     try:
                         source_label = f"holder_scan:{etype}:{eid}"
-                        def _inner_promote():
-                            from psycopg2.extras import execute_values
-                            with get_cursor() as cur:
-                                execute_values(cur, """
-                                    INSERT INTO wallet_graph.wallets (address, source, created_at)
-                                    VALUES %s
-                                    ON CONFLICT (address) DO NOTHING
-                                """, [(a, source_label, datetime.now(timezone.utc)) for a in addresses],
-                                    page_size=1000)
-                                return cur.rowcount
-                        new_count = await asyncio.to_thread(_inner_promote)
+                        new_count = await asyncio.to_thread(
+                            _promote_addresses_sync, addresses, source_label
+                        )
                     except Exception as e:
                         logger.error(f"[holder_ingestion] wallet promotion failed for {eid}: {e}")
 
@@ -379,7 +388,7 @@ async def run_holder_ingestion() -> dict:
         from app.data_layer.provenance_scaling import attest_data_batch
         total_new = sum(s["new_wallets"] for s in stats.values())
         if total_new > 0:
-            attest_data_batch("wallet_holder_discovery", [dict(stats)])
+            await asyncio.to_thread(attest_data_batch, "wallet_holder_discovery", [dict(stats)])
     except Exception:
         pass
 

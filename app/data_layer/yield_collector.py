@@ -11,6 +11,7 @@ Sources:
 Schedule: Daily
 """
 
+import asyncio
 import json
 import logging
 import math
@@ -225,7 +226,7 @@ async def run_yield_collection() -> dict:
             snapshots.append(snap)
 
         # 4. Store
-        _store_yield_snapshots(snapshots)
+        await asyncio.to_thread(_store_yield_snapshots, snapshots)
 
         # 5. Backfill history for new pools (limited)
         new_pools_backfilled = 0
@@ -233,7 +234,8 @@ async def run_yield_collection() -> dict:
             from app.database import fetch_one
             for snap in snapshots[:20]:  # Max 20 history backfills per cycle
                 pool_id = snap["pool_id"]
-                existing = fetch_one(
+                existing = await asyncio.to_thread(
+                    fetch_one,
                     "SELECT COUNT(*) as cnt FROM yield_snapshots WHERE pool_id = %s",
                     (pool_id,),
                 )
@@ -259,7 +261,7 @@ async def run_yield_collection() -> dict:
                                 "pool_meta": None,
                             })
                         if historical_snaps:
-                            _store_yield_snapshots(historical_snaps)
+                            await asyncio.to_thread(_store_yield_snapshots, historical_snaps)
                             new_pools_backfilled += 1
         except Exception as e:
             logger.warning(f"Yield history backfill failed: {e}")
@@ -268,7 +270,7 @@ async def run_yield_collection() -> dict:
     try:
         from app.data_layer.provenance_scaling import attest_data_batch, link_batch_to_proof
         if snapshots:
-            attest_data_batch("yield_snapshots", [{"pools": len(snapshots)}])
+            await asyncio.to_thread(attest_data_batch, "yield_snapshots", [{"pools": len(snapshots)}])
             await link_batch_to_proof("yield_snapshots", "yield_snapshots")
     except Exception as e:
         logger.debug(f"Yield provenance failed: {e}")

@@ -10,6 +10,7 @@ Components produced:
 Data source: Direct HTTP GET to public exchange API endpoints.
 """
 
+import asyncio
 import json
 import logging
 import time
@@ -223,7 +224,7 @@ async def run_exchange_health_monitoring() -> list[dict]:
     Returns list of result dicts with availability scores.
     """
     # 1. Check all exchanges
-    check_results = check_all_exchanges()
+    check_results = await asyncio.to_thread(check_all_exchanges)
 
     # 2. Store results
     await store_health_checks(check_results)
@@ -287,10 +288,12 @@ async def run_exchange_health_monitoring() -> list[dict]:
     try:
         from app.state_attestation import attest_state
         if results:
-            attest_state("exchange_health", [
-                {"slug": r["exchange_slug"], "score": r["availability_score"]}
-                for r in results
-            ])
+            await asyncio.to_thread(
+                attest_state, "exchange_health", [
+                    {"slug": r["exchange_slug"], "score": r["availability_score"]}
+                    for r in results
+                ]
+            )
     except Exception:
         pass
 

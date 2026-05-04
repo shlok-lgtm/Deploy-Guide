@@ -12,6 +12,7 @@ Schedule: DEX pools every 15 minutes (high-value pools), hourly (all)
           CEX tickers hourly
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -345,7 +346,7 @@ async def run_liquidity_collection() -> dict:
             try:
                 cex_records = await collect_cex_tickers(client, cg_id, asset_id)
                 if cex_records:
-                    _store_liquidity_records(cex_records)
+                    await asyncio.to_thread(_store_liquidity_records, cex_records)
                     total_cex += len(cex_records)
                     total_records += len(cex_records)
             except Exception as e:
@@ -365,7 +366,7 @@ async def run_liquidity_collection() -> dict:
                 try:
                     dex_records = await collect_dex_pools(client, chain, asset_id, token_addr)
                     if dex_records:
-                        _store_liquidity_records(dex_records)
+                        await asyncio.to_thread(_store_liquidity_records, dex_records)
                         total_dex += len(dex_records)
                         total_records += len(dex_records)
                 except Exception as e:
@@ -377,7 +378,7 @@ async def run_liquidity_collection() -> dict:
     try:
         from app.data_layer.provenance_scaling import attest_data_batch, link_batch_to_proof
         if total_records > 0:
-            attest_data_batch("liquidity_depth", [{"records": total_records, "cex": total_cex, "dex": total_dex}])
+            await asyncio.to_thread(attest_data_batch, "liquidity_depth", [{"records": total_records, "cex": total_cex, "dex": total_dex}])
             await link_batch_to_proof("liquidity_depth", "liquidity_depth")
     except Exception as e:
         logger.debug(f"Liquidity provenance failed: {e}")

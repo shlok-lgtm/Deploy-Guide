@@ -2,6 +2,7 @@
 Drafter tool — Claude API-powered personalized outreach generation.
 Generates DMs, emails, and governance forum posts using target worldview context.
 """
+import asyncio
 import os
 import json
 import logging
@@ -98,7 +99,7 @@ async def draft_dm(target_id: int, trigger_context: str) -> dict:
     trigger_context: what prompted the outreach (e.g., "published blog post about X",
     "liked our forum post", "Resolv exposure detected").
     """
-    ctx = _get_target_context(target_id)
+    ctx = await asyncio.to_thread(_get_target_context, target_id)
     if not ctx.get("target"):
         return {"error": "Target not found"}
 
@@ -173,8 +174,8 @@ async def draft_forum_post(
     forum: 'aave', 'morpho', 'cow', 'ens', 'lido'
     topic: what the post is about
     """
-    ctx = _get_target_context(target_id) if target_id else {}
-    sii_data = _get_live_sii_data() if include_sii_data else ""
+    ctx = (await asyncio.to_thread(_get_target_context, target_id)) if target_id else {}
+    sii_data = (await asyncio.to_thread(_get_live_sii_data)) if include_sii_data else ""
 
     forum_conventions = {
         "aave": "Aave governance forum (governance.aave.com). Posts follow ARC/ARFC/AIP structure. Be substantive, reference risk data, complement existing risk providers (Gauntlet, Sentora). Audience: delegates, risk teams, core contributors.",

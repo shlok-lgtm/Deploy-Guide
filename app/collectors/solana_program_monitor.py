@@ -11,6 +11,7 @@ Uses getAccountInfo on each program address to read:
 Stores snapshots in contract_surveillance with entity_type context.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -254,14 +255,14 @@ async def run_solana_program_monitoring() -> dict:
                 if info.get("is_immutable"):
                     results["immutable"] += 1
                     logger.debug(f"Solana program {slug} is immutable — skipping future checks")
-                    _store_program_snapshot(slug, info)
+                    await asyncio.to_thread(_store_program_snapshot, slug, info)
                     continue
 
                 # Check for upgrade
-                if _check_for_upgrade(slug, info):
+                if await asyncio.to_thread(_check_for_upgrade, slug, info):
                     results["upgrades_detected"] += 1
 
-                _store_program_snapshot(slug, info)
+                await asyncio.to_thread(_store_program_snapshot, slug, info)
 
             except Exception as e:
                 results["errors"] += 1

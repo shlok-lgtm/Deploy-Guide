@@ -270,7 +270,7 @@ def match_arc_theme(signal: GovernanceSignal) -> Optional[dict]:
 
 async def build_opportunities(days: int = 7) -> list[ContentOpportunity]:
     """Build content opportunities from signals + SII data + arc."""
-    signals = detect_signals(days=days)
+    signals = await asyncio.to_thread(detect_signals, days=days)
 
     if not signals:
         logger.info("No governance signals found. Using arc-only content.")
@@ -552,7 +552,7 @@ async def generate_digest(days: int = 7, top_n: int = 3) -> str:
         lines.append("")
 
     # Sentiment overview
-    trends = get_sentiment_trends(days=14)
+    trends = await asyncio.to_thread(get_sentiment_trends, days=14)
     if trends:
         lines.append("## Sentiment Trends (14d)")
         coin_sentiments = {}
@@ -573,7 +573,7 @@ async def generate_digest(days: int = 7, top_n: int = 3) -> str:
         lines.append("")
 
     # Metric attention
-    metrics = get_metric_attention(days=7)
+    metrics = await asyncio.to_thread(get_metric_attention, days=7)
     if metrics:
         lines.append("## Hot Metrics This Week")
         for m in metrics[:5]:
@@ -716,7 +716,7 @@ async def main_cli():
     args = parser.parse_args()
 
     if args.command == "signals":
-        signals = detect_signals(days=args.days)
+        signals = await asyncio.to_thread(detect_signals, days=args.days)
         if not signals:
             print("No governance signals found.")
             return

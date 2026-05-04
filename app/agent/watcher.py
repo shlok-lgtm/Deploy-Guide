@@ -5,6 +5,7 @@ Monitors the wallet risk graph and SII scores for material state changes.
 Generates assessment events when trigger conditions are met.
 """
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -378,7 +379,7 @@ async def run_agent_cycle():
     if not daily_ran:
         try:
             from app.publisher.pulse_renderer import generate_daily_pulse
-            pulse = generate_daily_pulse()
+            pulse = await asyncio.to_thread(generate_daily_pulse)
             if pulse:
                 logger.info("Daily pulse generated successfully")
         except Exception as e:

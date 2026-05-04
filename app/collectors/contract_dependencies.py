@@ -8,6 +8,7 @@ Uses Etherscan internal transactions + known patterns for dependency detection.
 Runs daily in the slow cycle.  Never raises — all errors logged and skipped.
 """
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -449,16 +450,16 @@ async def collect_contract_dependencies() -> dict:
         "errors": [],
     }
 
-    entities = _load_scored_entities_with_contracts()
+    entities = await asyncio.to_thread(_load_scored_entities_with_contracts)
     if not entities:
         logger.info("Contract dependencies: no scored entities with contracts")
         return results
 
     for entity in entities:
         try:
-            current_deps = _detect_dependencies(entity)
-            _reconcile_dependencies(entity, current_deps, results)
-            await _store_daily_snapshot(entity, current_deps, results)
+            current_deps = await asyncio.to_thread(_detect_dependencies, entity)
+            await asyncio.to_thread(_reconcile_dependencies, entity, current_deps, results)
+            await asyncio.to_thread(_store_daily_snapshot, entity, current_deps, results)
             results["entities_analyzed"] += 1
         except Exception as e:
             error_msg = f"{entity['entity_slug']}: {e}"

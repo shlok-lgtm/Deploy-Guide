@@ -14,6 +14,7 @@ Components produced:
   - uptime_pct:             Operational uptime derived from volume data
 """
 
+import asyncio
 import json
 import hashlib
 import logging
@@ -251,7 +252,7 @@ async def run_bridge_monitoring() -> list[dict]:
     for bridge in BRIDGE_ENTITIES:
         slug = bridge["slug"]
         try:
-            stats = get_message_stats(slug)
+            stats = await asyncio.to_thread(get_message_stats, slug)
             if not stats:
                 logger.debug(f"No bridge stats for {slug}")
                 results.append({"bridge_slug": slug, "error": "no_data"})
@@ -306,7 +307,7 @@ async def run_bridge_monitoring() -> list[dict]:
         from app.state_attestation import attest_state
         scored = [r for r in results if "success_rate" in r]
         if scored:
-            attest_state("bridge_monitoring", [
+            await asyncio.to_thread(attest_state, "bridge_monitoring", [
                 {"slug": r["bridge_slug"], "rate": r["success_rate"]}
                 for r in scored
             ])

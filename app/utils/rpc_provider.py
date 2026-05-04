@@ -386,12 +386,12 @@ async def call(method: str, params: list | None = None, chain: str = "ethereum",
         # Primary attempt.
         try:
             result = await _call_provider(primary, method, params, chain, client, timeout)
-            _track_success(primary, method, chain)
+            await asyncio.to_thread(_track_success, primary, method, chain)
             return result
         except RPCError as e:
             if not _should_fallback(e) or not _provider_url(fallback, chain):
                 # Unrecoverable (or no fallback configured). Record and re-raise.
-                _track_failure(primary, fallback, method, chain, reason=str(e))
+                await asyncio.to_thread(_track_failure, primary, fallback, method, chain, str(e))
                 raise
             logger.warning(
                 f"[rpc] {primary} failed for {method} on {chain} "
@@ -402,10 +402,10 @@ async def call(method: str, params: list | None = None, chain: str = "ethereum",
                 result = await _call_provider(
                     fallback, method, params, chain, client, timeout,
                 )
-                _track_fallback(primary, fallback, method, chain, reason=str(e))
+                await asyncio.to_thread(_track_fallback, primary, fallback, method, chain, str(e))
                 return result
             except RPCError as e2:
-                _track_failure(primary, fallback, method, chain, reason=str(e2))
+                await asyncio.to_thread(_track_failure, primary, fallback, method, chain, str(e2))
                 raise RPCError(
                     f"both providers failed: {primary}={e}; {fallback}={e2}",
                     status=e2.status,

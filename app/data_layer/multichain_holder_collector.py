@@ -89,6 +89,31 @@ async def _fetch_holders_blockscout(
     ]
 
 
+def _insert_chain_presence_sync(addr, chain, chain_id, symbol):
+    """Sync helper: insert chain presence record."""
+    with get_cursor() as cur:
+        cur.execute("""
+            INSERT INTO wallet_chain_presence
+                (wallet_address, chain, chain_id, discovery_method, discovery_entity)
+            VALUES (%s, %s, %s, 'holder_scan', %s)
+            ON CONFLICT (wallet_address, chain) DO UPDATE SET
+                last_verified_at = NOW()
+        """, (addr, chain, chain_id, symbol))
+        return cur.statusmessage
+
+
+def _promote_wallets_sync(addresses, chain, symbol):
+    """Sync helper: promote wallets to wallet_graph."""
+    from psycopg2.extras import execute_values
+    with get_cursor() as cur:
+        execute_values(cur, """
+            INSERT INTO wallet_graph.wallets (address, source, created_at)
+            VALUES %s ON CONFLICT (address) DO NOTHING
+        """, [(a, f"multichain:{chain}:{symbol}", datetime.now(timezone.utc)) for a in addresses],
+            page_size=1000)
+        return cur.rowcount
+
+
 async def run_multichain_holder_scan() -> dict:
     logger.error("[multichain_holder] ENTRY — function called")
     usage = await _get_blockscout_24h_usage()
@@ -173,17 +198,9 @@ async def run_multichain_holder_scan() -> dict:
                 new_presences = 0
                 for h in filtered:
                     try:
-                        def _inner_presence(_addr=h["address"]):
-                            with get_cursor() as cur:
-                                cur.execute("""
-                                    INSERT INTO wallet_chain_presence
-                                        (wallet_address, chain, chain_id, discovery_method, discovery_entity)
-                                    VALUES (%s, %s, %s, 'holder_scan', %s)
-                                    ON CONFLICT (wallet_address, chain) DO UPDATE SET
-                                        last_verified_at = NOW()
-                                """, (_addr, chain, chain_id, symbol))
-                                return cur.statusmessage
-                        _statusmsg = await asyncio.to_thread(_inner_presence)
+                        _statusmsg = await asyncio.to_thread(
+                            _insert_chain_presence_sync, h["address"], chain, chain_id, symbol
+                        )
                         if _statusmsg and "INSERT" in _statusmsg:
                             new_presences += 1
                     except Exception:
@@ -194,16 +211,9 @@ async def run_multichain_holder_scan() -> dict:
                 addresses = [h["address"] for h in filtered]
                 if addresses:
                     try:
-                        def _inner_promote_mc():
-                            from psycopg2.extras import execute_values
-                            with get_cursor() as cur:
-                                execute_values(cur, """
-                                    INSERT INTO wallet_graph.wallets (address, source, created_at)
-                                    VALUES %s ON CONFLICT (address) DO NOTHING
-                                """, [(a, f"multichain:{chain}:{symbol}", datetime.now(timezone.utc)) for a in addresses],
-                                    page_size=1000)
-                                return cur.rowcount
-                        stats[chain]["new_wallets"] += await asyncio.to_thread(_inner_promote_mc)
+                        stats[chain]["new_wallets"] += await asyncio.to_thread(
+                            _promote_wallets_sync, addresses, chain, symbol
+                        )
                     except Exception as e:
                         stats[chain]["errors"] += 1
 
@@ -216,7 +226,7 @@ async def run_multichain_holder_scan() -> dict:
         from app.data_layer.provenance_scaling import attest_data_batch
         total_presences = sum(s["new_presences"] for s in stats.values())
         if total_presences > 0:
-            attest_data_batch("wallet_chain_presence", [dict(stats)])
+            await asyncio.to_thread(attest_data_batch, "wallet_chain_presence", [dict(stats)])
     except Exception:
         pass
 

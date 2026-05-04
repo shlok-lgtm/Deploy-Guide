@@ -371,7 +371,7 @@ async def _handle_parameter_change(
 
     try:
         from app.state_attestation import attest_state
-        attest_state("protocol_parameter_changes", [{
+        await asyncio.to_thread(attest_state, "protocol_parameter_changes", [{
             "protocol_slug": protocol_slug,
             "parameter_key": param_spec["parameter_key"],
             "new_value": new_value,
@@ -438,7 +438,7 @@ async def _store_daily_snapshot(protocol_slug: str, protocol_id: int, results: d
 
     try:
         from app.state_attestation import attest_state
-        attest_state("protocol_parameter_snapshots", [{
+        await asyncio.to_thread(attest_state, "protocol_parameter_snapshots", [{
             "protocol_slug": protocol_slug,
             "snapshot_date": today.isoformat(),
             "parameter_count": len(param_dict),
@@ -472,7 +472,7 @@ async def check_parameter_changes() -> dict:
 
             for spec in param_specs:
                 try:
-                    raw_str, raw_int = _read_parameter_value(spec)
+                    raw_str, raw_int = await asyncio.to_thread(_read_parameter_value, spec)
                     if raw_int is None:
                         continue
 
