@@ -54,6 +54,37 @@ def _get_coverage_gaps() -> list[dict]:
     return rows
 
 
+def _persist_expansion_batch_sync(new_addrs: list[tuple], stablecoin_id: str, exhausted: bool, last_page: int | None) -> int:
+    """Sync helper: insert addresses + update pagination cursor in one transaction."""
+    from app.database import get_cursor
+    seeded = 0
+    with get_cursor() as cur:
+        for addr, label in new_addrs:
+            try:
+                cur.execute(
+                    """INSERT INTO wallet_graph.wallets
+                       (address, source, label, created_at, updated_at)
+                       VALUES (%s, 'expansion', %s, NOW(), NOW())
+                       ON CONFLICT (address) DO NOTHING""",
+                    (addr, label),
+                )
+                seeded += 1
+            except Exception as e:
+                logger.error(f"expansion insert failed for {addr}: {e}")
+
+        if exhausted:
+            cur.execute(
+                "UPDATE stablecoins SET expansion_exhausted = TRUE WHERE id = %s",
+                (stablecoin_id,),
+            )
+        elif last_page is not None:
+            cur.execute(
+                "UPDATE stablecoins SET expansion_last_page = %s WHERE id = %s",
+                (last_page, stablecoin_id),
+            )
+    return seeded
+
+
 async def run_wallet_expansion(max_etherscan_calls: int) -> dict:
     """
     Use surplus API budget to seed new wallets from under-covered stablecoins.
@@ -76,7 +107,7 @@ async def run_wallet_expansion(max_etherscan_calls: int) -> dict:
         return {"etherscan_calls_used": 0, "new_wallets_seeded": 0}
 
     # Get existing wallet addresses to avoid duplicates
-    existing_rows = fetch_all("SELECT address FROM wallet_graph.wallets")
+    existing_rows = await asyncio.to_thread(fetch_all, "SELECT address FROM wallet_graph.wallets")
     existing_addrs = {row["address"].lower() for row in existing_rows}
 
     calls_used = 0
@@ -126,30 +157,25 @@ async def run_wallet_expansion(max_etherscan_calls: int) -> dict:
 
                 last_page_reached = page
 
+                pending_addrs = []
                 for addr in holders:
                     if addr and addr.startswith("0x") and addr.lower() not in existing_addrs:
-                        execute(
-                            """
-                            INSERT INTO wallet_graph.wallets
-                                (address, source, label, created_at, updated_at)
-                            VALUES (%s, 'expansion', %s, NOW(), NOW())
-                            ON CONFLICT (address) DO NOTHING
-                            """,
-                            (addr.lower(), f"expansion:{symbol}"),
-                        )
+                        pending_addrs.append((addr.lower(), f"expansion:{symbol}"))
                         existing_addrs.add(addr.lower())
-                        coin_new += 1
+
+                if pending_addrs:
+                    seeded = await asyncio.to_thread(
+                        _persist_expansion_batch_sync,
+                        pending_addrs, stablecoin_id, False, None,
+                    )
+                    coin_new += seeded
 
             # Persist pagination cursor
-            if exhausted:
-                execute(
-                    "UPDATE stablecoins SET expansion_exhausted = TRUE WHERE id = %s",
-                    (stablecoin_id,),
-                )
-            elif last_page_reached >= start_page:
-                execute(
-                    "UPDATE stablecoins SET expansion_last_page = %s WHERE id = %s",
-                    (last_page_reached, stablecoin_id),
+            last_page_val = last_page_reached if (not exhausted and last_page_reached >= start_page) else None
+            if exhausted or last_page_val is not None:
+                await asyncio.to_thread(
+                    _persist_expansion_batch_sync,
+                    [], stablecoin_id, exhausted, last_page_val,
                 )
 
             if coin_new > 0:
