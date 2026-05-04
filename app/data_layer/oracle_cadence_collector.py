@@ -85,6 +85,21 @@ def _parse_round_data(hex_result: str) -> tuple[int, int, int, int, int]:
     return round_id, answer, started_at, updated_at, answered_in
 
 
+def _insert_oracle_round_sync(oracle_id, round_id, answer_float, updated_at, updated_ts, gap_seconds, ch):
+    """Sync helper: single INSERT called via asyncio.to_thread."""
+    with get_cursor() as cur:
+        cur.execute("""
+            INSERT INTO oracle_update_cadence
+                (oracle_id, round_id, answer, updated_at_block, updated_at_timestamp,
+                 gap_from_previous_seconds, content_hash)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (oracle_id, round_id) DO NOTHING
+        """, (
+            oracle_id, round_id, answer_float, updated_at, updated_ts,
+            gap_seconds, ch,
+        ))
+
+
 async def _sample_oracles(client: httpx.AsyncClient) -> dict:
     """One sampling pass across all active oracles."""
     global _consecutive_errors
@@ -140,17 +155,10 @@ async def _sample_oracles(client: httpx.AsyncClient) -> dict:
             updated_ts = datetime.fromtimestamp(updated_at, tz=timezone.utc)
 
             try:
-                with get_cursor() as cur:
-                    cur.execute("""
-                        INSERT INTO oracle_update_cadence
-                            (oracle_id, round_id, answer, updated_at_block, updated_at_timestamp,
-                             gap_from_previous_seconds, content_hash)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (oracle_id, round_id) DO NOTHING
-                    """, (
-                        oracle_id, round_id, answer_float, updated_at, updated_ts,
-                        gap_seconds, ch,
-                    ))
+                await asyncio.to_thread(
+                    _insert_oracle_round_sync,
+                    oracle_id, round_id, answer_float, updated_at, updated_ts, gap_seconds, ch,
+                )
                 new_rounds += 1
             except Exception as e:
                 errors += 1
