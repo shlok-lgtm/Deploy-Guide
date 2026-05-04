@@ -14,6 +14,7 @@ Schedule: Daily (pulls 24h of 5-min data)
 
 import logging
 import math
+import asyncio
 import os
 import time
 from datetime import datetime, timezone
@@ -221,6 +222,45 @@ def _store_volatility_surface(surface: dict):
         logger.error(f"Failed to store volatility surface for asset={surface.get('asset_id')}: {e}")
 
 
+def _store_volatility_surface_90d_sync(stablecoin_id, vol_90d):
+    """Sync helper: insert 90d volatility surface via to_thread."""
+    from app.database import get_cursor
+    with get_cursor() as cur:
+        cur.execute(
+            """INSERT INTO volatility_surfaces
+               (asset_id, realized_vol_30d, realized_vol_90d,
+                max_drawdown_30d, max_drawdown_90d, computed_at)
+               VALUES (%s, %s, %s, %s, %s, NOW())
+               ON CONFLICT (asset_id, computed_at) DO UPDATE SET
+                   realized_vol_90d = EXCLUDED.realized_vol_90d,
+                   max_drawdown_90d = EXCLUDED.max_drawdown_90d""",
+            (stablecoin_id,
+             vol_90d.get("realized_vol"),
+             vol_90d.get("realized_vol"),
+             vol_90d.get("max_drawdown"),
+             vol_90d.get("max_drawdown")),
+        )
+
+
+def _emit_depeg_signals_sync(micro_depegs):
+    """Sync helper: emit discovery signals for micro-depegs."""
+    from app.database import execute as db_execute
+    for depeg in micro_depegs:
+        db_execute(
+            """INSERT INTO discovery_signals
+               (signal_type, domain, entity_id, severity, title, details, created_at)
+               VALUES ('micro_depeg', 'sii', %s, %s, %s, %s, NOW())""",
+            (
+                depeg["stablecoin_id"],
+                "alert" if depeg["max_deviation_bps"] > 100 else "notable",
+                f"Micro-depeg detected: {depeg['stablecoin']}",
+                f"{depeg['consecutive_5m_intervals']} consecutive 5-min intervals "
+                f"with >{depeg['max_deviation_bps']:.0f}bps deviation "
+                f"({depeg['duration_minutes']} min duration)",
+            ),
+        )
+
+
 async def run_peg_monitoring() -> dict:
     """
     Full 5-minute peg monitoring cycle:
@@ -232,9 +272,10 @@ async def run_peg_monitoring() -> dict:
     """
     from app.database import fetch_all
 
-    rows = fetch_all(
+    rows = await asyncio.to_thread(
+        fetch_all,
         """SELECT id, symbol, coingecko_id
-           FROM stablecoins WHERE scoring_enabled = TRUE"""
+           FROM stablecoins WHERE scoring_enabled = TRUE""",
     )
     if not rows:
         return {"error": "no stablecoins found"}
@@ -260,7 +301,7 @@ async def run_peg_monitoring() -> dict:
                     continue
 
                 # Store 5-minute snapshots
-                _store_peg_snapshots(stablecoin_id, prices_raw)
+                await asyncio.to_thread(_store_peg_snapshots, stablecoin_id, prices_raw)
                 total_snapshots += len(prices_raw)
 
                 # Detect micro-depegs (>50bps deviation for 3+ consecutive points)
@@ -288,7 +329,7 @@ async def run_peg_monitoring() -> dict:
                 # Compute volatility surface from 1-day data
                 vol = _compute_volatility_surface(prices, stablecoin_id)
                 if vol:
-                    _store_volatility_surface(vol)
+                    await asyncio.to_thread(_store_volatility_surface, vol)
                     vol_surfaces += 1
 
                 # Also fetch 90-day data for deep volatility surfaces
@@ -298,22 +339,9 @@ async def run_peg_monitoring() -> dict:
                     if len(prices_90d) > 50:
                         vol_90d = _compute_volatility_surface(prices_90d, stablecoin_id)
                         if vol_90d:
-                            from app.database import get_cursor as _gc
-                            with _gc() as cur:
-                                cur.execute(
-                                    """INSERT INTO volatility_surfaces
-                                       (asset_id, realized_vol_30d, realized_vol_90d,
-                                        max_drawdown_30d, max_drawdown_90d, computed_at)
-                                       VALUES (%s, %s, %s, %s, %s, NOW())
-                                       ON CONFLICT (asset_id, computed_at) DO UPDATE SET
-                                           realized_vol_90d = EXCLUDED.realized_vol_90d,
-                                           max_drawdown_90d = EXCLUDED.max_drawdown_90d""",
-                                    (stablecoin_id,
-                                     vol_90d.get("realized_vol"),
-                                     vol_90d.get("realized_vol"),
-                                     vol_90d.get("max_drawdown"),
-                                     vol_90d.get("max_drawdown")),
-                                )
+                            await asyncio.to_thread(
+                                _store_volatility_surface_90d_sync, stablecoin_id, vol_90d
+                            )
                 except Exception as e:
                     logger.debug(f"90d vol surface failed for {stablecoin_id}: {e}")
 
@@ -339,21 +367,7 @@ async def run_peg_monitoring() -> dict:
     # Emit discovery signals for micro-depegs
     if micro_depegs:
         try:
-            from app.database import execute as db_execute
-            for depeg in micro_depegs:
-                db_execute(
-                    """INSERT INTO discovery_signals
-                       (signal_type, domain, entity_id, severity, title, details, created_at)
-                       VALUES ('micro_depeg', 'sii', %s, %s, %s, %s, NOW())""",
-                    (
-                        depeg["stablecoin_id"],
-                        "alert" if depeg["max_deviation_bps"] > 100 else "notable",
-                        f"Micro-depeg detected: {depeg['stablecoin']}",
-                        f"{depeg['consecutive_5m_intervals']} consecutive 5-min intervals "
-                        f"with >{depeg['max_deviation_bps']:.0f}bps deviation "
-                        f"({depeg['duration_minutes']} min duration)",
-                    ),
-                )
+            await asyncio.to_thread(_emit_depeg_signals_sync, micro_depegs)
         except Exception as e:
             logger.debug(f"Micro-depeg signal emission failed: {e}")
 
