@@ -1402,6 +1402,56 @@ async def get_health():
     return response_data
 
 
+@app.get("/api/health/keeper")
+async def get_keeper_health(response: Response):
+    """Dead-man-switch for keeper liveness. Returns 200 if keeper has run
+    within 2h, 503 if stale. External monitoring hits this every 5 min."""
+    try:
+        from app.database import fetch_one_async
+        row = await fetch_one_async(
+            "SELECT MAX(started_at) AS last_cycle FROM ops.keeper_cycles"
+        )
+        if not row or not row.get("last_cycle"):
+            return {"status": "unknown", "detail": "no keeper cycles recorded"}
+
+        last_cycle = row["last_cycle"]
+        if last_cycle.tzinfo is None:
+            last_cycle = last_cycle.replace(tzinfo=timezone.utc)
+        minutes_since = (datetime.now(timezone.utc) - last_cycle).total_seconds() / 60
+
+        if minutes_since > 120:
+            logger.error(
+                f"[DEADMANS_SWITCH] CRITICAL keeper has not run in {minutes_since:.0f} minutes"
+            )
+            response.status_code = 503
+            return {
+                "status": "critical",
+                "last_cycle": last_cycle.isoformat(),
+                "minutes_since": round(minutes_since, 1),
+                "threshold_minutes": 120,
+            }
+        elif minutes_since > 90:
+            logger.error(
+                f"[DEADMANS_SWITCH] WARN keeper has not run in {minutes_since:.0f} minutes"
+            )
+            return {
+                "status": "warn",
+                "last_cycle": last_cycle.isoformat(),
+                "minutes_since": round(minutes_since, 1),
+                "threshold_minutes": 90,
+            }
+        else:
+            return {
+                "status": "healthy",
+                "last_cycle": last_cycle.isoformat(),
+                "minutes_since": round(minutes_since, 1),
+            }
+    except Exception as e:
+        logger.error(f"[DEADMANS_SWITCH] query failed: {e}")
+        response.status_code = 503
+        return {"status": "error", "detail": str(e)}
+
+
 @app.get("/api/integrity")
 async def get_integrity():
     """Full data integrity status across all domains."""
