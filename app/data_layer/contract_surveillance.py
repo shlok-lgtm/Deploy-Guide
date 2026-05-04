@@ -12,6 +12,7 @@ Sources:
 Schedule: Weekly (diff against previous scan)
 """
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -230,7 +231,8 @@ async def run_contract_surveillance() -> dict:
     contracts_to_scan = []
 
     # Stablecoin contracts on all chains
-    stablecoins = fetch_all(
+    stablecoins = await asyncio.to_thread(
+        fetch_all,
         """SELECT id, symbol, contract FROM stablecoins
            WHERE scoring_enabled = TRUE AND contract IS NOT NULL"""
     )
@@ -309,7 +311,8 @@ async def run_contract_surveillance() -> dict:
                 source_hash = _hash_source(source_code)
 
                 # Check for changes
-                changed = _detect_changes(
+                changed = await asyncio.to_thread(
+                    _detect_changes,
                     entry["entity_id"], entry["chain"],
                     entry["contract_address"], source_hash
                 )
@@ -342,7 +345,7 @@ async def run_contract_surveillance() -> dict:
                         "license": source_data.get("LicenseType"),
                     },
                 }
-                _store_surveillance_result(result)
+                await asyncio.to_thread(_store_surveillance_result, result)
                 total_scanned += 1
 
             except Exception as e:
@@ -355,7 +358,8 @@ async def run_contract_surveillance() -> dict:
         try:
             from app.database import execute as db_execute
             for change in changes_detected:
-                db_execute(
+                await asyncio.to_thread(
+                    db_execute,
                     """INSERT INTO discovery_signals
                        (signal_type, domain, entity_id, severity, title, details, created_at)
                        VALUES ('contract_change', 'sii', %s, 'alert', %s, %s, NOW())""",
@@ -372,7 +376,7 @@ async def run_contract_surveillance() -> dict:
     try:
         from app.data_layer.provenance_scaling import attest_data_batch, link_batch_to_proof
         if total_scanned > 0:
-            attest_data_batch("contract_surveillance", [{"scanned": total_scanned, "changes": len(changes_detected)}])
+            await asyncio.to_thread(attest_data_batch, "contract_surveillance", [{"scanned": total_scanned, "changes": len(changes_detected)}])
             await link_batch_to_proof("contract_surveillance", "contract_surveillance")
     except Exception as e:
         logger.debug(f"Contract surveillance provenance failed: {e}")

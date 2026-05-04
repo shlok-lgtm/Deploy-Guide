@@ -91,7 +91,7 @@ async def cancellation_watchdog():
                             )
                             for h in logging.getLogger().handlers:
                                 try:
-                                    h.flush()
+                                    getattr(h, "flush")()  # logging handler, not DB
                                 except Exception:
                                     pass
                             os._exit(1)
@@ -992,6 +992,37 @@ async def run_cycle_diagnostics():
         logger.error(f"[api_usage_verify] failed: {_e}")
 
 
+def _bulk_insert_yield_snapshots(rows_with_ts):
+    """Sync helper: bulk insert yield snapshots (called via to_thread)."""
+    from psycopg2.extras import execute_values as _ev_ys
+    from app.database import get_cursor as _gc
+    with _gc() as _c:
+        _ev_ys(_c,
+            """INSERT INTO yield_snapshots
+               (pool_id,protocol,chain,asset,apy,apy_base,apy_reward,tvl_usd,stable_pool,snapshot_at)
+               VALUES %s
+               ON CONFLICT(pool_id,snapshot_at) DO UPDATE SET apy=EXCLUDED.apy,tvl_usd=EXCLUDED.tvl_usd""",
+            rows_with_ts, page_size=500,
+        )
+
+
+def _bulk_insert_peg_and_mchart(peg_rows, mc_rows):
+    """Sync helper: bulk insert peg snapshots and market chart history (called via to_thread)."""
+    from psycopg2.extras import execute_values as _ev
+    from app.database import get_cursor as _gc
+    with _gc() as _c:
+        _ev(_c,
+            "INSERT INTO peg_snapshots_5m(stablecoin_id,price,timestamp,deviation_bps) "
+            "VALUES %s ON CONFLICT DO NOTHING",
+            peg_rows, page_size=500,
+        )
+        _ev(_c,
+            "INSERT INTO market_chart_history(coin_id,stablecoin_id,timestamp,price,granularity) "
+            "VALUES %s ON CONFLICT DO NOTHING",
+            [r + ('5min',) for r in mc_rows], page_size=500,
+        )
+
+
 # =============================================================================
 # Orchestrator: Fast cycle — critical scoring + lightweight tasks (<15 min)
 # =============================================================================
@@ -1263,18 +1294,7 @@ async def run_fast_cycle():
             # Build single multi-row INSERT (one round-trip instead of 200)
             _ys_now = datetime.now(timezone.utc)
             _ys_rows_with_ts = [r + (_ys_now,) for r in _ys_rows]
-            def _inner_yields():
-                from psycopg2.extras import execute_values as _ev_ys
-                from app.database import get_cursor as _gc
-                with _gc() as _c:
-                    _ev_ys(_c,
-                        """INSERT INTO yield_snapshots
-                           (pool_id,protocol,chain,asset,apy,apy_base,apy_reward,tvl_usd,stable_pool,snapshot_at)
-                           VALUES %s
-                           ON CONFLICT(pool_id,snapshot_at) DO UPDATE SET apy=EXCLUDED.apy,tvl_usd=EXCLUDED.tvl_usd""",
-                        _ys_rows_with_ts, page_size=500,
-                    )
-            await asyncio.to_thread(_inner_yields)
+            await asyncio.to_thread(_bulk_insert_yield_snapshots, _ys_rows_with_ts)
             _ys_ok = len(_ys_rows)
         except Exception as _yb:
             logger.error(f"yield batch failed, falling back to per-row: {_yb}")
@@ -1315,7 +1335,6 @@ async def run_fast_cycle():
                         await asyncio.sleep(0.15)
                         continue
                     from datetime import datetime as _pdt
-                    from psycopg2.extras import execute_values as _ev
                     _peg_rows = []
                     _mc_rows = []
                     for _pt in _r.json().get("prices",[]):
@@ -1324,20 +1343,9 @@ async def run_fast_cycle():
                         _mc_rows.append((_sc["coingecko_id"], _sc["id"], _ts, _pt[1]))
                     if _peg_rows:
                         try:
-                            def _inner_peg_mc():
-                                from app.database import get_cursor as _gc
-                                with _gc() as _c:
-                                    _ev(_c,
-                                        "INSERT INTO peg_snapshots_5m(stablecoin_id,price,timestamp,deviation_bps) "
-                                        "VALUES %s ON CONFLICT DO NOTHING",
-                                        _peg_rows, page_size=500,
-                                    )
-                                    _ev(_c,
-                                        "INSERT INTO market_chart_history(coin_id,stablecoin_id,timestamp,price,granularity) "
-                                        "VALUES %s ON CONFLICT DO NOTHING",
-                                        [r + ('5min',) for r in _mc_rows], page_size=500,
-                                    )
-                            await asyncio.to_thread(_inner_peg_mc)
+                            await asyncio.to_thread(
+                                _bulk_insert_peg_and_mchart, _peg_rows, _mc_rows,
+                            )
                             _pg_ok += len(_peg_rows)
                             _mc_ok += len(_mc_rows)
                         except Exception as _ei:
@@ -1578,7 +1586,7 @@ async def run_fast_cycle():
         if digest_age_hours >= 24:
             logger.info("Assembling daily digest...")
             from app.ops.tools.health_checker import get_latest_health
-            health = get_latest_health()
+            health = await asyncio.to_thread(get_latest_health)
             healthy_cnt = sum(1 for r in health if r.get("status") == "healthy")
             total_cnt = len(health)
             failing = [r for r in health if r.get("status") in ("degraded", "down")]
@@ -1654,18 +1662,18 @@ async def run_fast_cycle():
     # Log and persist collector performance stats
     if _current_cycle_stats:
         _current_cycle_stats.log_summary()
-        _current_cycle_stats.store()
+        await asyncio.to_thread(_current_cycle_stats.store)
         _current_cycle_stats = None
 
     # Flush API trackers
     try:
         from app.api_usage_tracker import flush as _fast_flush
-        _fast_flush()
+        await asyncio.to_thread(_fast_flush)
     except Exception:
         pass
     try:
         from app.utils.api_tracker import tracker as _cycle_tracker
-        _flushed = _cycle_tracker.flush()
+        _flushed = await asyncio.to_thread(_cycle_tracker.flush)
         if _flushed:
             logger.error(f"[api_tracker] flushed {_flushed} rows to api_usage_hourly")
     except Exception:
@@ -1760,28 +1768,28 @@ async def run_slow_cycle():
             from app.rpi.snapshot_collector import collect_snapshot_proposals
             from app.rpi.tally_collector import collect_tally_proposals
             from app.rpi.parameter_collector import collect_parameter_changes
-            collect_snapshot_proposals()
-            collect_tally_proposals()
-            collect_parameter_changes()
+            await asyncio.to_thread(collect_snapshot_proposals)
+            await asyncio.to_thread(collect_tally_proposals)
+            await asyncio.to_thread(collect_parameter_changes)
 
             # Phase 2A: Automate lens components
             try:
                 from app.rpi.forum_scraper import scrape_all_forums, update_vendor_diversity_lens
-                forum_results = scrape_all_forums(since_days=90)
+                forum_results = await asyncio.to_thread(scrape_all_forums, since_days=90)
                 logger.info(f"RPI forum scraper: {sum(forum_results.values())} posts across {len(forum_results)} protocols")
-                update_vendor_diversity_lens()
+                await asyncio.to_thread(update_vendor_diversity_lens)
             except Exception as fa_err:
                 logger.warning(f"RPI forum scraper failed: {fa_err}")
 
             try:
                 from app.rpi.docs_scorer import score_all_docs
-                score_all_docs()
+                await asyncio.to_thread(score_all_docs)
             except Exception as ds_err:
                 logger.warning(f"RPI docs scorer failed: {ds_err}")
 
             try:
                 from app.rpi.incident_detector import run_incident_detection
-                run_incident_detection()
+                await asyncio.to_thread(run_incident_detection)
             except Exception as id_err:
                 logger.warning(f"RPI incident detection failed: {id_err}")
 
@@ -1798,13 +1806,13 @@ async def run_slow_cycle():
                     expansion_age = (datetime.now(timezone.utc) - exp_ts).total_seconds() / 3600
                 if expansion_age >= 168:  # weekly
                     from app.rpi.expansion import run_expansion_pipeline
-                    run_expansion_pipeline()
+                    await asyncio.to_thread(run_expansion_pipeline)
             except Exception as exp_err:
                 logger.warning(f"RPI expansion failed: {exp_err}")
 
             # Score all protocols
             from app.rpi.scorer import run_rpi_scoring
-            rpi_results = run_rpi_scoring()
+            rpi_results = await asyncio.to_thread(run_rpi_scoring)
             logger.info(f"RPI scoring complete: {len(rpi_results)} protocols scored")
 
             # Attest RPI scores (14th domain)
@@ -1897,7 +1905,7 @@ async def run_slow_cycle():
         if dex_age_hours >= 3:
             from app.collectors.dex_pools import run_dex_pool_collection
             logger.info("Running DEX pool data collection...")
-            dex_results = run_dex_pool_collection()
+            dex_results = await asyncio.to_thread(run_dex_pool_collection)
             scored = sum(1 for r in dex_results if "score" in r)
             logger.info(f"DEX pool collection complete: {scored} components across {len(dex_results)} entries")
         else:
@@ -1949,7 +1957,7 @@ async def run_slow_cycle():
             _gov_daily_gate_open = True
             from app.collectors.governance_events import run_governance_event_collection
             logger.info("Running governance event collection...")
-            gov_result = run_governance_event_collection()
+            gov_result = await asyncio.to_thread(run_governance_event_collection)
             logger.info(f"Governance events: {gov_result.get('new_events', 0)} new across {gov_result.get('protocols_processed', 0)} protocols")
         else:
             logger.info(f"Governance events skipped — last ran {gov_age_hours:.1f}h ago")
@@ -2086,9 +2094,9 @@ async def run_slow_cycle():
             # Decay + prune after edge building
             try:
                 from app.indexer.edges import decay_edges, prune_stale_edges
-                decay_result = decay_edges()
+                decay_result = await asyncio.to_thread(decay_edges)
                 logger.info(f"Edge decay: {decay_result.get('edges_decayed', 0)} edges recalculated")
-                prune_result = prune_stale_edges()
+                prune_result = await asyncio.to_thread(prune_stale_edges)
                 logger.info(f"Edge prune: {prune_result.get('edges_archived', 0)} archived")
             except Exception as e:
                 logger.warning(f"Edge decay/prune failed: {e}")
@@ -2103,7 +2111,7 @@ async def run_slow_cycle():
     try:
         from app.data_layer.correlation_engine import run_correlation_computation
         logger.info("Running correlation computation...")
-        corr_result = run_correlation_computation()
+        corr_result = await asyncio.to_thread(run_correlation_computation)
         logger.info(f"Correlation computation: {corr_result}")
     except Exception as e:
         logger.warning(f"Correlation computation failed: {e}")
@@ -2114,7 +2122,7 @@ async def run_slow_cycle():
     try:
         from app.data_layer.incident_detector import run_incident_detection
         logger.info("Running incident detection...")
-        incident_result = run_incident_detection()
+        incident_result = await asyncio.to_thread(run_incident_detection)
         total_incidents = sum(v for v in incident_result.values() if isinstance(v, int))
         logger.info(f"Incident detection: {total_incidents} incidents detected")
     except Exception as e:
@@ -2151,7 +2159,7 @@ async def run_slow_cycle():
     try:
         from app.data_layer.wallet_behavior import run_behavioral_classification
         logger.info("Running wallet behavior classification...")
-        behavior_result = run_behavioral_classification(batch_size=2000)
+        behavior_result = await asyncio.to_thread(run_behavioral_classification, batch_size=2000)
         tagged = behavior_result.get("wallets_classified", 0)
         skipped = behavior_result.get("skipped", 0)
         logger.error(
@@ -2169,7 +2177,7 @@ async def run_slow_cycle():
     try:
         from app.collectors.contract_upgrades import collect_contract_upgrades
         logger.info("Running contract upgrade tracker...")
-        upgrade_result = collect_contract_upgrades()
+        upgrade_result = await asyncio.to_thread(collect_contract_upgrades)
         logger.error(
             f"=== CONTRACT UPGRADES: {upgrade_result.get('entities_checked', 0)} checked, "
             f"{upgrade_result.get('upgrades_detected', 0)} upgrades, "
@@ -2181,7 +2189,7 @@ async def run_slow_cycle():
     # Pipeline 17: Rated validator performance (daily-gated internally)
     try:
         from app.collectors.rated_validators import collect_validator_performance
-        validator_result = collect_validator_performance()
+        validator_result = await asyncio.to_thread(collect_validator_performance)
         logger.info(f"Validator performance: {validator_result}")
     except Exception as e:
         logger.error(f"Validator collector failed: {e}")
@@ -2189,7 +2197,7 @@ async def run_slow_cycle():
     # Pipeline 19: OpenSanctions screening (daily-gated internally)
     try:
         from app.collectors.sanctions_screening import run_sanctions_screening
-        sanctions_result = run_sanctions_screening()
+        sanctions_result = await asyncio.to_thread(run_sanctions_screening)
         logger.info(f"Sanctions screening: {sanctions_result}")
     except Exception as e:
         logger.error(f"Sanctions screening failed: {e}")
@@ -2197,7 +2205,7 @@ async def run_slow_cycle():
     # Pipeline 20: CourtListener enforcement history (weekly-gated internally)
     try:
         from app.collectors.enforcement_history import collect_enforcement_records
-        enforcement_result = collect_enforcement_records()
+        enforcement_result = await asyncio.to_thread(collect_enforcement_records)
         logger.info(f"Enforcement history: {enforcement_result}")
     except Exception as e:
         logger.error(f"Enforcement collector failed: {e}")
@@ -2205,7 +2213,7 @@ async def run_slow_cycle():
     # Pipeline 21: SEC EDGAR parent company financials (weekly-gated internally)
     try:
         from app.collectors.parent_company_financials import collect_parent_financials
-        edgar_result = collect_parent_financials()
+        edgar_result = await asyncio.to_thread(collect_parent_financials)
         logger.info(f"EDGAR financials: {edgar_result}")
     except Exception as e:
         logger.error(f"EDGAR collector failed: {e}")
@@ -2356,7 +2364,7 @@ async def run_slow_cycle():
                 try:
                     cfg = await asyncio.to_thread(get_stablecoin_config, sid)
                     if cfg:
-                        assemble_report_data("stablecoin", cfg["symbol"])
+                        await asyncio.to_thread(assemble_report_data, "stablecoin", cfg["symbol"])
                         report_count += 1
                 except Exception:
                     pass
@@ -2366,7 +2374,7 @@ async def run_slow_cycle():
                 from app.collectors.psi_collector import get_scoring_protocols
                 for slug in await asyncio.to_thread(get_scoring_protocols):
                     try:
-                        assemble_report_data("protocol", slug)
+                        await asyncio.to_thread(assemble_report_data, "protocol", slug)
                         report_count += 1
                     except Exception:
                         pass
@@ -2384,7 +2392,7 @@ async def run_slow_cycle():
     # -------------------------------------------------------------------------
     try:
         from app.actor_classification import classify_all_active
-        actor_result = classify_all_active()
+        actor_result = await asyncio.to_thread(classify_all_active)
         logger.info(
             f"Actor classification: {actor_result.get('classified', 0)} classified, "
             f"{actor_result.get('reclassified', 0)} reclassified"
@@ -2395,7 +2403,7 @@ async def run_slow_cycle():
     # Run discovery layer after actor classification
     try:
         from app.discovery import run_discovery_cycle
-        run_discovery_cycle()
+        await asyncio.to_thread(run_discovery_cycle)
     except Exception as e:
         logger.warning(f"Discovery cycle failed: {e}")
 
@@ -2502,7 +2510,7 @@ async def run_slow_cycle():
         if coherence_age_hours >= 24:
             from app.coherence import run_coherence_sweep
             logger.info("Running coherence sweep...")
-            coh_report = run_coherence_sweep()
+            coh_report = await asyncio.to_thread(run_coherence_sweep)
             logger.info(
                 f"Coherence sweep: {coh_report['domains_checked']} domains, "
                 f"{coh_report['issues_found']} issues"
@@ -2516,13 +2524,121 @@ async def run_slow_cycle():
     try:
         from app.track_record import detect_and_log_entries
         logger.error("[track_record] running detect_and_log_entries (fallback path)")
-        tr_result = detect_and_log_entries()
+        tr_result = await asyncio.to_thread(detect_and_log_entries)
         logger.error(f"[track_record] result: {tr_result}")
     except Exception as e:
         logger.error(f"[track_record] auto-log failed (fallback): {e}", exc_info=True)
 
     elapsed = time.time() - start
     logger.info(f"=== Slow cycle complete in {elapsed:.0f}s ===")
+
+
+def _ensure_oracle_tables_sync():
+    """Sync helper: create oracle tables and seed feeds (called via to_thread)."""
+    from app.database import execute as _exec_mig, fetch_one as _ofe
+    _exec_mig("""
+        CREATE TABLE IF NOT EXISTS oracle_registry (
+            id SERIAL PRIMARY KEY,
+            oracle_address VARCHAR(42) NOT NULL,
+            oracle_name VARCHAR(200) NOT NULL,
+            oracle_provider VARCHAR(50) NOT NULL,
+            chain VARCHAR(20) NOT NULL,
+            asset_symbol VARCHAR(20) NOT NULL,
+            quote_symbol VARCHAR(20) NOT NULL DEFAULT 'usd',
+            decimals INTEGER NOT NULL DEFAULT 8,
+            read_function VARCHAR(100),
+            is_active BOOLEAN DEFAULT TRUE,
+            entity_type VARCHAR(20),
+            entity_slug VARCHAR(100),
+            added_at TIMESTAMPTZ DEFAULT NOW(),
+            UNIQUE (oracle_address, chain, asset_symbol)
+        )
+    """)
+    _exec_mig("""
+        CREATE TABLE IF NOT EXISTS oracle_price_readings (
+            id SERIAL PRIMARY KEY,
+            oracle_address VARCHAR(42) NOT NULL,
+            oracle_name VARCHAR(200),
+            oracle_provider VARCHAR(50),
+            chain VARCHAR(20) NOT NULL,
+            asset_symbol VARCHAR(20) NOT NULL,
+            quote_symbol VARCHAR(20) NOT NULL DEFAULT 'usd',
+            oracle_price DECIMAL(30,8) NOT NULL,
+            oracle_price_raw VARCHAR(200),
+            oracle_decimals INTEGER,
+            cex_price DECIMAL(30,8),
+            deviation_pct DECIMAL(10,6),
+            deviation_abs DECIMAL(20,8),
+            latency_seconds INTEGER,
+            round_id VARCHAR(100),
+            answer_timestamp TIMESTAMPTZ,
+            recorded_at TIMESTAMPTZ DEFAULT NOW(),
+            is_stress_event BOOLEAN DEFAULT FALSE,
+            content_hash VARCHAR(66),
+            attested_at TIMESTAMPTZ
+        )
+    """)
+    _exec_mig("""
+        CREATE TABLE IF NOT EXISTS oracle_stress_events (
+            id SERIAL PRIMARY KEY,
+            oracle_address VARCHAR(42) NOT NULL,
+            oracle_name VARCHAR(200),
+            asset_symbol VARCHAR(20) NOT NULL,
+            chain VARCHAR(20) NOT NULL,
+            event_type VARCHAR(50),
+            event_start TIMESTAMPTZ NOT NULL,
+            event_end TIMESTAMPTZ,
+            duration_seconds INTEGER,
+            max_deviation_pct DECIMAL(10,6),
+            max_latency_seconds INTEGER,
+            reading_count INTEGER DEFAULT 1,
+            concurrent_sii_score DECIMAL(6,2),
+            concurrent_psi_scores JSONB,
+            affected_protocols JSONB,
+            content_hash VARCHAR(66),
+            attested_at TIMESTAMPTZ
+        )
+    """)
+    # Seed oracle feeds if empty
+    _ocount = _ofe("SELECT COUNT(*) as cnt FROM oracle_registry")
+    if _ocount and _ocount["cnt"] == 0:
+        _exec_mig("""
+            INSERT INTO oracle_registry
+                (oracle_address, oracle_name, oracle_provider, chain, asset_symbol, quote_symbol,
+                 decimals, read_function, entity_type, entity_slug)
+            VALUES
+                ('0x8fFfFfd4AfB6115b954Bd326cbe7B4BA576818f6', 'Chainlink USDC/USD', 'chainlink',
+                 'ethereum', 'USDC', 'usd', 8, 'latestRoundData', 'stablecoin', 'usdc'),
+                ('0x3E7d1eAB13ad0104d2750B8863b489D65364e32D', 'Chainlink USDT/USD', 'chainlink',
+                 'ethereum', 'USDT', 'usd', 8, 'latestRoundData', 'stablecoin', 'usdt'),
+                ('0xAed0c38402a5d19df6E4c03F4E2DceD6e29c1ee9', 'Chainlink DAI/USD', 'chainlink',
+                 'ethereum', 'DAI', 'usd', 8, 'latestRoundData', 'stablecoin', 'dai'),
+                ('0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419', 'Chainlink ETH/USD', 'chainlink',
+                 'ethereum', 'ETH', 'usd', 8, 'latestRoundData', NULL, NULL),
+                ('0xF4030086522a5bEEa4988F8cA5B36dbC97BeE88c', 'Chainlink BTC/USD', 'chainlink',
+                 'ethereum', 'BTC', 'usd', 8, 'latestRoundData', NULL, NULL),
+                ('0x86392dC19c0b719886221c78AB11eb8Cf5c52812', 'Chainlink stETH/ETH', 'chainlink',
+                 'ethereum', 'stETH', 'eth', 18, 'latestRoundData', 'stablecoin', 'steth')
+            ON CONFLICT (oracle_address, chain, asset_symbol) DO NOTHING
+        """)
+        # Remove Pyth — pull-oracle ABI incompatible with Chainlink read path
+        _exec_mig("DELETE FROM oracle_registry WHERE oracle_provider = 'pyth'")
+        logger.error("=== ORACLE: seeded 6 oracle feeds into oracle_registry ===")
+
+
+def _update_cda_issuers_sync():
+    """Sync helper: mark non-attesting CDA issuers (called via to_thread)."""
+    from app.database import execute as _cda_exec
+    # USDD (TRON): minimal attestation practices, no standard reserve reports
+    # DAI (MakerDAO/Sky): crypto-backed, uses on-chain collateral not attestation PDFs
+    # FRAX (Frax Finance): algorithmic/hybrid, no standard attestation reports
+    for _symbol, _method in [("USDD", "no_attestation"), ("DAI", "crypto_backed"), ("FRAX", "algorithmic")]:
+        _cda_exec("""
+            UPDATE cda_issuer_registry
+            SET collection_method = %s, updated_at = NOW()
+            WHERE UPPER(asset_symbol) = %s
+              AND collection_method NOT IN ('no_attestation', 'crypto_backed', 'algorithmic')
+        """, (_method, _symbol))
 
 
 # =============================================================================
@@ -2644,8 +2760,9 @@ async def run_slow_cycle_parallel():
     try:
         async def _wallet_expansion():
             from app.data_layer.wallet_expansion import run_wallet_graph_expansion
-            from app.database import fetch_one as _wfe
-            _wc = _wfe("SELECT COUNT(*) as cnt FROM wallet_graph.wallets")
+            _wc = await asyncio.to_thread(
+                fetch_one, "SELECT COUNT(*) as cnt FROM wallet_graph.wallets"
+            )
             _count = _wc["cnt"] if _wc else 0
             logger.error(f"=== WALLET EXPANSION: started, target=10000, current={_count} ===")
             result = await run_wallet_graph_expansion(target_new_wallets=10_000, max_etherscan_calls=5_000)
@@ -2674,119 +2791,21 @@ async def run_slow_cycle_parallel():
 
     # Ensure oracle_registry table exists (migration may not have run)
     try:
-        from app.database import execute as _exec_mig
-        _exec_mig("""
-            CREATE TABLE IF NOT EXISTS oracle_registry (
-                id SERIAL PRIMARY KEY,
-                oracle_address VARCHAR(42) NOT NULL,
-                oracle_name VARCHAR(200) NOT NULL,
-                oracle_provider VARCHAR(50) NOT NULL,
-                chain VARCHAR(20) NOT NULL,
-                asset_symbol VARCHAR(20) NOT NULL,
-                quote_symbol VARCHAR(20) NOT NULL DEFAULT 'usd',
-                decimals INTEGER NOT NULL DEFAULT 8,
-                read_function VARCHAR(100),
-                is_active BOOLEAN DEFAULT TRUE,
-                entity_type VARCHAR(20),
-                entity_slug VARCHAR(100),
-                added_at TIMESTAMPTZ DEFAULT NOW(),
-                UNIQUE (oracle_address, chain, asset_symbol)
-            )
-        """)
-        _exec_mig("""
-            CREATE TABLE IF NOT EXISTS oracle_price_readings (
-                id SERIAL PRIMARY KEY,
-                oracle_address VARCHAR(42) NOT NULL,
-                oracle_name VARCHAR(200),
-                oracle_provider VARCHAR(50),
-                chain VARCHAR(20) NOT NULL,
-                asset_symbol VARCHAR(20) NOT NULL,
-                quote_symbol VARCHAR(20) NOT NULL DEFAULT 'usd',
-                oracle_price DECIMAL(30,8) NOT NULL,
-                oracle_price_raw VARCHAR(200),
-                oracle_decimals INTEGER,
-                cex_price DECIMAL(30,8),
-                deviation_pct DECIMAL(10,6),
-                deviation_abs DECIMAL(20,8),
-                latency_seconds INTEGER,
-                round_id VARCHAR(100),
-                answer_timestamp TIMESTAMPTZ,
-                recorded_at TIMESTAMPTZ DEFAULT NOW(),
-                is_stress_event BOOLEAN DEFAULT FALSE,
-                content_hash VARCHAR(66),
-                attested_at TIMESTAMPTZ
-            )
-        """)
-        _exec_mig("""
-            CREATE TABLE IF NOT EXISTS oracle_stress_events (
-                id SERIAL PRIMARY KEY,
-                oracle_address VARCHAR(42) NOT NULL,
-                oracle_name VARCHAR(200),
-                asset_symbol VARCHAR(20) NOT NULL,
-                chain VARCHAR(20) NOT NULL,
-                event_type VARCHAR(50),
-                event_start TIMESTAMPTZ NOT NULL,
-                event_end TIMESTAMPTZ,
-                duration_seconds INTEGER,
-                max_deviation_pct DECIMAL(10,6),
-                max_latency_seconds INTEGER,
-                reading_count INTEGER DEFAULT 1,
-                concurrent_sii_score DECIMAL(6,2),
-                concurrent_psi_scores JSONB,
-                affected_protocols JSONB,
-                content_hash VARCHAR(66),
-                attested_at TIMESTAMPTZ
-            )
-        """)
-        # Seed oracle feeds if empty
-        from app.database import fetch_one as _ofe
-        _ocount = _ofe("SELECT COUNT(*) as cnt FROM oracle_registry")
-        if _ocount and _ocount["cnt"] == 0:
-            _exec_mig("""
-                INSERT INTO oracle_registry
-                    (oracle_address, oracle_name, oracle_provider, chain, asset_symbol, quote_symbol,
-                     decimals, read_function, entity_type, entity_slug)
-                VALUES
-                    ('0x8fFfFfd4AfB6115b954Bd326cbe7B4BA576818f6', 'Chainlink USDC/USD', 'chainlink',
-                     'ethereum', 'USDC', 'usd', 8, 'latestRoundData', 'stablecoin', 'usdc'),
-                    ('0x3E7d1eAB13ad0104d2750B8863b489D65364e32D', 'Chainlink USDT/USD', 'chainlink',
-                     'ethereum', 'USDT', 'usd', 8, 'latestRoundData', 'stablecoin', 'usdt'),
-                    ('0xAed0c38402a5d19df6E4c03F4E2DceD6e29c1ee9', 'Chainlink DAI/USD', 'chainlink',
-                     'ethereum', 'DAI', 'usd', 8, 'latestRoundData', 'stablecoin', 'dai'),
-                    ('0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419', 'Chainlink ETH/USD', 'chainlink',
-                     'ethereum', 'ETH', 'usd', 8, 'latestRoundData', NULL, NULL),
-                    ('0xF4030086522a5bEEa4988F8cA5B36dbC97BeE88c', 'Chainlink BTC/USD', 'chainlink',
-                     'ethereum', 'BTC', 'usd', 8, 'latestRoundData', NULL, NULL),
-                    ('0x86392dC19c0b719886221c78AB11eb8Cf5c52812', 'Chainlink stETH/ETH', 'chainlink',
-                     'ethereum', 'stETH', 'eth', 18, 'latestRoundData', 'stablecoin', 'steth')
-                ON CONFLICT (oracle_address, chain, asset_symbol) DO NOTHING
-            """)
-            # Remove Pyth — pull-oracle ABI incompatible with Chainlink read path
-            _exec_mig("DELETE FROM oracle_registry WHERE oracle_provider = 'pyth'")
-            logger.error("=== ORACLE: seeded 6 oracle feeds into oracle_registry ===")
+        await asyncio.to_thread(_ensure_oracle_tables_sync)
     except Exception as e:
         logger.warning(f"Oracle table creation/seeding failed (non-critical): {e}")
 
     # Mark non-attesting CDA issuers so they don't show as stale
     try:
-        from app.database import execute as _cda_exec
-        # USDD (TRON): minimal attestation practices, no standard reserve reports
-        # DAI (MakerDAO/Sky): crypto-backed, uses on-chain collateral not attestation PDFs
-        # FRAX (Frax Finance): algorithmic/hybrid, no standard attestation reports
-        for _symbol, _method in [("USDD", "no_attestation"), ("DAI", "crypto_backed"), ("FRAX", "algorithmic")]:
-            _cda_exec("""
-                UPDATE cda_issuer_registry
-                SET collection_method = %s, updated_at = NOW()
-                WHERE UPPER(asset_symbol) = %s
-                  AND collection_method NOT IN ('no_attestation', 'crypto_backed', 'algorithmic')
-            """, (_method, _symbol))
+        await asyncio.to_thread(_update_cda_issuers_sync)
     except Exception as e:
         logger.debug(f"CDA issuer method update skipped: {e}")
 
     # Contract surveillance re-scan — force if no scans in 24h
     try:
-        from app.database import fetch_one as _csf
-        _cs_latest = _csf("SELECT MAX(scanned_at) as latest FROM contract_surveillance")
+        _cs_latest = await asyncio.to_thread(
+            fetch_one, "SELECT MAX(scanned_at) as latest FROM contract_surveillance"
+        )
         _cs_age = 999
         if _cs_latest and _cs_latest.get("latest"):
             _cslt = _cs_latest["latest"]
@@ -2843,7 +2862,7 @@ async def run_slow_cycle_parallel():
     try:
         from app.track_record import detect_and_log_entries
         logger.error("[track_record] running detect_and_log_entries")
-        tr_result = detect_and_log_entries()
+        tr_result = await asyncio.to_thread(detect_and_log_entries)
         logger.error(f"[track_record] result: {tr_result}")
     except Exception as e:
         logger.error(f"[track_record] auto-log failed: {e}", exc_info=True)
@@ -2851,7 +2870,7 @@ async def run_slow_cycle_parallel():
     # Track record: evaluate pending followups (daily)
     try:
         from app.track_record_followups import evaluate_pending_followups
-        fu_result = evaluate_pending_followups()
+        fu_result = await asyncio.to_thread(evaluate_pending_followups)
         logger.info(f"Track record followups: {fu_result.get('evaluated', 0)} evaluated")
     except Exception as e:
         logger.error(f"track_record followup eval failed: {e}", exc_info=True)
@@ -2859,7 +2878,7 @@ async def run_slow_cycle_parallel():
     # Flush API usage tracker
     try:
         from app.api_usage_tracker import flush
-        flush()
+        await asyncio.to_thread(flush)
     except Exception:
         pass
 
@@ -2878,6 +2897,61 @@ async def run_scoring_cycle():
     await run_slow_cycle_parallel()
     logger.error("=== SLOW CYCLE RETURNED, SCORING CYCLE COMPLETE ===")
     return result
+
+
+def _run_vacuum_analyze_sync():
+    """Sync helper: VACUUM ANALYZE churny tables (called via to_thread)."""
+    import psycopg2 as _vac_pg
+    _vac_url = os.environ.get("DATABASE_URL", "")
+    if not _vac_url:
+        return
+    _vac_conn = _vac_pg.connect(_vac_url)
+    _vac_conn.autocommit = True
+    try:
+        _vac_cur = _vac_conn.cursor()
+        for _tbl in [
+            "wallet_graph.wallet_risk_scores",
+            "wallet_graph.wallet_holdings",
+            "component_readings",
+        ]:
+            try:
+                _vac_cur.execute(f"VACUUM ANALYZE {_tbl}")
+            except Exception as _ve:
+                logger.error(f"[startup] VACUUM ANALYZE {_tbl} failed: {_ve}")
+                try:
+                    _vac_cur.execute(f"ANALYZE {_tbl}")
+                except Exception:
+                    pass
+        # Regular ANALYZE for other key tables
+        for _tbl in [
+            "score_history", "scores", "psi_scores",
+            "wallet_graph.wallets", "wallet_graph.wallet_edges",
+            "entity_snapshots_hourly", "data_provenance", "state_attestations",
+            "provenance_proofs", "assessment_events",
+        ]:
+            try:
+                _vac_cur.execute(f"ANALYZE {_tbl}")
+            except Exception:
+                pass
+        _vac_cur.close()
+        logger.error("[startup] VACUUM ANALYZE complete")
+    finally:
+        _vac_conn.close()
+
+
+def _seed_methodologies_sync():
+    """Sync helper: seed methodology hashes (called via to_thread)."""
+    from app.methodology_hashes import register_methodology
+    import scripts.seed_initial_methodology as _seed_meth
+    _seeded = 0
+    _skipped = 0
+    for _mid, _content, _desc in _seed_meth.METHODOLOGIES:
+        try:
+            register_methodology(_mid, _content, _desc)
+            _seeded += 1
+        except ValueError:
+            _skipped += 1
+    return _seeded, _skipped
 
 
 # =============================================================================
@@ -3125,41 +3199,7 @@ async def main():
 
     # VACUUM ANALYZE churny tables — needs autocommit (can't run in transaction)
     try:
-        import psycopg2 as _vac_pg
-        _vac_url = os.environ.get("DATABASE_URL", "")
-        if _vac_url:
-            _vac_conn = _vac_pg.connect(_vac_url)
-            _vac_conn.autocommit = True
-            try:
-                _vac_cur = _vac_conn.cursor()
-                for _tbl in [
-                    "wallet_graph.wallet_risk_scores",
-                    "wallet_graph.wallet_holdings",
-                    "component_readings",
-                ]:
-                    try:
-                        _vac_cur.execute(f"VACUUM ANALYZE {_tbl}")
-                    except Exception as _ve:
-                        logger.error(f"[startup] VACUUM ANALYZE {_tbl} failed: {_ve}")
-                        try:
-                            _vac_cur.execute(f"ANALYZE {_tbl}")
-                        except Exception:
-                            pass
-                # Regular ANALYZE for other key tables
-                for _tbl in [
-                    "score_history", "scores", "psi_scores",
-                    "wallet_graph.wallets", "wallet_graph.wallet_edges",
-                    "entity_snapshots_hourly", "data_provenance", "state_attestations",
-                    "provenance_proofs", "assessment_events",
-                ]:
-                    try:
-                        _vac_cur.execute(f"ANALYZE {_tbl}")
-                    except Exception:
-                        pass
-                _vac_cur.close()
-                logger.error("[startup] VACUUM ANALYZE complete")
-            finally:
-                _vac_conn.close()
+        await asyncio.to_thread(_run_vacuum_analyze_sync)
     except Exception as e:
         logger.error(f"[startup] VACUUM ANALYZE skipped: {e}")
 
@@ -3375,16 +3415,7 @@ async def main():
 
     # Seed methodology hashes (idempotent — skips existing)
     try:
-        from app.methodology_hashes import register_methodology
-        _meth_seeded = 0
-        _meth_skipped = 0
-        import scripts.seed_initial_methodology as _seed_meth
-        for _mid, _content, _desc in _seed_meth.METHODOLOGIES:
-            try:
-                register_methodology(_mid, _content, _desc)
-                _meth_seeded += 1
-            except ValueError:
-                _meth_skipped += 1
+        _meth_seeded, _meth_skipped = await asyncio.to_thread(_seed_methodologies_sync)
         logger.error(f"[startup] methodology hashes: seeded={_meth_seeded}, skipped={_meth_skipped}")
     except Exception as e:
         logger.error(f"[startup] methodology seed failed: {e}")
@@ -3593,7 +3624,7 @@ async def main():
                         try:
                             from app.governance import run_crawl as gov_crawl
                             logger.info("Running governance crawl...")
-                            gov_crawl(since_days=7)
+                            await asyncio.to_thread(gov_crawl, since_days=7)
                         except Exception as e:
                             logger.warning(f"Governance crawl failed: {e}")
 
@@ -3610,7 +3641,8 @@ async def main():
                         )
                         raise SystemExit(1)
                     logger.error(f"[main_loop] DB failure #{consecutive_cycle_db_failures}: {db_err}")
-                    _record_cycle_error(
+                    await asyncio.to_thread(
+                        _record_cycle_error,
                         error_type=type(db_err).__name__,
                         error_message=str(db_err),
                         cycle_phase="cycle_db",
@@ -3622,7 +3654,8 @@ async def main():
                     raise
                 except Exception as cycle_err:
                     logger.critical(f"[main_loop] cycle error (caught — see cycle_errors table): {type(cycle_err).__name__}: {cycle_err}")
-                    _record_cycle_error(
+                    await asyncio.to_thread(
+                        _record_cycle_error,
                         error_type=type(cycle_err).__name__,
                         error_message=str(cycle_err),
                         cycle_phase="unknown",

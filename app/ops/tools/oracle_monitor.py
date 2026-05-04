@@ -19,6 +19,7 @@ with tracing, Tenderly, or Alchemy trace API).  This limitation is
 documented in DUNE_QUERIES.md.
 """
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timezone
@@ -106,6 +107,29 @@ async def poll_oracle_events():
     return results
 
 
+def _store_events(chain_name, event_logs):
+    """Store ScoreUpdated events into keeper_publish_log (sync — called via to_thread)."""
+    new_events = 0
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            for log in event_logs:
+                tx_hash = log.get("transactionHash", "")
+                # Check if already stored
+                existing = fetch_one(
+                    "SELECT id FROM keeper_publish_log WHERE tx_hash = %s", (tx_hash,)
+                )
+                if existing:
+                    continue
+
+                cur.execute("""
+                    INSERT INTO keeper_publish_log (chain, tx_hash, success, scores_published)
+                    VALUES (%s, %s, TRUE, 1)
+                """, (chain_name, tx_hash))
+                new_events += 1
+            conn.commit()
+    return new_events
+
+
 async def _poll_chain(chain: str, rpc_url: str, oracle_address: str) -> int:
     """Poll a single chain for ScoreUpdated events in the last ~1000 blocks."""
     async with httpx.AsyncClient() as client:
@@ -130,25 +154,8 @@ async def _poll_chain(chain: str, rpc_url: str, oracle_address: str) -> int:
         }, timeout=15.0)
 
         logs = resp.json().get("result", [])
-        new_events = 0
 
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                for log in logs:
-                    tx_hash = log.get("transactionHash", "")
-                    # Check if already stored
-                    existing = fetch_one(
-                        "SELECT id FROM keeper_publish_log WHERE tx_hash = %s", (tx_hash,)
-                    )
-                    if existing:
-                        continue
-
-                    cur.execute("""
-                        INSERT INTO keeper_publish_log (chain, tx_hash, success, scores_published)
-                        VALUES (%s, %s, TRUE, 1)
-                    """, (chain, tx_hash))
-                    new_events += 1
-                conn.commit()
+        new_events = await asyncio.to_thread(_store_events, chain, logs)
 
         logger.info(f"Oracle monitor [{chain}]: {new_events} new events from {len(logs)} logs")
         return new_events
@@ -163,7 +170,7 @@ async def poll_external_interactions() -> dict:
     Check Basescan and Arbiscan for transactions TO our oracle and SBT contracts
     that are NOT from our keeper.  These are external interactions.
     """
-    _ensure_table()
+    await asyncio.to_thread(_ensure_table)
 
     summary = {}
     async with httpx.AsyncClient(timeout=20.0) as client:
@@ -232,7 +239,8 @@ async def _poll_contract(client: httpx.AsyncClient, contract: dict) -> int:
             continue
 
         # Check duplicate
-        existing = fetch_one(
+        existing = await asyncio.to_thread(
+            fetch_one,
             "SELECT id FROM oracle_external_interactions WHERE tx_hash = %s",
             (tx_hash,),
         )
@@ -254,7 +262,8 @@ async def _poll_contract(client: httpx.AsyncClient, contract: dict) -> int:
         block_number = int(tx["blockNumber"]) if tx.get("blockNumber") else None
         gas_used = int(tx["gasUsed"]) if tx.get("gasUsed") else None
 
-        execute(
+        await asyncio.to_thread(
+            execute,
             """INSERT INTO oracle_external_interactions
                (chain, contract_type, tx_hash, from_address,
                 function_selector, block_number, block_timestamp, gas_used)

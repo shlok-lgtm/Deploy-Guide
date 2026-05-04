@@ -356,7 +356,7 @@ async def _try_reducto_pdf(symbol: str, pdf_url: str, prefix: str, disclosure_ty
     Try to parse a PDF with Reducto and store the result.
     Returns (success: bool, method_label: str).
     """
-    if await _already_collected_today(symbol, pdf_url):
+    if await asyncio.to_thread(_already_collected_today, symbol, pdf_url):
         logger.info(f"{prefix} — PDF already parsed today: {pdf_url[:60]}...")
         return True, "already_collected"
 
@@ -375,7 +375,8 @@ async def _try_reducto_pdf(symbol: str, pdf_url: str, prefix: str, disclosure_ty
 
     logger.info(f"{prefix} — Reducto OK (confidence: {confidence:.2f})")
 
-    await _store_extraction(
+    await asyncio.to_thread(
+        _store_extraction,
         asset_symbol=symbol,
         source_url=pdf_url,
         source_type="pdf_attestation",
@@ -390,7 +391,7 @@ async def _try_reducto_pdf(symbol: str, pdf_url: str, prefix: str, disclosure_ty
     try:
         from urllib.parse import urlparse
         _issuer_domain = urlparse(pdf_url).netloc or "unknown"
-        execute("""
+        await asyncio.to_thread(execute, """
             INSERT INTO cda_source_urls (asset_symbol, issuer, source_url)
             VALUES (%s, %s, %s)
             ON CONFLICT (asset_symbol, source_url) DO UPDATE SET discovered_at = NOW(), active = TRUE
@@ -401,12 +402,12 @@ async def _try_reducto_pdf(symbol: str, pdf_url: str, prefix: str, disclosure_ty
     # Run validation
     try:
         from app.services.cda_validator import validate_extraction
-        last_ext = fetch_one(
+        last_ext = await asyncio.to_thread(fetch_one,
             "SELECT id FROM cda_vendor_extractions WHERE asset_symbol = %s ORDER BY extracted_at DESC LIMIT 1",
             (symbol,)
         )
         if last_ext and structured:
-            validate_extraction(last_ext["id"], symbol, structured, disclosure_type or "fiat-reserve")
+            await asyncio.to_thread(validate_extraction, last_ext["id"], symbol, structured, disclosure_type or "fiat-reserve")
     except Exception as ve:
         logger.warning(f"{prefix} — validation error: {ve}")
 
@@ -425,7 +426,7 @@ async def _step_parallel_extract(issuer: dict, prefix: str) -> dict | None:
 
     symbol = issuer["asset_symbol"]
 
-    if await _already_collected_today(symbol, url):
+    if await asyncio.to_thread(_already_collected_today, symbol, url):
         logger.info(f"{prefix} — [Step 1] page already collected today")
         return None  # Already tried today, let waterfall continue
 
@@ -448,7 +449,8 @@ async def _step_parallel_extract(issuer: dict, prefix: str) -> dict | None:
         excerpts = r.get("excerpts", []) or []
 
     # Store the web extraction
-    await _store_extraction(
+    await asyncio.to_thread(
+        _store_extraction,
         asset_symbol=symbol,
         source_url=url,
         source_type="transparency_page",
@@ -478,7 +480,8 @@ async def _step_parallel_extract(issuer: dict, prefix: str) -> dict | None:
     # Try extracting data directly from page markdown
     page_data = _extract_reserve_data_from_markdown(full_content)
     if page_data:
-        await _store_extraction(
+        await asyncio.to_thread(
+            _store_extraction,
             asset_symbol=symbol,
             source_url=url,
             source_type="transparency_page",
@@ -594,7 +597,8 @@ async def _step_firecrawl_js(issuer: dict, prefix: str) -> dict | None:
         # 3b: Try extracting reserve data from rendered markdown
         page_data = _extract_reserve_data_from_markdown(markdown)
         if page_data:
-            await _store_extraction(
+            await asyncio.to_thread(
+                _store_extraction,
                 asset_symbol=symbol,
                 source_url=url,
                 source_type="transparency_page",
@@ -608,9 +612,9 @@ async def _step_firecrawl_js(issuer: dict, prefix: str) -> dict | None:
 
         # 3c: Framer module trick — discover PDFs embedded in JS components
         logger.info(f"{prefix} — [Step 3c] Framer module extraction")
-        framer_pdfs = firecrawl_client.discover_framer_pdfs(url)
+        framer_pdfs = await asyncio.to_thread(firecrawl_client.discover_framer_pdfs, url)
         if framer_pdfs:
-            best = firecrawl_client.identify_most_recent_attestation(framer_pdfs)
+            best = await asyncio.to_thread(firecrawl_client.identify_most_recent_attestation, framer_pdfs)
             if best:
                 ok, method = await _try_reducto_pdf(symbol, best, prefix, disclosure_type=issuer.get("disclosure_type"))
                 if ok:
@@ -654,7 +658,8 @@ async def _step_firecrawl_json(issuer: dict, prefix: str) -> dict | None:
         if isinstance(extract_data, dict) and any(
             v for v in extract_data.values() if v is not None and v != "" and v != 0
         ):
-            await _store_extraction(
+            await asyncio.to_thread(
+                _store_extraction,
                 asset_symbol=symbol,
                 source_url=url,
                 source_type="transparency_page",
@@ -668,12 +673,12 @@ async def _step_firecrawl_json(issuer: dict, prefix: str) -> dict | None:
             # Run validation
             try:
                 from app.services.cda_validator import validate_extraction
-                last_ext = fetch_one(
+                last_ext = await asyncio.to_thread(fetch_one,
                     "SELECT id FROM cda_vendor_extractions WHERE asset_symbol = %s ORDER BY extracted_at DESC LIMIT 1",
                     (symbol,)
                 )
                 if last_ext and extract_data:
-                    validate_extraction(last_ext["id"], symbol, extract_data, disc_type)
+                    await asyncio.to_thread(validate_extraction, last_ext["id"], symbol, extract_data, disc_type)
             except Exception as ve:
                 logger.warning(f"{prefix} — validation error: {ve}")
 
@@ -769,7 +774,8 @@ async def _step_parallel_task(issuer: dict, prefix: str) -> dict | None:
             except ValueError:
                 pass
 
-        await _store_extraction(
+        await asyncio.to_thread(
+            _store_extraction,
             asset_symbol=symbol,
             source_url="research",
             source_type="research",
@@ -821,7 +827,7 @@ async def collect_issuer_adaptive(issuer: dict, prefix: str) -> dict:
         logger.info(f"{prefix} — skipped (on-chain only: {category})")
         return {"status": "on_chain_only", "method": None}
 
-    if _has_pdf_extraction_today(symbol):
+    if await asyncio.to_thread(_has_pdf_extraction_today, symbol):
         logger.info(f"{prefix} — skipped (PDF already extracted today)")
         return {"status": "already_collected", "method": None}
 
@@ -851,7 +857,7 @@ async def _collect_multi_source(issuer: dict, source_urls: list, prefix: str) ->
         if not src_url:
             continue
 
-        if await _already_collected_today(symbol, src_url):
+        if await asyncio.to_thread(_already_collected_today, symbol, src_url):
             logger.info(f"{prefix} — [Source {i+1}/{len(source_urls)}] {src_type} already collected today")
             results.append({"source": src_type, "status": "already_collected"})
             any_success = True
@@ -873,11 +879,11 @@ async def _collect_multi_source(issuer: dict, source_urls: list, prefix: str) ->
         await asyncio.sleep(2)
 
     if any_success:
-        _update_registry(symbol, success=True, collection_method="multi_source")
+        await asyncio.to_thread(_update_registry, symbol, True, "multi_source")
         methods = [r.get("method", r["source"]) for r in results if r["status"] == "success"]
         return {"status": "success", "method": "+".join(methods) if methods else "multi_source", "sources": results}
     else:
-        _update_registry(symbol, success=False, failure_reason="all_sources_failed")
+        await asyncio.to_thread(_update_registry, symbol, False, None, "all_sources_failed")
         return {"status": "failed", "method": None, "sources": results}
 
 
@@ -943,7 +949,8 @@ async def _collect_dashboard(symbol: str, url: str, disc_type: str, prefix: str)
         if isinstance(extract_data, dict) and any(
             v for v in extract_data.values() if v is not None and v != "" and v != 0
         ):
-            await _store_extraction(
+            await asyncio.to_thread(
+                _store_extraction,
                 asset_symbol=symbol,
                 source_url=url,
                 source_type="dashboard",
@@ -957,12 +964,12 @@ async def _collect_dashboard(symbol: str, url: str, disc_type: str, prefix: str)
             # Run validation
             try:
                 from app.services.cda_validator import validate_extraction
-                last_ext = fetch_one(
+                last_ext = await asyncio.to_thread(fetch_one,
                     "SELECT id FROM cda_vendor_extractions WHERE asset_symbol = %s ORDER BY extracted_at DESC LIMIT 1",
                     (symbol,)
                 )
                 if last_ext:
-                    validate_extraction(last_ext["id"], symbol, extract_data, disc_type)
+                    await asyncio.to_thread(validate_extraction, last_ext["id"], symbol, extract_data, disc_type)
             except Exception as ve:
                 logger.warning(f"{prefix} — dashboard validation error: {ve}")
 
@@ -974,7 +981,8 @@ async def _collect_dashboard(symbol: str, url: str, disc_type: str, prefix: str)
         else:
             page_data = None
         if page_data:
-            await _store_extraction(
+            await asyncio.to_thread(
+                _store_extraction,
                 asset_symbol=symbol,
                 source_url=url,
                 source_type="dashboard",
@@ -1032,7 +1040,8 @@ async def _collect_attestation_page(issuer: dict, url: str, prefix: str) -> dict
         full_content = results_list[0].get("full_content", "") or ""
 
     # Store page scrape
-    await _store_extraction(
+    await asyncio.to_thread(
+        _store_extraction,
         asset_symbol=symbol,
         source_url=url,
         source_type="attestation_page",
@@ -1087,7 +1096,8 @@ async def _collect_api_source(symbol: str, url: str, prefix: str) -> dict | None
             data = resp.json()
 
             if data:
-                await _store_extraction(
+                await asyncio.to_thread(
+                    _store_extraction,
                     asset_symbol=symbol,
                     source_url=url,
                     source_type="api",
@@ -1133,7 +1143,7 @@ async def _collect_single_url_waterfall(issuer: dict, prefix: str) -> dict:
                 elif step_name == "parallel_search":
                     method_to_store = "web_extract"
 
-                _update_registry(symbol, success=True, collection_method=method_to_store)
+                await asyncio.to_thread(_update_registry, symbol, True, method_to_store)
                 result["step"] = step_name
                 logger.info(f"{prefix} — SUCCESS via {result['method']} (step: {step_name})")
                 return result
@@ -1144,10 +1154,12 @@ async def _collect_single_url_waterfall(issuer: dict, prefix: str) -> dict:
 
         await asyncio.sleep(1)
 
-    _update_registry(
+    await asyncio.to_thread(
+        _update_registry,
         symbol,
-        success=False,
-        failure_reason="; ".join(attempts[-3:]),
+        False,
+        None,
+        "; ".join(attempts[-3:]),
     )
     logger.warning(f"{prefix} — ALL STEPS FAILED")
     for a in attempts:
@@ -1171,7 +1183,7 @@ async def run_collection():
     """Run the full CDA collection pipeline across all active issuers."""
     logger.info("=== CDA Collection Pipeline Starting (Adaptive Waterfall) ===")
 
-    issuers = fetch_all(
+    issuers = await asyncio.to_thread(fetch_all,
         """
         SELECT asset_symbol, issuer_name, transparency_url,
                collection_method, asset_category, consecutive_failures,
@@ -1228,18 +1240,18 @@ async def run_collection():
     # Attest CDA extractions from this run
     try:
         from app.state_attestation import attest_state
-        recent = fetch_all(
+        recent = await asyncio.to_thread(fetch_all,
             "SELECT asset_symbol, field_name, extracted_value, source_url FROM cda_vendor_extractions WHERE extracted_at > NOW() - INTERVAL '2 hours'"
         )
         if recent:
-            attest_state("cda_extractions", [dict(r) for r in recent])
+            await asyncio.to_thread(attest_state, "cda_extractions", [dict(r) for r in recent])
     except Exception as ae:
         logger.debug(f"CDA attestation skipped: {ae}")
 
 
 async def collect_single_issuer(asset_symbol: str):
     """Run collection for a single issuer by symbol. Used by monitor webhooks."""
-    issuer = fetch_one(
+    issuer = await asyncio.to_thread(fetch_one,
         """
         SELECT asset_symbol, issuer_name, transparency_url,
                collection_method, asset_category, consecutive_failures,
@@ -1265,7 +1277,7 @@ async def setup_monitors():
     Create Parallel Monitor watches for all active web_extract issuers.
     Requires Monitor API access (higher Parallel.ai tier).
     """
-    issuers = fetch_all(
+    issuers = await asyncio.to_thread(fetch_all,
         """
         SELECT asset_symbol, issuer_name, transparency_url
         FROM cda_issuer_registry
@@ -1294,7 +1306,7 @@ async def setup_monitors():
         monitor_id = result.get("monitor_id") or result.get("id") or ""
         logger.info(f"Monitor created for {symbol}: {monitor_id}")
 
-        execute(
+        await asyncio.to_thread(execute,
             """
             INSERT INTO cda_monitors (asset_symbol, parallel_monitor_id, query, url, frequency)
             VALUES (%s, %s, %s, %s, 'daily')
@@ -1304,7 +1316,7 @@ async def setup_monitors():
             (symbol, monitor_id, query, iss["transparency_url"]),
         )
 
-        execute(
+        await asyncio.to_thread(execute,
             "UPDATE cda_issuer_registry SET parallel_monitor_id = %s WHERE asset_symbol = %s",
             (monitor_id, symbol),
         )
@@ -1339,7 +1351,7 @@ async def discover_new_issuer(asset_symbol: str, coingecko_id: str):
 
     if "error" in result:
         logger.warning(f"CDA: Parallel task failed for {asset_symbol}: {result['error']}")
-        execute(
+        await asyncio.to_thread(execute,
             """
             INSERT INTO cda_issuer_registry
                 (asset_symbol, issuer_name, coingecko_id, collection_method, asset_category)
@@ -1361,7 +1373,7 @@ async def discover_new_issuer(asset_symbol: str, coingecko_id: str):
     if asset_category in ON_CHAIN_CATEGORIES:
         collection_method = "nav_oracle"
 
-    execute(
+    await asyncio.to_thread(execute,
         """
         INSERT INTO cda_issuer_registry
             (asset_symbol, issuer_name, coingecko_id, transparency_url,
@@ -1430,7 +1442,7 @@ async def discover_new_issuer(asset_symbol: str, coingecko_id: str):
             })
 
         if sources:
-            execute(
+            await asyncio.to_thread(execute,
                 """
                 UPDATE cda_issuer_registry
                 SET source_urls = %s, updated_at = NOW()
