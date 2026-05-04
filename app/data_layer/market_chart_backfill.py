@@ -16,6 +16,7 @@ Feeds:
 Schedule: Daily
 """
 
+import asyncio
 import json
 import logging
 import math
@@ -253,8 +254,8 @@ async def run_market_chart_backfill(backfill_days: int = 90) -> dict:
     """
     from app.database import fetch_all, fetch_one
 
-    stablecoins = fetch_all(
-        "SELECT id, coingecko_id FROM stablecoins WHERE scoring_enabled = TRUE"
+    stablecoins = await asyncio.to_thread(
+        fetch_all, "SELECT id, coingecko_id FROM stablecoins WHERE scoring_enabled = TRUE"
     )
     if not stablecoins:
         return {"error": "no stablecoins found"}
@@ -275,7 +276,8 @@ async def run_market_chart_backfill(backfill_days: int = 90) -> dict:
                 continue
 
             # Check if we already have recent data
-            existing = fetch_one(
+            existing = await asyncio.to_thread(
+                fetch_one,
                 """SELECT COUNT(*) as cnt FROM market_chart_history
                    WHERE coin_id = %s AND granularity = 'hourly'
                      AND timestamp > NOW() - INTERVAL '24 hours'""",
@@ -329,7 +331,7 @@ async def run_market_chart_backfill(backfill_days: int = 90) -> dict:
                     "granularity": granularity,
                 })
 
-            _store_market_chart_records(records)
+            await asyncio.to_thread(_store_market_chart_records, records)
             total_records += len(records)
             coins_processed += 1
 
@@ -338,7 +340,7 @@ async def run_market_chart_backfill(backfill_days: int = 90) -> dict:
             ipd = 24 if granularity == "hourly" else (288 if granularity == "5min" else 1)
             vol_data = _compute_volatility_from_prices(stablecoin_id, prices, intervals_per_day=ipd)
             if vol_data:
-                _store_volatility_surface(stablecoin_id, vol_data)
+                await asyncio.to_thread(_store_volatility_surface, stablecoin_id, vol_data)
                 vol_surfaces += 1
 
     # Provenance
