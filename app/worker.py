@@ -47,6 +47,68 @@ logger = logging.getLogger("worker")
 _current_cycle_stats = None
 
 
+async def cancellation_watchdog():
+    """Detect tasks stuck in CANCELLING state.
+
+    When asyncio cancels a task blocked in sync code, the task transitions
+    to CANCELLING but cancellation can't propagate. This watchdog logs at
+    2min and force-exits at 5min so Railway restarts the worker.
+    """
+    cancelling_since: dict[int, float] = {}
+    while True:
+        try:
+            await asyncio.sleep(30)
+            now = time.time()
+            live_ids = set()
+
+            for t in asyncio.all_tasks():
+                tid = id(t)
+                live_ids.add(tid)
+                state = getattr(t, "_state", None)
+
+                if state == "CANCELLING":
+                    first_seen = cancelling_since.setdefault(tid, now)
+                    age = now - first_seen
+
+                    if age > 120:
+                        coro = t.get_coro()
+                        loc = "unknown"
+                        try:
+                            if coro and coro.cr_frame:
+                                loc = f"{coro.cr_code.co_filename}:{coro.cr_frame.f_lineno}"
+                        except Exception:
+                            pass
+
+                        logger.error(
+                            f"WEDGED TASK: name={t.get_name()} "
+                            f"cancelling_for={age:.0f}s coro_at={loc}"
+                        )
+
+                        if age > 300:
+                            logger.error(
+                                f"WEDGED TASK exceeded 5min ({t.get_name()}) — "
+                                f"exiting worker for restart"
+                            )
+                            for h in logging.getLogger().handlers:
+                                try:
+                                    h.flush()
+                                except Exception:
+                                    pass
+                            os._exit(1)
+                else:
+                    cancelling_since.pop(tid, None)
+
+            for tid in list(cancelling_since.keys()):
+                if tid not in live_ids:
+                    cancelling_since.pop(tid)
+
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"cancellation_watchdog error: {e}")
+            await asyncio.sleep(30)
+
+
 def _record_cycle_error(
     error_type: str,
     error_message: str,
@@ -2845,6 +2907,15 @@ async def main():
         f"(was default min(32, cpu+4)={_prev_default_size})"
     )
 
+    # Slow-callback alerting: log any callback that blocks the event loop >1s.
+    # Default 0.1s floods logs; 1.0s catches genuine sync-in-async blockers.
+    _loop = asyncio.get_running_loop()
+    _loop.slow_callback_duration = 1.0
+    logging.getLogger("asyncio").setLevel(logging.WARNING)
+    logger.error(
+        f"[startup] asyncio loop configured: slow_callback_duration={_loop.slow_callback_duration}s"
+    )
+
     logger.error("[startup] worker main() entered — initializing pool")
     init_pool()
     logger.error("[startup] pool initialized — running schema fixes")
@@ -3425,6 +3496,9 @@ async def main():
 
             asyncio.create_task(_diagnostic_loop())
             logger.error("[checkpoint 6] diagnostic loop launched")
+
+            asyncio.create_task(cancellation_watchdog(), name="cancellation_watchdog")
+            logger.error("[startup] cancellation watchdog launched (30s scan interval)")
 
             # LLL Phase 1 Pipeline 3: Oracle cadence sampling (5-min independent loop)
             try:
