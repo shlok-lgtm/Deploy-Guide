@@ -79,6 +79,44 @@ async def _fetch_solana_transfers(
         return []
 
 
+def _persist_solana_edges_sync(edge_rows: list[tuple], build_status: tuple) -> int:
+    """Sync helper: upsert all edges + build status in one transaction."""
+    from app.database import get_cursor
+    upserted = 0
+    with get_cursor() as cur:
+        for edge_row in edge_rows:
+            cur.execute(
+                """INSERT INTO wallet_graph.wallet_edges
+                       (from_address, to_address, chain, transfer_count, total_value_usd,
+                        first_transfer_at, last_transfer_at, tokens_transferred, weight)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                   ON CONFLICT (from_address, to_address, chain) DO UPDATE SET
+                       transfer_count = wallet_graph.wallet_edges.transfer_count + EXCLUDED.transfer_count,
+                       total_value_usd = wallet_graph.wallet_edges.total_value_usd + EXCLUDED.total_value_usd,
+                       first_transfer_at = LEAST(wallet_graph.wallet_edges.first_transfer_at, EXCLUDED.first_transfer_at),
+                       last_transfer_at = GREATEST(wallet_graph.wallet_edges.last_transfer_at, EXCLUDED.last_transfer_at),
+                       tokens_transferred = wallet_graph.wallet_edges.tokens_transferred || EXCLUDED.tokens_transferred,
+                       weight = EXCLUDED.weight,
+                       updated_at = NOW()""",
+                edge_row,
+            )
+            upserted += 1
+        wallet_address, total_transfers, edges_created, pages_fetched = build_status
+        cur.execute(
+            """INSERT INTO wallet_graph.edge_build_status
+                   (wallet_address, chain, last_built_at, transfers_processed, edges_created, pages_fetched, status)
+               VALUES (%s, 'solana', NOW(), %s, %s, %s, 'complete')
+               ON CONFLICT (wallet_address, chain) DO UPDATE SET
+                   last_built_at = NOW(),
+                   transfers_processed = EXCLUDED.transfers_processed,
+                   edges_created = EXCLUDED.edges_created,
+                   pages_fetched = EXCLUDED.pages_fetched,
+                   status = 'complete'""",
+            (wallet_address, total_transfers, edges_created, pages_fetched),
+        )
+    return upserted
+
+
 async def build_solana_edges_for_wallet(
     client: httpx.AsyncClient,
     wallet_address: str,
@@ -162,46 +200,20 @@ async def build_solana_edges_for_wallet(
         if len(transfers) < 100:
             break
 
-    # Upsert edges — same table as EVM, chain='solana'
-    edges_upserted = 0
+    # Upsert edges + build status — single transaction via to_thread
+    edge_rows = []
     for (from_addr, to_addr), edge in edge_map.items():
         weight = _compute_weight(edge["total_value"], edge["count"], edge["last_ts"])
         tokens_json = json.dumps(edge["tokens"])
+        edge_rows.append((
+            from_addr, to_addr, "solana", edge["count"], edge["total_value"],
+            edge["first_ts"], edge["last_ts"], tokens_json, weight,
+        ))
 
-        execute(
-            """
-            INSERT INTO wallet_graph.wallet_edges
-                (from_address, to_address, chain, transfer_count, total_value_usd,
-                 first_transfer_at, last_transfer_at, tokens_transferred, weight)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (from_address, to_address, chain) DO UPDATE SET
-                transfer_count = wallet_graph.wallet_edges.transfer_count + EXCLUDED.transfer_count,
-                total_value_usd = wallet_graph.wallet_edges.total_value_usd + EXCLUDED.total_value_usd,
-                first_transfer_at = LEAST(wallet_graph.wallet_edges.first_transfer_at, EXCLUDED.first_transfer_at),
-                last_transfer_at = GREATEST(wallet_graph.wallet_edges.last_transfer_at, EXCLUDED.last_transfer_at),
-                tokens_transferred = wallet_graph.wallet_edges.tokens_transferred || EXCLUDED.tokens_transferred,
-                weight = EXCLUDED.weight,
-                updated_at = NOW()
-            """,
-            (from_addr, to_addr, "solana", edge["count"], edge["total_value"],
-             edge["first_ts"], edge["last_ts"], tokens_json, weight),
-        )
-        edges_upserted += 1
-
-    # Update build status
-    execute(
-        """
-        INSERT INTO wallet_graph.edge_build_status
-            (wallet_address, chain, last_built_at, transfers_processed, edges_created, pages_fetched, status)
-        VALUES (%s, %s, NOW(), %s, %s, %s, 'complete')
-        ON CONFLICT (wallet_address, chain) DO UPDATE SET
-            last_built_at = NOW(),
-            transfers_processed = EXCLUDED.transfers_processed,
-            edges_created = EXCLUDED.edges_created,
-            pages_fetched = EXCLUDED.pages_fetched,
-            status = 'complete'
-        """,
-        (wallet_address, "solana", total_transfers, edges_upserted, pages_fetched),
+    edges_upserted = await asyncio.to_thread(
+        _persist_solana_edges_sync,
+        edge_rows,
+        (wallet_address, total_transfers, len(edge_rows), pages_fetched),
     )
 
     return {
@@ -225,7 +237,8 @@ async def run_solana_edge_builder(
         return {"chain": "solana", "wallets_processed": 0, "total_edges_created": 0}
 
     if wallet_addresses is None:
-        rows = fetch_all(
+        rows = await asyncio.to_thread(
+            fetch_all,
             """
             SELECT w.address
             FROM wallet_graph.wallets w
