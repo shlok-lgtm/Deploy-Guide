@@ -13,6 +13,7 @@ Sources:
 Schedule: Hourly
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -157,8 +158,8 @@ async def run_entity_snapshots() -> dict:
     entities = []
 
     # SII stablecoins
-    stablecoins = fetch_all(
-        "SELECT id, coingecko_id FROM stablecoins WHERE scoring_enabled = TRUE"
+    stablecoins = await asyncio.to_thread(
+        fetch_all, "SELECT id, coingecko_id FROM stablecoins WHERE scoring_enabled = TRUE"
     )
     if stablecoins:
         for sc in stablecoins:
@@ -184,8 +185,8 @@ async def run_entity_snapshots() -> dict:
         "raydium": "raydium",
     }
     try:
-        psi_rows = fetch_all(
-            "SELECT DISTINCT protocol_slug FROM psi_scores ORDER BY protocol_slug"
+        psi_rows = await asyncio.to_thread(
+            fetch_all, "SELECT DISTINCT protocol_slug FROM psi_scores ORDER BY protocol_slug"
         )
         if psi_rows:
             for row in psi_rows:
@@ -291,7 +292,7 @@ async def run_entity_snapshots() -> dict:
 
     logger.error(f"=== run_entity_snapshots: {len(snapshots)} snapshots built, calling _store_snapshots ===")
     if snapshots:
-        _store_snapshots(snapshots)
+        await asyncio.to_thread(_store_snapshots, snapshots)
         total_snapshots = len(snapshots)
     else:
         logger.error("=== run_entity_snapshots: NO SNAPSHOTS to store (fetch returned empty) ===")
