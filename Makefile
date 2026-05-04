@@ -1,4 +1,4 @@
-.PHONY: audit-async audit-sync-db audit-async-v1
+.PHONY: audit-async audit-sync-db audit-async-v1 audit-sync-db-advisory
 
 audit-async:
 	python3 scripts/audit_await_in_args.py
@@ -8,3 +8,6 @@ audit-sync-db:
 
 audit-async-v1:
 	python3 scripts/audit_sync_db_in_async.py
+
+audit-sync-db-advisory:
+	python3 scripts/audit_sync_db_in_async.py || true
