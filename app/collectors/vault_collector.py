@@ -13,6 +13,7 @@ Key insight: "Underlying Asset Quality" category reads from existing
 SII/PSI scores via CQI lookup — not re-derived.
 """
 
+import asyncio
 import json
 import hashlib
 import logging
@@ -651,7 +652,7 @@ async def store_vault_score(result: dict) -> None:
 async def run_vsri_scoring() -> list[dict]:
     """Score all vault entities. Called from worker."""
     all_pools = fetch_yield_pools()
-    time.sleep(1)
+    await asyncio.sleep(1)
 
     # Pre-fetch DeFiLlama hacks data (cached 24h, shared across all entities)
     hacks_cache = []
