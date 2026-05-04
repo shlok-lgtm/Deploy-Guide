@@ -739,7 +739,11 @@ async def run_enrichment_pipeline() -> dict:
 
     async def _run_holder_discovery():
         from app.data_layer.holder_discovery import run_holder_discovery
-        return await run_holder_discovery()
+        try:
+            return await asyncio.wait_for(run_holder_discovery(), timeout=3000)
+        except asyncio.TimeoutError:
+            logger.error("holder_discovery exceeded 50min wait_for timeout — aborting cycle")
+            return {"chains_processed": 0, "total_discovered": 0, "total_seeded": 0, "by_chain": {}, "aborted": "timeout"}
 
     pipeline.add(EnrichmentTask(
         name="holder_discovery", func=_run_holder_discovery,
