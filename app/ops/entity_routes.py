@@ -12,6 +12,7 @@ HTML rendered pages:
     GET /api/ops/entity/wallet/{address}/page
 """
 
+import asyncio
 import os
 import json
 import hmac
@@ -52,7 +53,7 @@ async def stablecoin_entity_json(symbol: str, request: Request):
     """Full entity view for a stablecoin — JSON."""
     _check_admin_key(request)
     try:
-        data = get_stablecoin_entity(symbol)
+        data = await asyncio.to_thread(get_stablecoin_entity, symbol)
         if not data:
             raise HTTPException(status_code=404, detail=f"Stablecoin '{symbol}' not found")
         return data
@@ -70,7 +71,7 @@ async def protocol_entity_json(slug: str, request: Request):
     """Full entity view for a protocol — JSON."""
     _check_admin_key(request)
     try:
-        data = get_protocol_entity(slug)
+        data = await asyncio.to_thread(get_protocol_entity, slug)
         if not data:
             raise HTTPException(status_code=404, detail=f"Protocol '{slug}' not found")
         return data
@@ -88,7 +89,7 @@ async def wallet_entity_json(address: str, request: Request):
     """Full entity view for a wallet — JSON."""
     _check_admin_key(request)
     try:
-        data = get_wallet_entity(address)
+        data = await asyncio.to_thread(get_wallet_entity, address)
         if not data:
             raise HTTPException(status_code=404, detail=f"Wallet '{address}' not found")
         return data
@@ -110,7 +111,7 @@ async def stablecoin_entity_page(symbol: str, request: Request):
     """Full entity view for a stablecoin — HTML."""
     _check_admin_key(request)
     try:
-        data = get_stablecoin_entity(symbol)
+        data = await asyncio.to_thread(get_stablecoin_entity, symbol)
         if not data:
             raise HTTPException(status_code=404, detail=f"Stablecoin '{symbol}' not found")
         html = _render_stablecoin_page(data)
@@ -127,7 +128,7 @@ async def protocol_entity_page(slug: str, request: Request):
     """Full entity view for a protocol — HTML."""
     _check_admin_key(request)
     try:
-        data = get_protocol_entity(slug)
+        data = await asyncio.to_thread(get_protocol_entity, slug)
         if not data:
             raise HTTPException(status_code=404, detail=f"Protocol '{slug}' not found")
         html = _render_protocol_page(data)
@@ -144,7 +145,7 @@ async def wallet_entity_page(address: str, request: Request):
     """Full entity view for a wallet — HTML."""
     _check_admin_key(request)
     try:
-        data = get_wallet_entity(address)
+        data = await asyncio.to_thread(get_wallet_entity, address)
         if not data:
             raise HTTPException(status_code=404, detail=f"Wallet '{address}' not found")
         html = _render_wallet_page(data)

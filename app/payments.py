@@ -6,6 +6,7 @@ Agents pay USDC on Base per-request via the x402 protocol (HTTP 402).
 Free endpoints are completely unaffected.
 """
 
+import asyncio
 import os
 import json
 import logging
@@ -242,9 +243,9 @@ paid_router = APIRouter(prefix="/api/paid", tags=["paid"])
 @paid_router.get("/sii/rankings")
 async def paid_sii_rankings(request: Request):
     """Paid: All stablecoin SII scores."""
-    _log_payment("/api/paid/sii/rankings", request, "$0.005")
+    await asyncio.to_thread(_log_payment, "/api/paid/sii/rankings", request, "$0.005")
     from app.scoring import FORMULA_VERSION
-    rows = fetch_all("""
+    rows = await asyncio.to_thread(fetch_all, """
         SELECT s.*, st.name, st.symbol, st.issuer, st.contract AS token_contract
         FROM scores s
         JOIN stablecoins st ON st.id = s.stablecoin_id
@@ -268,7 +269,7 @@ async def paid_sii_rankings(request: Request):
             },
             "computed_at": row["computed_at"].isoformat() if row.get("computed_at") else None,
         })
-    _log_payment(request, request.url.path)
+    await asyncio.to_thread(_log_payment, request, request.url.path)
     return {
         "stablecoins": results,
         "count": len(results),
@@ -281,9 +282,9 @@ async def paid_sii_rankings(request: Request):
 @paid_router.get("/sii/{coin}")
 async def paid_sii_detail(request: Request, coin: str):
     """Paid: Single stablecoin detail."""
-    _log_payment(f"/api/paid/sii/{coin}", request, "$0.001")
+    await asyncio.to_thread(_log_payment, f"/api/paid/sii/{coin}", request, "$0.001")
     from app.scoring import SII_V1_WEIGHTS, FORMULA_VERSION
-    row = fetch_one("""
+    row = await asyncio.to_thread(fetch_one, """
         SELECT s.*, st.name, st.symbol, st.issuer, st.contract AS token_contract
         FROM scores s
         JOIN stablecoins st ON st.id = s.stablecoin_id
@@ -291,14 +292,14 @@ async def paid_sii_detail(request: Request, coin: str):
     """, (coin,))
     if not row:
         raise HTTPException(status_code=404, detail=f"Stablecoin '{coin}' not found")
-    components = fetch_all("""
+    components = await asyncio.to_thread(fetch_all, """
         SELECT DISTINCT ON (component_id)
           component_id, category, raw_value, normalized_score, data_source, collected_at
         FROM component_readings
         WHERE stablecoin_id = %s AND collected_at > NOW() - INTERVAL '48 hours'
         ORDER BY component_id, collected_at DESC
     """, (coin,))
-    _log_payment(request, request.url.path)
+    await asyncio.to_thread(_log_payment, request, request.url.path)
     return {
         "id": row["stablecoin_id"],
         "name": row["name"],
@@ -331,15 +332,15 @@ async def paid_sii_detail(request: Request, coin: str):
 @paid_router.get("/psi/scores")
 async def paid_psi_all(request: Request):
     """Paid: All PSI scores."""
-    _log_payment("/api/paid/psi/scores", request, "$0.005")
-    rows = fetch_all("""
+    await asyncio.to_thread(_log_payment, "/api/paid/psi/scores", request, "$0.005")
+    rows = await asyncio.to_thread(fetch_all, """
         SELECT DISTINCT ON (protocol_slug)
             protocol_slug, protocol_name, overall_score, grade,
             category_scores, formula_version, computed_at
         FROM psi_scores ORDER BY protocol_slug, computed_at DESC
     """)
     from app.index_definitions.psi_v01 import PSI_V01_DEFINITION
-    _log_payment(request, request.url.path)
+    await asyncio.to_thread(_log_payment, request, request.url.path)
     return {
         "protocols": [
             {
@@ -360,15 +361,15 @@ async def paid_psi_all(request: Request):
 @paid_router.get("/psi/scores/{slug}")
 async def paid_psi_detail(request: Request, slug: str):
     """Paid: Single PSI detail."""
-    _log_payment(f"/api/paid/psi/scores/{slug}", request, "$0.001")
-    row = fetch_one("""
+    await asyncio.to_thread(_log_payment, f"/api/paid/psi/scores/{slug}", request, "$0.001")
+    row = await asyncio.to_thread(fetch_one, """
         SELECT protocol_slug, protocol_name, overall_score, grade,
                category_scores, component_scores, raw_values, formula_version, computed_at
         FROM psi_scores WHERE protocol_slug = %s ORDER BY computed_at DESC LIMIT 1
     """, (slug,))
     if not row:
         raise HTTPException(status_code=404, detail=f"Protocol '{slug}' not found")
-    _log_payment(request, request.url.path)
+    await asyncio.to_thread(_log_payment, request, request.url.path)
     return {
         "protocol_slug": row["protocol_slug"],
         "protocol_name": row["protocol_name"],
@@ -384,13 +385,13 @@ async def paid_psi_detail(request: Request, slug: str):
 @paid_router.get("/cqi")
 async def paid_cqi(request: Request, asset: str = Query(...), protocol: str = Query(...)):
     """Paid: CQI score for an asset-in-protocol pair."""
-    _log_payment("/api/paid/cqi", request, "$0.001")
+    await asyncio.to_thread(_log_payment, "/api/paid/cqi", request, "$0.001")
     from app.composition import compute_cqi
-    result = compute_cqi(asset, protocol)
+    result = await asyncio.to_thread(compute_cqi, asset, protocol)
     if "error" in result:
         raise HTTPException(status_code=404, detail=result["error"])
     result["tier"] = "paid"
-    _log_payment(request, request.url.path)
+    await asyncio.to_thread(_log_payment, request, request.url.path)
     return result
 
 
@@ -398,7 +399,7 @@ async def paid_cqi(request: Request, asset: str = Query(...), protocol: str = Qu
 async def paid_rqs(slug: str):
     """Paid: Reserve Quality Score for a protocol's stablecoin treasury."""
     from app.composition import compute_rqs_for_protocol
-    result = compute_rqs_for_protocol(slug)
+    result = await asyncio.to_thread(compute_rqs_for_protocol, slug)
     if "error" in result and "rqs_score" not in result:
         raise HTTPException(status_code=404, detail=result["error"])
     result["tier"] = "paid"
@@ -408,8 +409,8 @@ async def paid_rqs(slug: str):
 @paid_router.get("/pulse/latest")
 async def paid_pulse(request: Request):
     """Paid: Latest daily pulse."""
-    _log_payment("/api/paid/pulse/latest", request, "$0.002")
-    row = fetch_one("SELECT * FROM daily_pulses ORDER BY pulse_date DESC LIMIT 1")
+    await asyncio.to_thread(_log_payment, "/api/paid/pulse/latest", request, "$0.002")
+    row = await asyncio.to_thread(fetch_one, "SELECT * FROM daily_pulses ORDER BY pulse_date DESC LIMIT 1")
     if not row:
         raise HTTPException(status_code=404, detail="No pulse data available")
     summary = row.get("summary", {})
@@ -417,7 +418,7 @@ async def paid_pulse(request: Request):
         summary = json.loads(summary)
     canonical = json.dumps(summary, sort_keys=True, separators=(",", ":"), default=str)
     content_hash = "0x" + hashlib.sha256(canonical.encode()).hexdigest()
-    _log_payment(request, request.url.path)
+    await asyncio.to_thread(_log_payment, request, request.url.path)
     return {
         "pulse_date": row["pulse_date"].isoformat() if hasattr(row["pulse_date"], "isoformat") else str(row["pulse_date"]),
         "summary": summary,
@@ -429,8 +430,8 @@ async def paid_pulse(request: Request):
 @paid_router.get("/discovery/latest")
 async def paid_discovery(request: Request):
     """Paid: Latest cross-domain discovery signals."""
-    _log_payment("/api/paid/discovery/latest", request, "$0.005")
-    rows = fetch_all("""
+    await asyncio.to_thread(_log_payment, "/api/paid/discovery/latest", request, "$0.005")
+    rows = await asyncio.to_thread(fetch_all, """
         SELECT id, signal_type, domain, title, description, entities,
                novelty_score, direction, magnitude, baseline, detail,
                methodology_version, detected_at, acknowledged, published
@@ -438,21 +439,21 @@ async def paid_discovery(request: Request):
         WHERE detected_at >= NOW() - INTERVAL '7 days'
         ORDER BY novelty_score DESC LIMIT 20
     """)
-    _log_payment(request, request.url.path)
+    await asyncio.to_thread(_log_payment, request, request.url.path)
     return {"signals": rows, "count": len(rows), "tier": "paid"}
 
 
 @paid_router.get("/wallets/{address}/profile")
 async def paid_wallet_profile(request: Request, address: str):
     """Paid: Full wallet risk profile with behavioral signals."""
-    _log_payment(f"/api/paid/wallets/{address}/profile", request, "$0.005")
+    await asyncio.to_thread(_log_payment, f"/api/paid/wallets/{address}/profile", request, "$0.005")
     from app.wallet_profile import generate_wallet_profile
-    profile = generate_wallet_profile(address)
+    profile = await asyncio.to_thread(generate_wallet_profile, address)
     if not profile:
         raise HTTPException(status_code=404, detail="Wallet not found in index")
 
     addr = address.lower()
-    top_connections = fetch_all("""
+    top_connections = await asyncio.to_thread(fetch_all, """
         SELECT
             CASE WHEN from_address = %s THEN to_address ELSE from_address END AS counterparty,
             weight, total_value_usd
@@ -460,7 +461,7 @@ async def paid_wallet_profile(request: Request, address: str):
         WHERE from_address = %s OR to_address = %s
         ORDER BY weight DESC LIMIT 5
     """, (addr, addr, addr))
-    edge_count = fetch_one(
+    edge_count = await asyncio.to_thread(fetch_one,
         "SELECT COUNT(*) AS cnt FROM wallet_graph.wallet_edges WHERE from_address = %s OR to_address = %s",
         (addr, addr),
     )
@@ -472,7 +473,7 @@ async def paid_wallet_profile(request: Request, address: str):
         ],
     }
     profile["tier"] = "paid"
-    _log_payment(request, request.url.path)
+    await asyncio.to_thread(_log_payment, request, request.url.path)
     return profile
 
 
@@ -485,7 +486,7 @@ async def paid_report(
     lens: str = None,
 ):
     """Paid: Attested risk report with optional regulatory lens."""
-    _log_payment(f"/api/paid/report/{entity_type}/{entity_id}", request, "$0.01")
+    await asyncio.to_thread(_log_payment, f"/api/paid/report/{entity_type}/{entity_id}", request, "$0.01")
     from app.report import assemble_report_data
     from app.report_attestation import compute_report_hash, store_report_attestation
     from app.templates import get_template
@@ -499,14 +500,14 @@ async def paid_report(
     if not render_fn:
         raise HTTPException(status_code=400, detail=f"Unknown template: {template}")
 
-    data = assemble_report_data(entity_type, entity_id)
+    data = await asyncio.to_thread(assemble_report_data, entity_type, entity_id)
     if not data:
         raise HTTPException(status_code=404, detail=f"{entity_type} '{entity_id}' not found")
 
     lens_result = None
     lens_version = None
     if lens:
-        lens_config = load_lens(lens)
+        lens_config = await asyncio.to_thread(load_lens, lens)
         if lens_config:
             lens_result = apply_lens(lens_config, data)
             lens_version = lens_config.get("lens_version")
@@ -514,14 +515,14 @@ async def paid_report(
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     report_hash = compute_report_hash(data, template, lens, lens_version, ts,
                                       state_hashes=data.get("state_hashes"))
-    store_report_attestation(
+    await asyncio.to_thread(store_report_attestation,
         entity_type, entity_id, template, lens, lens_version,
         report_hash, data.get("score_hashes", []),
         data.get("cqi_hashes"), data.get("formula_version", FORMULA_VERSION),
     )
 
     import json as _json
-    _log_payment(request, request.url.path)
+    await asyncio.to_thread(_log_payment, request, request.url.path)
     return {
         "entity_type": entity_type,
         "entity_id": entity_id,
@@ -536,7 +537,7 @@ async def paid_report(
 @paid_router.get("/rpi/scores")
 async def paid_rpi_all():
     """Paid: All RPI scores."""
-    rows = fetch_all("""
+    rows = await asyncio.to_thread(fetch_all, """
         SELECT DISTINCT ON (protocol_slug)
             protocol_slug, protocol_name, overall_score, grade,
             component_scores, methodology_version, computed_at
@@ -564,7 +565,7 @@ async def paid_rpi_all():
 @paid_router.get("/rpi/scores/{slug}")
 async def paid_rpi_detail(slug: str):
     """Paid: Single RPI detail."""
-    row = fetch_one("""
+    row = await asyncio.to_thread(fetch_one, """
         SELECT protocol_slug, protocol_name, overall_score, grade,
                component_scores, raw_values, inputs_hash,
                methodology_version, computed_at

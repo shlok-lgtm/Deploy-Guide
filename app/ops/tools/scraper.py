@@ -2,6 +2,7 @@
 Scraper tool — uses Parallel Extract to scrape target content.
 Reuses the existing Parallel.ai client configuration.
 """
+import asyncio
 import logging
 from datetime import datetime
 from app.database import fetch_one, execute
@@ -16,7 +17,7 @@ async def scrape_target(target_id: int, url: str, source_type: str = "blog"):
     Returns the content record ID or None on failure.
     """
     # Check if already scraped
-    existing = fetch_one("SELECT id FROM ops_target_content WHERE source_url = %s", (url,))
+    existing = await asyncio.to_thread(fetch_one, "SELECT id FROM ops_target_content WHERE source_url = %s", (url,))
     if existing:
         logger.info(f"URL already scraped: {url}")
         return existing["id"]
@@ -47,14 +48,15 @@ async def scrape_target(target_id: int, url: str, source_type: str = "blog"):
         return None
 
     # Store in ops_target_content
-    execute(
+    await asyncio.to_thread(
+        execute,
         """INSERT INTO ops_target_content (target_id, source_url, source_type, title, content, scraped_at)
            VALUES (%s, %s, %s, %s, %s, %s)
            ON CONFLICT (source_url) DO NOTHING""",
         (target_id, url, source_type, title, content, datetime.utcnow()),
     )
 
-    row = fetch_one("SELECT id FROM ops_target_content WHERE source_url = %s", (url,))
+    row = await asyncio.to_thread(fetch_one, "SELECT id FROM ops_target_content WHERE source_url = %s", (url,))
     return row["id"] if row else None
 
 

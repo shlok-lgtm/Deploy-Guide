@@ -5,6 +5,7 @@ Generates HTML pages with embedded JSON-LD for wallets, assets,
 assessments, and daily pulses. Served on-demand from the database.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -94,7 +95,7 @@ def register_page_routes(app: FastAPI) -> None:
             return RedirectResponse(url=f"/api/wallets/{address}", status_code=307)
 
         # Fetch current risk data
-        risk = fetch_one("""
+        risk = await asyncio.to_thread(fetch_one, """
             SELECT * FROM wallet_graph.wallet_risk_scores
             WHERE wallet_address = %s
             ORDER BY computed_at DESC LIMIT 1
@@ -102,7 +103,7 @@ def register_page_routes(app: FastAPI) -> None:
         if not risk:
             raise HTTPException(status_code=404, detail="Wallet not found")
 
-        holdings_raw = fetch_all("""
+        holdings_raw = await asyncio.to_thread(fetch_all, """
             SELECT symbol, value_usd, pct_of_wallet, is_scored,
                    sii_score, sii_grade
             FROM wallet_graph.wallet_holdings
@@ -135,7 +136,7 @@ def register_page_routes(app: FastAPI) -> None:
         else:
             display_size_tier = "retail"
 
-        recent_assessments = fetch_all("""
+        recent_assessments = await asyncio.to_thread(fetch_all, """
             SELECT id::text, created_at, trigger_type, severity,
                    wallet_risk_score, wallet_risk_grade
             FROM assessment_events
@@ -147,18 +148,19 @@ def register_page_routes(app: FastAPI) -> None:
         profile = None
         try:
             from app.wallet_profile import generate_wallet_profile
-            profile = generate_wallet_profile(address)
+            profile = await asyncio.to_thread(generate_wallet_profile, address)
         except Exception as e:
             logger.warning(f"Profile generation failed for {address[:12]}...: {e}")
 
         # Cross-chain unified profile
-        unified = fetch_one(
+        unified = await asyncio.to_thread(
+            fetch_one,
             "SELECT * FROM wallet_graph.wallet_profiles WHERE LOWER(address) = LOWER(%s)",
             (address.lower(),)
         )
 
         # Top connections by edge weight
-        connections = fetch_all("""
+        connections = await asyncio.to_thread(fetch_all, """
             SELECT
                 CASE WHEN from_address = %s THEN to_address ELSE from_address END AS counterparty,
                 weight, total_value_usd
@@ -201,13 +203,13 @@ def register_page_routes(app: FastAPI) -> None:
             from fastapi.responses import RedirectResponse
             return RedirectResponse(url=f"/api/scores/{symbol}", status_code=307)
 
-        score = fetch_one("""
+        score = await asyncio.to_thread(fetch_one, """
             SELECT * FROM scores WHERE stablecoin_id = %s
         """, (symbol.lower(),))
         if not score:
             raise HTTPException(status_code=404, detail="Asset not found")
 
-        history = fetch_all("""
+        history = await asyncio.to_thread(fetch_all, """
             SELECT score_date, overall_score, grade
             FROM score_history
             WHERE stablecoin = %s
@@ -233,7 +235,7 @@ def register_page_routes(app: FastAPI) -> None:
     @app.get("/assessment/{assessment_id}")
     async def assessment_page(request: Request, assessment_id: str):
         """Rendered HTML assessment event page with JSON-LD."""
-        row = fetch_one("""
+        row = await asyncio.to_thread(fetch_one, """
             SELECT * FROM assessment_events WHERE id::text = %s
         """, (assessment_id,))
         if not row:
@@ -267,7 +269,7 @@ def register_page_routes(app: FastAPI) -> None:
     @app.get("/pulse/{pulse_date}")
     async def pulse_page(request: Request, pulse_date: str):
         """Rendered HTML daily pulse page."""
-        row = fetch_one("""
+        row = await asyncio.to_thread(fetch_one, """
             SELECT * FROM daily_pulses WHERE pulse_date = %s
         """, (pulse_date,))
         if not row:
@@ -313,7 +315,7 @@ def register_page_routes(app: FastAPI) -> None:
 
         # Active stablecoins
         try:
-            coins = fetch_all("SELECT symbol FROM stablecoins WHERE is_active = TRUE")
+            coins = await asyncio.to_thread(fetch_all, "SELECT symbol FROM stablecoins WHERE is_active = TRUE")
             for row in coins:
                 urls.append(f"{CANONICAL_BASE_URL}/asset/{row['symbol']}")
         except Exception as e:
@@ -321,7 +323,7 @@ def register_page_routes(app: FastAPI) -> None:
 
         # Top wallets by value
         try:
-            wallets = fetch_all("""
+            wallets = await asyncio.to_thread(fetch_all, """
                 SELECT DISTINCT ON (wallet_address) wallet_address
                 FROM wallet_graph.wallet_risk_scores
                 ORDER BY wallet_address, total_stablecoin_value DESC
@@ -334,7 +336,7 @@ def register_page_routes(app: FastAPI) -> None:
 
         # Notable+ assessment events
         try:
-            assessments = fetch_all("""
+            assessments = await asyncio.to_thread(fetch_all, """
                 SELECT id::text FROM assessment_events
                 WHERE severity IN ('notable', 'alert', 'critical')
                 ORDER BY created_at DESC LIMIT 500
@@ -346,7 +348,7 @@ def register_page_routes(app: FastAPI) -> None:
 
         # Daily pulses
         try:
-            pulses = fetch_all("""
+            pulses = await asyncio.to_thread(fetch_all, """
                 SELECT pulse_date FROM daily_pulses ORDER BY pulse_date DESC
             """)
             for row in pulses:

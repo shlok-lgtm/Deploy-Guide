@@ -569,7 +569,7 @@ def register_wallet_routes(app: FastAPI) -> None:
     async def wallet_profile_full(address: str):
         """Full wallet risk profile — reputation primitive with behavioral signals."""
         from app.wallet_profile import generate_wallet_profile
-        profile = generate_wallet_profile(address)
+        profile = await asyncio.to_thread(generate_wallet_profile, address)
         if not profile:
             raise HTTPException(status_code=404, detail="Wallet not found in index")
 
@@ -604,7 +604,7 @@ def register_wallet_routes(app: FastAPI) -> None:
     async def wallet_profile_hash(address: str):
         """Just the profile hash and timestamp — lightweight verification."""
         from app.wallet_profile import generate_wallet_profile
-        profile = generate_wallet_profile(address)
+        profile = await asyncio.to_thread(generate_wallet_profile, address)
         if not profile:
             raise HTTPException(status_code=404, detail="Wallet not found in index")
         return {
@@ -618,13 +618,13 @@ def register_wallet_routes(app: FastAPI) -> None:
     @app.get("/api/backlog")
     async def backlog_list(limit: int = Query(50, ge=1, le=500)):
         """Unscored asset backlog, sorted by priority (total_value_held DESC)."""
-        rows = get_backlog(limit)
+        rows = await asyncio.to_thread(get_backlog, limit)
         return {"backlog": rows, "count": len(rows)}
 
     @app.get("/api/backlog/{token_address}")
     async def backlog_detail(token_address: str):
         """Detail for one unscored asset: which wallets hold it, how much."""
-        detail = get_backlog_detail(token_address)
+        detail = await asyncio.to_thread(get_backlog_detail, token_address)
         if not detail:
             raise HTTPException(status_code=404, detail="Asset not found in backlog")
         return detail
@@ -893,7 +893,7 @@ def register_wallet_routes(app: FastAPI) -> None:
         if not row:
             # Try to classify on-demand
             from app.actor_classification import classify_wallet
-            result = classify_wallet(addr)
+            result = await asyncio.to_thread(classify_wallet, addr)
             if not result:
                 raise HTTPException(status_code=404, detail="Insufficient data to classify wallet")
             row = await fetch_one_async(

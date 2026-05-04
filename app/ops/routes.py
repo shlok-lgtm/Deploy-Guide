@@ -60,7 +60,7 @@ async def seed_data(request: Request):
     _check_admin_key(request)
     try:
         from app.ops.seed import seed_all
-        counts = seed_all()
+        counts = await asyncio.to_thread(seed_all)
         return {"status": "ok", "inserted": counts}
     except HTTPException:
         raise
@@ -326,7 +326,7 @@ async def get_health(request: Request):
     _check_admin_key(request)
     try:
         from app.ops.tools.health_checker import get_latest_health
-        checks = get_latest_health()
+        checks = await asyncio.to_thread(get_latest_health)
         return {"health": checks}
     except HTTPException:
         raise
@@ -481,10 +481,10 @@ async def fundraise_dashboard(request: Request):
         # Compute seed trigger milestones from live data
         from app.ops.tools.milestone_checker import check_all_milestones
         try:
-            full_milestones = check_all_milestones()
-            milestones = full_milestones.get("seed_triggers", _compute_milestones())
+            full_milestones = await asyncio.to_thread(check_all_milestones)
+            milestones = full_milestones.get("seed_triggers", await asyncio.to_thread(_compute_milestones))
         except Exception:
-            milestones = _compute_milestones()
+            milestones = await asyncio.to_thread(_compute_milestones)
 
         return {
             "investors": investors,
@@ -594,7 +594,7 @@ async def generate_exposure_report(request: Request):
             raise HTTPException(status_code=400, detail="target_id required")
 
         from app.ops.tools.exposure import generate_exposure
-        result = generate_exposure(target_id)
+        result = await asyncio.to_thread(generate_exposure, target_id)
         if result is None:
             raise HTTPException(status_code=404, detail="Target not found")
         if "error" in result:
@@ -709,7 +709,7 @@ async def monitor_webhook(request: Request):
     from app.ops.tools.analyzer import analyze_content
 
     # Find the most likely target based on URL patterns
-    target = _match_url_to_target(url)
+    target = await asyncio.to_thread(_match_url_to_target, url)
     target_id = target["id"] if target else None
 
     if target_id:
@@ -894,7 +894,7 @@ async def scan_discovery_endpoint(
     _check_admin_key(request)
     try:
         from app.ops.tools.discovery_scanner import scan_discovery
-        result = scan_discovery(limit=limit, min_magnitude=min_magnitude)
+        result = await asyncio.to_thread(scan_discovery, limit=limit, min_magnitude=min_magnitude)
         return result
     except HTTPException:
         raise
@@ -912,7 +912,7 @@ async def get_milestones(request: Request):
     _check_admin_key(request)
     try:
         from app.ops.tools.milestone_checker import check_all_milestones
-        return check_all_milestones()
+        return await asyncio.to_thread(check_all_milestones)
     except HTTPException:
         raise
     except Exception as e:
@@ -1087,7 +1087,7 @@ async def get_news_feed(
     _check_admin_key(request)
     try:
         from app.ops.tools.news_monitor import get_recent_news
-        return {"news": get_recent_news(limit, relevant_only)}
+        return {"news": await asyncio.to_thread(get_recent_news, limit, relevant_only)}
     except HTTPException:
         raise
     except Exception as e:
@@ -1099,7 +1099,7 @@ async def get_incidents(request: Request, days: int = Query(default=7)):
     _check_admin_key(request)
     try:
         from app.ops.tools.news_monitor import get_incidents
-        return {"incidents": await get_incidents(days)}
+        return {"incidents": await asyncio.to_thread(get_incidents, days)}
     except HTTPException:
         raise
     except Exception as e:
@@ -1115,7 +1115,7 @@ async def get_analytics(request: Request):
     _check_admin_key(request)
     try:
         from app.ops.tools.analytics import compute_analytics
-        return compute_analytics()
+        return await asyncio.to_thread(compute_analytics)
     except HTTPException:
         raise
     except Exception as e:
@@ -1128,7 +1128,7 @@ async def compute_analytics_endpoint(request: Request):
     _check_admin_key(request)
     try:
         from app.ops.tools.analytics import compute_analytics
-        return compute_analytics()
+        return await asyncio.to_thread(compute_analytics)
     except HTTPException:
         raise
     except Exception as e:
@@ -1167,7 +1167,7 @@ async def scan_twitter(request: Request, background_tasks: BackgroundTasks, targ
     """Scan Twitter for recent tweets from target contacts' handles."""
     _check_admin_key(request)
     try:
-        async def _run():
+        async def _run_twitter_scan():
             from app.ops.tools.twitter_monitor import scan_target_tweets
             try:
                 await scan_target_tweets(target_id=target_id)
@@ -1175,7 +1175,7 @@ async def scan_twitter(request: Request, background_tasks: BackgroundTasks, targ
                 logger.error(f"Twitter scan failed: {e}")
 
         import asyncio
-        background_tasks.add_task(lambda: asyncio.run(_run()))
+        background_tasks.add_task(lambda: asyncio.run(_run_twitter_scan()))
         return {"status": "accepted", "message": "Twitter scan running in background. GET /api/ops/twitter/feed for results."}
     except HTTPException:
         raise
@@ -1193,7 +1193,7 @@ async def get_twitter_feed(
     _check_admin_key(request)
     try:
         from app.ops.tools.twitter_monitor import get_recent_tweets
-        return {"tweets": get_recent_tweets(limit=limit, target_id=target_id)}
+        return {"tweets": await asyncio.to_thread(get_recent_tweets, limit=limit, target_id=target_id)}
     except HTTPException:
         raise
     except Exception as e:
@@ -1235,7 +1235,7 @@ async def scan_governance(request: Request, background_tasks: BackgroundTasks, t
         days_back = body.get("days_back", 14) if body else 14
         tid = body.get("target_id", target_id) if body else target_id
 
-        async def _run():
+        async def _run_governance_scan():
             from app.ops.tools.governance_monitor import scan_all_governance
             try:
                 await scan_all_governance(target_id=tid, days_back=days_back)
@@ -1243,7 +1243,7 @@ async def scan_governance(request: Request, background_tasks: BackgroundTasks, t
                 logger.error(f"Governance scan failed: {e}")
 
         import asyncio
-        background_tasks.add_task(lambda: asyncio.run(_run()))
+        background_tasks.add_task(lambda: asyncio.run(_run_governance_scan()))
         return {"status": "accepted", "message": "Governance scan running in background. GET /api/ops/governance/feed for results."}
     except HTTPException:
         raise
@@ -1262,7 +1262,7 @@ async def get_governance_feed(
     _check_admin_key(request)
     try:
         from app.ops.tools.governance_monitor import get_recent_proposals
-        return {"proposals": get_recent_proposals(limit=limit, stablecoin_only=stablecoin_only, target_id=target_id)}
+        return {"proposals": await asyncio.to_thread(get_recent_proposals, limit=limit, stablecoin_only=stablecoin_only, target_id=target_id)}
     except HTTPException:
         raise
     except Exception as e:
@@ -1303,7 +1303,7 @@ async def scan_investor_content_endpoint(request: Request, background_tasks: Bac
             pass
         investor_id = body.get("investor_id") if body else None
 
-        async def _run():
+        async def _run_investor_scan():
             from app.ops.tools.investor_monitor import scan_investor_content
             try:
                 await scan_investor_content(investor_id=investor_id)
@@ -1311,7 +1311,7 @@ async def scan_investor_content_endpoint(request: Request, background_tasks: Bac
                 logger.error(f"Investor content scan failed: {e}")
 
         import asyncio
-        background_tasks.add_task(lambda: asyncio.run(_run()))
+        background_tasks.add_task(lambda: asyncio.run(_run_investor_scan()))
         return {"status": "accepted", "message": "Investor content scan running in background. GET /api/ops/investors/content/feed for results."}
     except HTTPException:
         raise
@@ -1330,7 +1330,7 @@ async def get_investor_content_feed(
     _check_admin_key(request)
     try:
         from app.ops.tools.investor_monitor import get_investor_content
-        return {"content": get_investor_content(limit=limit, investor_id=investor_id, analyzed_only=analyzed_only)}
+        return {"content": await get_investor_content(limit=limit, investor_id=investor_id, analyzed_only=analyzed_only)}
     except HTTPException:
         raise
     except Exception as e:
@@ -1360,7 +1360,7 @@ async def get_investor_timing_signals(request: Request, limit: int = Query(defau
     _check_admin_key(request)
     try:
         from app.ops.tools.investor_monitor import get_timing_signals
-        return {"signals": get_timing_signals(limit=limit)}
+        return {"signals": await get_timing_signals(limit=limit)}
     except HTTPException:
         raise
     except Exception as e:
@@ -2028,7 +2028,7 @@ async def seed_metrics(request: Request):
         # Oracle external interactions
         try:
             from app.ops.tools.oracle_monitor import get_oracle_external_metrics
-            oracle_external = get_oracle_external_metrics()
+            oracle_external = await asyncio.to_thread(get_oracle_external_metrics)
         except Exception as oe:
             logger.warning(f"Oracle external metrics failed: {oe}")
             oracle_external = {}
@@ -2304,7 +2304,7 @@ async def abm_create_campaign(request: Request):
         if stablecoins:
             try:
                 from app.report import assemble_report_data
-                report_data = assemble_report_data("stablecoin", stablecoins[0])
+                report_data = await asyncio.to_thread(assemble_report_data, "stablecoin", stablecoins[0])
                 if report_data:
                     import hashlib
                     report_json = json.dumps(report_data, sort_keys=True, default=str)
@@ -2529,7 +2529,7 @@ async def abm_generate_guide(campaign_id: int, request: Request):
         for coin in coins:
             try:
                 from app.report import assemble_report_data
-                data = assemble_report_data("stablecoin", coin)
+                data = await asyncio.to_thread(assemble_report_data, "stablecoin", coin)
                 if data:
                     import hashlib
                     rj = json.dumps(data, sort_keys=True, default=str)
@@ -2702,24 +2702,26 @@ async def run_migration_049(request: Request):
         return JSONResponse(status_code=500, content={"error": str(e), "traceback": _traceback_mod.format_exc()})
 
 
+def _backfill_internal_flags():
+    from app.database import get_cursor
+    results = {}
+    with get_cursor() as cur:
+        cur.execute("UPDATE api_request_log SET is_internal = TRUE WHERE user_agent ILIKE '%ClaudeBot%' AND is_internal = FALSE")
+        results["claudebot"] = cur.rowcount
+        cur.execute("UPDATE api_request_log SET is_internal = TRUE WHERE user_agent ILIKE '%python-requests%' AND is_internal = FALSE")
+        results["python_requests"] = cur.rowcount
+        cur.execute("UPDATE api_request_log SET is_internal = TRUE WHERE user_agent ILIKE '%httpx%' AND is_internal = FALSE")
+        results["httpx"] = cur.rowcount
+        cur.execute("UPDATE api_request_log SET is_internal = TRUE WHERE ip_address LIKE '127.0.0.%%' AND is_internal = FALSE")
+        results["localhost"] = cur.rowcount
+    return results
+
+
 @router.post("/fix-internal-traffic")
 async def fix_internal_traffic(request: Request):
     """One-time fix: reclassify historical internal traffic in api_request_log."""
     _check_admin_key(request)
     try:
-        from app.database import get_cursor
-        def _backfill_internal_flags():
-            results = {}
-            with get_cursor() as cur:
-                cur.execute("UPDATE api_request_log SET is_internal = TRUE WHERE user_agent ILIKE '%ClaudeBot%' AND is_internal = FALSE")
-                results["claudebot"] = cur.rowcount
-                cur.execute("UPDATE api_request_log SET is_internal = TRUE WHERE user_agent ILIKE '%python-requests%' AND is_internal = FALSE")
-                results["python_requests"] = cur.rowcount
-                cur.execute("UPDATE api_request_log SET is_internal = TRUE WHERE user_agent ILIKE '%httpx%' AND is_internal = FALSE")
-                results["httpx"] = cur.rowcount
-                cur.execute("UPDATE api_request_log SET is_internal = TRUE WHERE ip_address LIKE '127.0.0.%%' AND is_internal = FALSE")
-                results["localhost"] = cur.rowcount
-            return results
         results = await asyncio.to_thread(_backfill_internal_flags)
 
         # Query current state
@@ -2826,7 +2828,7 @@ async def api_usage_dashboard(request: Request):
     _check_admin_key(request)
     try:
         from app.api_usage_tracker import get_usage_summary
-        return get_usage_summary()
+        return await asyncio.to_thread(get_usage_summary)
     except Exception as e:
         logger.warning(f"API usage dashboard failed: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -2838,8 +2840,8 @@ async def api_usage_provider(provider: str, request: Request, hours: int = 24):
     _check_admin_key(request)
     try:
         from app.api_usage_tracker import get_usage_history, get_realtime_counters
-        history = get_usage_history(provider, hours=hours)
-        realtime = get_realtime_counters().get(provider, {})
+        history = await asyncio.to_thread(get_usage_history, provider, hours=hours)
+        realtime = (await asyncio.to_thread(get_realtime_counters)).get(provider, {})
         return {
             "provider": provider,
             "realtime": realtime,
@@ -2899,7 +2901,7 @@ async def storage_evaluation(request: Request):
     _check_admin_key(request)
     try:
         from app.data_layer.storage_evaluation import get_storage_evaluation
-        return get_storage_evaluation()
+        return await asyncio.to_thread(get_storage_evaluation)
     except Exception as e:
         logger.warning(f"Storage evaluation failed: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -2935,7 +2937,7 @@ async def coherence_summary(request: Request, hours: int = 24):
     _check_admin_key(request)
     try:
         from app.data_layer.coherence_guards import get_coherence_summary
-        return get_coherence_summary(hours=hours)
+        return await asyncio.to_thread(get_coherence_summary, hours=hours)
     except Exception as e:
         logger.warning(f"Coherence summary failed: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -2994,8 +2996,8 @@ async def playground_compute(request: Request):
     except Exception:
         pass
 
-    cqi = compute_aggregate_cqi(portfolio)
-    stress = compute_stress_scenarios(portfolio)
+    cqi = await asyncio.to_thread(compute_aggregate_cqi, portfolio)
+    stress = await asyncio.to_thread(compute_stress_scenarios, portfolio)
     preview = render_basel_sco60_preview(portfolio, cqi)
 
     now = _pdt.now(_ptz.utc)
@@ -3244,13 +3246,14 @@ async def track_record_create_manual(request: Request):
         narrative = body.get("narrative_markdown", "")
         featured_by = body.get("featured_by", "admin")
 
-        baseline = _get_entity_baseline(entity_slug, index_name)
+        baseline = await asyncio.to_thread(_get_entity_baseline, entity_slug, index_name)
         trigger_detail = body.get("trigger_detail", {"source": "manual"})
         now = datetime.now(timezone.utc)
         content_hash = _compute_content_hash(
             entity_slug, "manual", trigger_detail, now.isoformat(), baseline,
         )
 
+        state_root = await asyncio.to_thread(_get_state_root)
         import json
         await execute_async(
             """INSERT INTO track_record_entries
@@ -3264,7 +3267,7 @@ async def track_record_create_manual(request: Request):
             (
                 entity_slug, index_name,
                 json.dumps(trigger_detail),
-                _get_state_root(),
+                state_root,
                 json.dumps(baseline, default=str),
                 narrative,
                 featured_by,
@@ -3461,7 +3464,7 @@ async def ops_register_methodology(request: Request):
             return JSONResponse({"error": "methodology_id and content are required"}, status_code=400)
 
         from app.methodology_hashes import register_methodology
-        content_hash = register_methodology(methodology_id, content, description)
+        content_hash = await asyncio.to_thread(register_methodology, methodology_id, content, description)
         return {"status": "registered", "methodology_id": methodology_id, "content_hash": content_hash}
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=409)
@@ -3477,7 +3480,7 @@ async def ops_list_methodologies(request: Request):
     _check_admin_key(request)
     try:
         from app.methodology_hashes import list_methodologies
-        return {"methodologies": list_methodologies()}
+        return {"methodologies": await asyncio.to_thread(list_methodologies)}
     except HTTPException:
         raise
     except Exception as e:
@@ -3607,7 +3610,8 @@ async def dispute_counter_evidence(dispute_id: str, request: Request):
             return JSONResponse({"error": "author required"}, status_code=400)
 
         from app.disputes import issue_counter_evidence
-        transition_id = issue_counter_evidence(
+        transition_id = await asyncio.to_thread(
+            issue_counter_evidence,
             dispute_id=dispute_id,
             payload_dict=body["payload"],
             author=body["author"],
@@ -3635,7 +3639,8 @@ async def dispute_resolve(dispute_id: str, request: Request):
             return JSONResponse({"error": "author required"}, status_code=400)
 
         from app.disputes import resolve_dispute
-        transition_id = resolve_dispute(
+        transition_id = await asyncio.to_thread(
+            resolve_dispute,
             dispute_id=dispute_id,
             resolution_category=body["resolution_category"],
             resolution_narrative=body["resolution_narrative"],

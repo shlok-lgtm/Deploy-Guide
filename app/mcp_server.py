@@ -89,7 +89,7 @@ async def get_stablecoin_scores(sort_by: str = "score_desc") -> str:
         _success = False
         raise
     finally:
-        _log_mcp_tool_call("get_stablecoin_scores", {"sort_by": sort_by}, int((time.time() - _start) * 1000), _success)
+        await asyncio.to_thread(_log_mcp_tool_call, "get_stablecoin_scores", {"sort_by": sort_by}, int((time.time() - _start) * 1000), _success)
 
 
 @mcp.tool()
@@ -104,7 +104,7 @@ async def get_stablecoin_detail(coin: str) -> str:
         _success = False
         raise
     finally:
-        _log_mcp_tool_call("get_stablecoin_detail", {"coin": coin}, int((time.time() - _start) * 1000), _success)
+        await asyncio.to_thread(_log_mcp_tool_call, "get_stablecoin_detail", {"coin": coin}, int((time.time() - _start) * 1000), _success)
 
 
 @mcp.tool()
@@ -119,7 +119,7 @@ async def get_wallet_risk(address: str) -> str:
         _success = False
         raise
     finally:
-        _log_mcp_tool_call("get_wallet_risk", {"address": address}, int((time.time() - _start) * 1000), _success)
+        await asyncio.to_thread(_log_mcp_tool_call, "get_wallet_risk", {"address": address}, int((time.time() - _start) * 1000), _success)
 
 
 @mcp.tool()
@@ -134,7 +134,7 @@ async def get_wallet_holdings(address: str) -> str:
         _success = False
         raise
     finally:
-        _log_mcp_tool_call("get_wallet_holdings", {"address": address}, int((time.time() - _start) * 1000), _success)
+        await asyncio.to_thread(_log_mcp_tool_call, "get_wallet_holdings", {"address": address}, int((time.time() - _start) * 1000), _success)
 
 
 @mcp.tool()
@@ -149,7 +149,7 @@ async def get_riskiest_wallets(limit: int = 20) -> str:
         _success = False
         raise
     finally:
-        _log_mcp_tool_call("get_riskiest_wallets", {"limit": limit}, int((time.time() - _start) * 1000), _success)
+        await asyncio.to_thread(_log_mcp_tool_call, "get_riskiest_wallets", {"limit": limit}, int((time.time() - _start) * 1000), _success)
 
 
 @mcp.tool()
@@ -164,7 +164,7 @@ async def get_scoring_backlog(limit: int = 20) -> str:
         _success = False
         raise
     finally:
-        _log_mcp_tool_call("get_scoring_backlog", {"limit": limit}, int((time.time() - _start) * 1000), _success)
+        await asyncio.to_thread(_log_mcp_tool_call, "get_scoring_backlog", {"limit": limit}, int((time.time() - _start) * 1000), _success)
 
 
 @mcp.tool()
@@ -188,7 +188,7 @@ async def check_transaction_risk(from_address: str, to_address: str, asset_symbo
         _success = False
         raise
     finally:
-        _log_mcp_tool_call("check_transaction_risk", {"from": from_address, "to": to_address, "asset": asset_symbol}, int((time.time() - _start) * 1000), _success)
+        await asyncio.to_thread(_log_mcp_tool_call, "check_transaction_risk", {"from": from_address, "to": to_address, "asset": asset_symbol}, int((time.time() - _start) * 1000), _success)
 
 
 @mcp.tool()
@@ -203,7 +203,7 @@ async def get_methodology() -> str:
         _success = False
         raise
     finally:
-        _log_mcp_tool_call("get_methodology", {}, int((time.time() - _start) * 1000), _success)
+        await asyncio.to_thread(_log_mcp_tool_call, "get_methodology", {}, int((time.time() - _start) * 1000), _success)
 
 
 @mcp.tool()
@@ -227,7 +227,7 @@ async def get_divergence_signals() -> str:
         _success = False
         raise
     finally:
-        _log_mcp_tool_call("get_divergence_signals", {}, int((time.time() - _start) * 1000), _success)
+        await asyncio.to_thread(_log_mcp_tool_call, "get_divergence_signals", {}, int((time.time() - _start) * 1000), _success)
 
 
 @mcp.tool()
@@ -258,7 +258,7 @@ async def query_template(template_name: str, params: dict = None) -> str:
         _success = False
         raise
     finally:
-        _log_mcp_tool_call("query_template", {"template": template_name}, int((time.time() - _start) * 1000), _success)
+        await asyncio.to_thread(_log_mcp_tool_call, "query_template", {"template": template_name}, int((time.time() - _start) * 1000), _success)
 
 
 @mcp.tool()
@@ -289,7 +289,7 @@ async def get_treasury_events(wallet_address: str = None, event_type: str = None
         _success = False
         raise
     finally:
-        _log_mcp_tool_call("get_treasury_events", {"wallet": wallet_address, "type": event_type, "days": days}, int((time.time() - _start) * 1000), _success)
+        await asyncio.to_thread(_log_mcp_tool_call, "get_treasury_events", {"wallet": wallet_address, "type": event_type, "days": days}, int((time.time() - _start) * 1000), _success)
 
 
 # =============================================================================
@@ -317,7 +317,7 @@ async def basis_liquidity_depth(asset_id: str) -> str:
         _success = False
         raise
     finally:
-        _log_mcp_tool_call("basis_liquidity_depth", {"asset_id": asset_id}, int((time.time() - _start) * 1000), _success)
+        await asyncio.to_thread(_log_mcp_tool_call, "basis_liquidity_depth", {"asset_id": asset_id}, int((time.time() - _start) * 1000), _success)
 
 
 @mcp.tool()
@@ -341,7 +341,7 @@ async def basis_yield_data(protocol: str = None) -> str:
         _success = False
         raise
     finally:
-        _log_mcp_tool_call("basis_yield_data", {"protocol": protocol}, int((time.time() - _start) * 1000), _success)
+        await asyncio.to_thread(_log_mcp_tool_call, "basis_yield_data", {"protocol": protocol}, int((time.time() - _start) * 1000), _success)
 
 
 @mcp.tool()
@@ -364,7 +364,7 @@ async def basis_governance_activity(protocol: str, days: int = 90) -> str:
         _success = False
         raise
     finally:
-        _log_mcp_tool_call("basis_governance_activity", {"protocol": protocol, "days": days}, int((time.time() - _start) * 1000), _success)
+        await asyncio.to_thread(_log_mcp_tool_call, "basis_governance_activity", {"protocol": protocol, "days": days}, int((time.time() - _start) * 1000), _success)
 
 
 @mcp.tool()
@@ -387,7 +387,7 @@ async def basis_bridge_flows(bridge_id: str = None) -> str:
         _success = False
         raise
     finally:
-        _log_mcp_tool_call("basis_bridge_flows", {"bridge_id": bridge_id}, int((time.time() - _start) * 1000), _success)
+        await asyncio.to_thread(_log_mcp_tool_call, "basis_bridge_flows", {"bridge_id": bridge_id}, int((time.time() - _start) * 1000), _success)
 
 
 @mcp.tool()
@@ -410,7 +410,7 @@ async def basis_exchange_health(exchange_id: str = None) -> str:
         _success = False
         raise
     finally:
-        _log_mcp_tool_call("basis_exchange_health", {"exchange_id": exchange_id}, int((time.time() - _start) * 1000), _success)
+        await asyncio.to_thread(_log_mcp_tool_call, "basis_exchange_health", {"exchange_id": exchange_id}, int((time.time() - _start) * 1000), _success)
 
 
 @mcp.tool()
@@ -432,7 +432,7 @@ async def basis_correlation(matrix_type: str = "sii_30d") -> str:
         _success = False
         raise
     finally:
-        _log_mcp_tool_call("basis_correlation", {"matrix_type": matrix_type}, int((time.time() - _start) * 1000), _success)
+        await asyncio.to_thread(_log_mcp_tool_call, "basis_correlation", {"matrix_type": matrix_type}, int((time.time() - _start) * 1000), _success)
 
 
 @mcp.tool()
@@ -454,7 +454,7 @@ async def basis_volatility(asset_id: str) -> str:
         _success = False
         raise
     finally:
-        _log_mcp_tool_call("basis_volatility", {"asset_id": asset_id}, int((time.time() - _start) * 1000), _success)
+        await asyncio.to_thread(_log_mcp_tool_call, "basis_volatility", {"asset_id": asset_id}, int((time.time() - _start) * 1000), _success)
 
 
 @mcp.tool()
@@ -477,7 +477,7 @@ async def basis_incidents(entity_id: str = None) -> str:
         _success = False
         raise
     finally:
-        _log_mcp_tool_call("basis_incidents", {"entity_id": entity_id}, int((time.time() - _start) * 1000), _success)
+        await asyncio.to_thread(_log_mcp_tool_call, "basis_incidents", {"entity_id": entity_id}, int((time.time() - _start) * 1000), _success)
 
 
 @mcp.tool()
@@ -501,7 +501,7 @@ async def basis_peg_monitor(stablecoin_id: str, hours: int = 24) -> str:
         _success = False
         raise
     finally:
-        _log_mcp_tool_call("basis_peg_monitor", {"stablecoin_id": stablecoin_id, "hours": hours}, int((time.time() - _start) * 1000), _success)
+        await asyncio.to_thread(_log_mcp_tool_call, "basis_peg_monitor", {"stablecoin_id": stablecoin_id, "hours": hours}, int((time.time() - _start) * 1000), _success)
 
 
 @mcp.tool()
@@ -521,4 +521,4 @@ async def basis_data_catalog() -> str:
         _success = False
         raise
     finally:
-        _log_mcp_tool_call("basis_data_catalog", {}, int((time.time() - _start) * 1000), _success)
+        await asyncio.to_thread(_log_mcp_tool_call, "basis_data_catalog", {}, int((time.time() - _start) * 1000), _success)
