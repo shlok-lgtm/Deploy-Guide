@@ -9,6 +9,7 @@ Runs in both fast cycle (change detection only) and slow cycle (full snapshots).
 Never raises — all errors logged and skipped.
 """
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -534,7 +535,7 @@ async def check_parameter_changes() -> dict:
                             ),
                         )
 
-                    time.sleep(0.3)  # Rate limit RPC calls
+                    await asyncio.sleep(0.3)  # Rate limit RPC calls
 
                 except Exception as e:
                     logger.debug(f"Parameter read failed: {protocol_slug}/{spec['parameter_key']}: {e}")

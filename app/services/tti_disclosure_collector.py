@@ -17,6 +17,7 @@ Data flow:
   7. Map extractions → raw_values for scoring engine
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -546,7 +547,7 @@ async def collect_entity_disclosures(entity_slug: str, entity_name: str) -> dict
         source_type = source["type"]
 
         logger.info(f"TTI disclosure scraping {entity_slug}: {url}")
-        time.sleep(2)  # Rate limit between sources
+        await asyncio.sleep(2)  # Rate limit between sources
 
         markdown = _try_scrape_page(url, entity_slug=entity_slug)
         if not markdown:
@@ -567,7 +568,7 @@ async def collect_entity_disclosures(entity_slug: str, entity_name: str) -> dict
         if attestation_pdfs:
             # Try Reducto on the most promising PDF
             best_pdf = attestation_pdfs[0]
-            time.sleep(2)
+            await asyncio.sleep(2)
             pdf_result = _try_parse_pdf(entity_slug, best_pdf)
             if pdf_result:
                 result_data = pdf_result.get("result", pdf_result)

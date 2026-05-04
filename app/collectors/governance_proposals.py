@@ -8,6 +8,7 @@ Sources: Snapshot GraphQL API (free) and Tally GraphQL API (free basic).
 Runs daily in the slow cycle.  Never raises — all errors logged and skipped.
 """
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -478,12 +479,12 @@ async def collect_governance_proposals() -> dict:
                     proposals = await _fetch_snapshot_proposals(
                         source_cfg["space"], protocol_slug
                     )
-                    time.sleep(0.5)
+                    await asyncio.sleep(0.5)
                 elif source_type == "tally":
                     proposals = await _fetch_tally_proposals(
                         source_cfg["governor_id"], protocol_slug
                     )
-                    time.sleep(1)
+                    await asyncio.sleep(1)
                 else:
                     continue
 
