@@ -20,6 +20,7 @@ Feeds:
 Schedule: Daily via enrichment pipeline
 """
 
+import asyncio
 import logging
 import os
 import time
@@ -127,6 +128,35 @@ async def _fetch_holders_blockscout(
         return []
 
 
+def _insert_holder_addrs_sync(addrs: list[str], symbol: str, chain: str) -> tuple[int, int]:
+    """Sync helper: insert addresses in a single transaction.
+
+    Called via asyncio.to_thread from run_holder_discovery to keep
+    psycopg2 blocking calls off the event loop.
+    """
+    seeded = 0
+    errors = 0
+    with get_cursor() as cur:
+        for addr in addrs:
+            try:
+                cur.execute(
+                    """INSERT INTO wallet_graph.wallets
+                       (address, source, label, created_at, updated_at)
+                       VALUES (%s, 'holder_discovery', %s, NOW(), NOW())
+                       ON CONFLICT (address) DO NOTHING""",
+                    (addr, f"holder:{symbol}:{chain}"),
+                )
+                seeded += 1
+            except Exception as e:
+                errors += 1
+                if errors <= 3:
+                    logger.error(
+                        "Holder insert failed for %s on %s:%s: %s",
+                        addr, chain, symbol, e,
+                    )
+    return seeded, errors
+
+
 async def run_holder_discovery() -> dict:
     """
     Deep holder list pagination for all stablecoins on all chains via Blockscout.
@@ -137,7 +167,9 @@ async def run_holder_discovery() -> dict:
     Returns summary of discovery.
     """
     # Pre-load existing addresses for dedup
-    existing_rows = fetch_all("SELECT address FROM wallet_graph.wallets")
+    existing_rows = await asyncio.to_thread(
+        fetch_all, "SELECT address FROM wallet_graph.wallets"
+    )
     existing_set = set(r["address"].lower() for r in existing_rows) if existing_rows else set()
 
     total_discovered = 0
@@ -203,31 +235,14 @@ async def run_holder_discovery() -> dict:
 
                     if new_addrs:
                         chain_discovered += len(new_addrs)
-
-                        # Per-row insert
-                        row_errors = 0
-                        for addr in new_addrs:
-                            try:
-                                with get_cursor() as cur:
-                                    cur.execute(
-                                        """INSERT INTO wallet_graph.wallets
-                                           (address, source, label, created_at, updated_at)
-                                           VALUES (%s, 'holder_discovery', %s, NOW(), NOW())
-                                           ON CONFLICT (address) DO NOTHING""",
-                                        (addr, f"holder:{symbol}:{chain}"),
-                                    )
-                                chain_seeded += 1
-                            except Exception as e:
-                                row_errors += 1
-                                if row_errors <= 3:
-                                    logger.error(
-                                        "Holder insert failed for %s on %s:%s: %s",
-                                        addr, chain, symbol, e,
-                                    )
+                        seeded, row_errors = await asyncio.to_thread(
+                            _insert_holder_addrs_sync, new_addrs, symbol, chain
+                        )
+                        chain_seeded += seeded
                         if row_errors:
                             logger.error(
                                 "Holder discovery insert: %d seeded, %d errors for %s:%s",
-                                len(new_addrs) - row_errors, row_errors, chain, symbol,
+                                seeded, row_errors, chain, symbol,
                             )
 
                 logger.info(
