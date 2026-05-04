@@ -4,6 +4,7 @@ Verification Agent — API Routes
 REST endpoints for assessment events and daily pulses.
 """
 
+import asyncio
 import json
 import logging
 from datetime import date
@@ -42,7 +43,7 @@ def register_agent_routes(app: FastAPI) -> None:
 
         params.extend([limit, offset])
 
-        rows = fetch_all(f"""
+        rows = await asyncio.to_thread(fetch_all, f"""
             SELECT id::text, created_at, wallet_address, chain,
                    trigger_type, trigger_detail,
                    wallet_risk_score,
@@ -57,7 +58,7 @@ def register_agent_routes(app: FastAPI) -> None:
             LIMIT %s OFFSET %s
         """, tuple(params))
 
-        count_row = fetch_one(f"""
+        count_row = await asyncio.to_thread(fetch_one, f"""
             SELECT COUNT(*) AS total FROM assessment_events {where}
         """, tuple(params[:-2]) if params[:-2] else None)
 
@@ -71,7 +72,7 @@ def register_agent_routes(app: FastAPI) -> None:
     @app.get("/api/assessments/{assessment_id}")
     async def get_assessment(assessment_id: str):
         """Specific assessment event by UUID."""
-        row = fetch_one("""
+        row = await asyncio.to_thread(fetch_one, """
             SELECT id::text, created_at, wallet_address, chain,
                    trigger_type, trigger_detail,
                    wallet_risk_score,
@@ -94,7 +95,7 @@ def register_agent_routes(app: FastAPI) -> None:
         limit: int = Query(50, ge=1, le=500),
     ):
         """Assessment history for a specific wallet."""
-        rows = fetch_all("""
+        rows = await asyncio.to_thread(fetch_all, """
             SELECT id::text, created_at, wallet_address, chain,
                    trigger_type, trigger_detail,
                    wallet_risk_score,
@@ -115,7 +116,7 @@ def register_agent_routes(app: FastAPI) -> None:
     @app.get("/api/pulse/latest")
     async def get_latest_pulse():
         """Most recent daily pulse summary."""
-        row = fetch_one("""
+        row = await asyncio.to_thread(fetch_one, """
             SELECT id, pulse_date, created_at, summary, page_url
             FROM daily_pulses
             ORDER BY pulse_date DESC LIMIT 1
@@ -127,7 +128,7 @@ def register_agent_routes(app: FastAPI) -> None:
     @app.get("/api/pulse/{pulse_date}")
     async def get_pulse(pulse_date: str):
         """Daily pulse summary for a specific date (YYYY-MM-DD)."""
-        row = fetch_one("""
+        row = await asyncio.to_thread(fetch_one, """
             SELECT id, pulse_date, created_at, summary, page_url
             FROM daily_pulses
             WHERE pulse_date = %s

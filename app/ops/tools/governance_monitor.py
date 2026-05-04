@@ -3,6 +3,7 @@ Governance monitor — tracks Snapshot proposals and Tally on-chain governance
 for target DAOs. Filters for stablecoin-relevant proposals, stores in
 ops_governance_proposals and ops_target_content for analysis.
 """
+import asyncio
 import logging
 import httpx
 from datetime import datetime, timezone
@@ -54,7 +55,7 @@ async def scan_snapshot(target_id: int = None, days_back: int = 14) -> dict:
     Otherwise scan all configured targets.
     """
     if target_id:
-        target = fetch_one("SELECT id, name FROM ops_targets WHERE id = %s", (target_id,))
+        target = await asyncio.to_thread(fetch_one, "SELECT id, name FROM ops_targets WHERE id = %s", (target_id,))
         if not target or target["name"] not in SNAPSHOT_SPACES:
             return {"scanned": 0, "new_proposals": 0, "message": "Target has no Snapshot spaces configured"}
         targets_to_scan = {target["name"]: {"id": target["id"], "spaces": SNAPSHOT_SPACES[target["name"]]}}
@@ -62,7 +63,7 @@ async def scan_snapshot(target_id: int = None, days_back: int = 14) -> dict:
         # Scan all configured targets
         targets_to_scan = {}
         for target_name, spaces in SNAPSHOT_SPACES.items():
-            row = fetch_one("SELECT id FROM ops_targets WHERE name = %s", (target_name,))
+            row = await asyncio.to_thread(fetch_one, "SELECT id FROM ops_targets WHERE name = %s", (target_name,))
             if row:
                 targets_to_scan[target_name] = {"id": row["id"], "spaces": spaces}
 
@@ -137,7 +138,8 @@ async def _fetch_snapshot_proposals(target_id: int, space_id: str, days_back: in
         proposal_id = prop.get("id", "")
 
         # Skip if already tracked
-        existing = fetch_one(
+        existing = await asyncio.to_thread(
+            fetch_one,
             "SELECT id FROM ops_governance_proposals WHERE platform = 'snapshot' AND proposal_id = %s",
             (proposal_id,),
         )
@@ -158,7 +160,8 @@ async def _fetch_snapshot_proposals(target_id: int, space_id: str, days_back: in
         start_ts = datetime.fromtimestamp(prop["start"], tz=timezone.utc) if prop.get("start") else None
         end_ts = datetime.fromtimestamp(prop["end"], tz=timezone.utc) if prop.get("end") else None
 
-        execute(
+        await asyncio.to_thread(
+            execute,
             """INSERT INTO ops_governance_proposals
                (target_id, platform, proposal_id, space_or_org, title, body, state,
                 vote_type, choices, scores, votes_count, start_at, end_at, author,
@@ -177,7 +180,8 @@ async def _fetch_snapshot_proposals(target_id: int, space_id: str, days_back: in
         # If stablecoin-relevant, also store in ops_target_content for analysis pipeline
         if relevant:
             source_url = f"https://snapshot.org/#/{space_id}/proposal/{proposal_id}"
-            execute(
+            await asyncio.to_thread(
+                execute,
                 """INSERT INTO ops_target_content
                    (target_id, source_url, source_type, title, content, scraped_at)
                    VALUES (%s, %s, 'snapshot_vote', %s, %s, %s)
@@ -200,14 +204,14 @@ async def scan_tally(target_id: int = None) -> dict:
     tally_key = os.getenv("TALLY_API_KEY")
 
     if target_id:
-        target = fetch_one("SELECT id, name FROM ops_targets WHERE id = %s", (target_id,))
+        target = await asyncio.to_thread(fetch_one, "SELECT id, name FROM ops_targets WHERE id = %s", (target_id,))
         if not target or target["name"] not in TALLY_ORGS:
             return {"scanned": 0, "new_proposals": 0, "message": "Target has no Tally orgs configured"}
         targets_to_scan = {target["name"]: {"id": target["id"], "orgs": TALLY_ORGS[target["name"]]}}
     else:
         targets_to_scan = {}
         for target_name, orgs in TALLY_ORGS.items():
-            row = fetch_one("SELECT id FROM ops_targets WHERE name = %s", (target_name,))
+            row = await asyncio.to_thread(fetch_one, "SELECT id FROM ops_targets WHERE name = %s", (target_name,))
             if row:
                 targets_to_scan[target_name] = {"id": row["id"], "orgs": orgs}
 
@@ -281,7 +285,8 @@ async def _fetch_tally_proposals(target_id: int, org_slug: str, api_key: str) ->
     for prop in proposals:
         proposal_id = prop.get("id", "")
 
-        existing = fetch_one(
+        existing = await asyncio.to_thread(
+            fetch_one,
             "SELECT id FROM ops_governance_proposals WHERE platform = 'tally' AND proposal_id = %s",
             (proposal_id,),
         )
@@ -306,7 +311,8 @@ async def _fetch_tally_proposals(target_id: int, org_slug: str, api_key: str) ->
         scores = [vs.get("percent", 0) for vs in vote_stats] if vote_stats else None
         votes_count = sum(vs.get("votersCount", 0) for vs in vote_stats) if vote_stats else 0
 
-        execute(
+        await asyncio.to_thread(
+            execute,
             """INSERT INTO ops_governance_proposals
                (target_id, platform, proposal_id, space_or_org, title, body, state,
                 scores, votes_count, start_at, end_at, author,
@@ -324,7 +330,8 @@ async def _fetch_tally_proposals(target_id: int, org_slug: str, api_key: str) ->
 
         if relevant:
             source_url = f"https://www.tally.xyz/gov/{org_slug}/proposal/{prop.get('onchainId', proposal_id)}"
-            execute(
+            await asyncio.to_thread(
+                execute,
                 """INSERT INTO ops_target_content
                    (target_id, source_url, source_type, title, content, scraped_at)
                    VALUES (%s, %s, 'governance_proposal', %s, %s, %s)
@@ -360,11 +367,11 @@ async def _scan_tally_via_search(targets_to_scan: dict) -> dict:
                         if "tally.xyz" not in url.lower():
                             continue
 
-                        existing = fetch_one("SELECT id FROM ops_target_content WHERE source_url = %s", (url,))
+                        existing = await asyncio.to_thread(fetch_one, "SELECT id FROM ops_target_content WHERE source_url = %s", (url,))
                         if existing:
                             continue
 
-                        execute(
+                        await asyncio.to_thread(execute,
                             """INSERT INTO ops_target_content
                                (target_id, source_url, source_type, title, content, scraped_at)
                                VALUES (%s, %s, 'governance_proposal', %s, %s, %s)

@@ -434,7 +434,8 @@ async def discover_new_tokens(
     stablecoin_count = 0
     non_stablecoin_count = 0
     for addr, info in seen_this_run.items():
-        upsert_unscored_asset(
+        await asyncio.to_thread(
+            upsert_unscored_asset,
             token_address=addr,
             symbol=info["symbol"],
             name=info["name"],
@@ -557,7 +558,7 @@ async def index_wallet(
     )
 
     # Track unscored assets in backlog
-    _track_unscored_holdings(holdings)
+    await asyncio.to_thread(_track_unscored_holdings, holdings)
 
     return {
         "address": wallet_address,
@@ -746,7 +747,7 @@ async def run_pipeline_batch(batch_size: int = 500) -> dict:
                     balances_updated += len(holdings)
                     await _store_risk_score(addr, risk)
                     await _update_wallet_summary(addr, risk["total_stablecoin_value"], risk["size_tier"])
-                    _track_unscored_holdings(holdings)
+                    await asyncio.to_thread(_track_unscored_holdings, holdings)
                     indexed += 1
                     scored += 1
                 except Exception as e:
@@ -783,7 +784,7 @@ async def run_pipeline_batch(batch_size: int = 500) -> dict:
     try:
         from app.state_attestation import attest_state
         if indexed > 0:
-            attest_state("wallets", [{"cycle": "batch_reindex", "processed": indexed, "scored": scored, "balances_updated": balances_updated}])
+            await asyncio.to_thread(attest_state, "wallets", [{"cycle": "batch_reindex", "processed": indexed, "scored": scored, "balances_updated": balances_updated}])
     except Exception as ae:
         reindex_logger.debug(f"Wallet attestation skipped: {ae}")
 
@@ -846,7 +847,7 @@ async def run_pipeline(holders_per_coin: int = None, force_reseed: bool = False)
     logger.info(f"Loaded SII scores for {len(sii_scores)} stablecoins")
 
     # Seed known unscored assets
-    seed_known_unscored()
+    await asyncio.to_thread(seed_known_unscored)
 
     # Build known holder set for source tagging
     known_addrs = _seed_from_known_holders()
@@ -953,7 +954,7 @@ async def run_pipeline(holders_per_coin: int = None, force_reseed: bool = False)
             )
 
             # Immediate demand signal update so backlog has real dollar values
-            update_demand_signals()
+            await asyncio.to_thread(update_demand_signals)
 
         # Phase A: Batch-fetch all holdings (per-address, filtered to known contracts)
         logger.info("Phase A: Batch balance scan (addresstokenbalance, per-address)")
@@ -1008,7 +1009,7 @@ async def run_pipeline(holders_per_coin: int = None, force_reseed: bool = False)
                 await _store_holdings(addr, holdings)
                 await _store_risk_score(addr, risk)
                 await _update_wallet_summary(addr, risk["total_stablecoin_value"], risk["size_tier"])
-                _track_unscored_holdings(holdings)
+                await asyncio.to_thread(_track_unscored_holdings, holdings)
 
                 results.append({
                     "address": addr,
@@ -1030,10 +1031,10 @@ async def run_pipeline(holders_per_coin: int = None, force_reseed: bool = False)
                 errors += 1
 
     # Step 5: Update backlog demand signals
-    backlog_count = update_demand_signals()
+    backlog_count = await asyncio.to_thread(update_demand_signals)
 
     # Step 6: Promote eligible backlog assets to scoring queue
-    promoted_count = promote_eligible_assets()
+    promoted_count = await asyncio.to_thread(promote_eligible_assets)
 
     elapsed = (datetime.now(timezone.utc) - started_at).total_seconds()
     scored_count = sum(1 for r in results if r.get("scored"))

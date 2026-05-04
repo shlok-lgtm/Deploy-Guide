@@ -8,6 +8,7 @@ GET /api/ops/state-growth-live (live queries across all tables)
 GET /api/ops/state-growth (existing — reads from daily_pulses history)
 """
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -176,6 +177,30 @@ def _resolve_count(pg_counts: dict, table_name: str) -> int:
     return c
 
 
+def _snapshot_row_counts_sync(pg_counts: dict):
+    """Sync helper: create table + upsert row counts."""
+    from app.database import execute as _exec, get_cursor as _gc
+    _exec("""
+        CREATE TABLE IF NOT EXISTS state_growth_snapshots (
+            id SERIAL PRIMARY KEY,
+            table_name TEXT NOT NULL,
+            row_count BIGINT NOT NULL,
+            snapshot_date DATE NOT NULL DEFAULT CURRENT_DATE,
+            UNIQUE (table_name, snapshot_date)
+        )
+    """)
+    with _gc() as cur:
+        for tbl in TRACKED_TABLES:
+            count = _resolve_count(pg_counts, tbl)
+            cur.execute(
+                """INSERT INTO state_growth_snapshots (table_name, row_count, snapshot_date)
+                   VALUES (%s, %s, CURRENT_DATE)
+                   ON CONFLICT (table_name, snapshot_date)
+                   DO UPDATE SET row_count = EXCLUDED.row_count""",
+                (tbl, count),
+            )
+
+
 async def snapshot_row_counts():
     """
     Store today's pg_stat row counts in state_growth_snapshots.
@@ -183,27 +208,8 @@ async def snapshot_row_counts():
     without any COUNT(*) queries.
     """
     try:
-        from app.database import execute as _exec, get_cursor as _gc
-        _exec("""
-            CREATE TABLE IF NOT EXISTS state_growth_snapshots (
-                id SERIAL PRIMARY KEY,
-                table_name TEXT NOT NULL,
-                row_count BIGINT NOT NULL,
-                snapshot_date DATE NOT NULL DEFAULT CURRENT_DATE,
-                UNIQUE (table_name, snapshot_date)
-            )
-        """)
         pg = await _bulk_row_counts()
-        with _gc() as cur:
-            for tbl in TRACKED_TABLES:
-                count = _resolve_count(pg, tbl)
-                cur.execute(
-                    """INSERT INTO state_growth_snapshots (table_name, row_count, snapshot_date)
-                       VALUES (%s, %s, CURRENT_DATE)
-                       ON CONFLICT (table_name, snapshot_date)
-                       DO UPDATE SET row_count = EXCLUDED.row_count""",
-                    (tbl, count),
-                )
+        await asyncio.to_thread(_snapshot_row_counts_sync, pg)
     except Exception as e:
         logger.debug(f"Row count snapshot failed: {e}")
 

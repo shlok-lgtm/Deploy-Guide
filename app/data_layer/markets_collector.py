@@ -16,6 +16,7 @@ Schedule:
   - 5-min pulls: daily — ~86 calls/day (36 stablecoins + ~50 Circle 7)
 """
 
+import asyncio
 import json
 import logging
 import math
@@ -190,7 +191,8 @@ async def run_bulk_markets() -> dict:
     all_ids = []
 
     # Stablecoins
-    stablecoins = fetch_all(
+    stablecoins = await asyncio.to_thread(
+        fetch_all,
         "SELECT coingecko_id FROM stablecoins WHERE scoring_enabled = TRUE AND coingecko_id IS NOT NULL"
     )
     if stablecoins:
@@ -209,7 +211,7 @@ async def run_bulk_markets() -> dict:
         markets = await _fetch_markets_bulk(client, all_ids)
 
     if markets:
-        _store_markets_data(markets)
+        await asyncio.to_thread(_store_markets_data, markets)
 
     logger.info(f"Bulk markets: {len(markets)} entities from 1 API call ({len(all_ids)} requested)")
 
@@ -285,7 +287,7 @@ async def run_extended_5min_pulls() -> dict:
                 })
 
             if records:
-                _store_market_chart_records(records)
+                await asyncio.to_thread(_store_market_chart_records, records)
                 total_records += len(records)
                 entities_processed += 1
 
@@ -293,7 +295,7 @@ async def run_extended_5min_pulls() -> dict:
     try:
         from app.data_layer.provenance_scaling import attest_data_batch
         if total_records > 0:
-            attest_data_batch("market_chart_history", [{"records": total_records, "entities": entities_processed, "type": "circle7_5min"}])
+            await asyncio.to_thread(attest_data_batch, "market_chart_history", [{"records": total_records, "entities": entities_processed, "type": "circle7_5min"}])
     except Exception:
         pass
 

@@ -447,7 +447,8 @@ async def run_web_research_collection() -> list[dict]:
         try:
             audit_data = await research_bridge_audits(name)
             if audit_data and audit_data.get("score") is not None:
-                _store_research_component(
+                await asyncio.to_thread(
+                    _store_research_component,
                     "bridge", slug, "bridge_audit_research",
                     "smart_contract_risk", audit_data["score"], audit_data,
                 )
@@ -468,7 +469,8 @@ async def run_web_research_collection() -> list[dict]:
         try:
             por_freq = await research_por_frequency(name)
             if por_freq and por_freq.get("score") is not None:
-                _store_research_component(
+                await asyncio.to_thread(
+                    _store_research_component,
                     "exchange", slug, "por_frequency_research",
                     "reserve_proof_quality", por_freq["score"], por_freq,
                 )
@@ -484,7 +486,8 @@ async def run_web_research_collection() -> list[dict]:
         try:
             por_method = await research_por_method(name)
             if por_method and por_method.get("score") is not None:
-                _store_research_component(
+                await asyncio.to_thread(
+                    _store_research_component,
                     "exchange", slug, "por_method_research",
                     "reserve_proof_quality", por_method["score"], por_method,
                 )
@@ -504,7 +507,8 @@ async def run_web_research_collection() -> list[dict]:
         try:
             comp_data = await research_compensation_transparency(name)
             if comp_data and comp_data.get("score") is not None:
-                _store_research_component(
+                await asyncio.to_thread(
+                    _store_research_component,
                     "protocol", slug, "compensation_transparency",
                     "governance", comp_data["score"], comp_data,
                 )
@@ -520,7 +524,8 @@ async def run_web_research_collection() -> list[dict]:
         try:
             meeting_data = await research_meeting_cadence(name)
             if meeting_data and meeting_data.get("score") is not None:
-                _store_research_component(
+                await asyncio.to_thread(
+                    _store_research_component,
                     "protocol", slug, "meeting_cadence",
                     "governance", meeting_data["score"], meeting_data,
                 )

@@ -6,6 +6,7 @@ Stores in ops_investor_content.
 import os
 import json
 import logging
+import asyncio
 import httpx
 from datetime import datetime, timezone
 from app.database import fetch_one, fetch_all, execute
@@ -57,13 +58,13 @@ async def scan_investor_content(investor_id: int = None) -> dict:
     If investor_id given, scan only that investor. Otherwise scan all with configured sources.
     """
     if investor_id:
-        investor = fetch_one("SELECT id, name FROM ops_investors WHERE id = %s", (investor_id,))
+        investor = await asyncio.to_thread(fetch_one, "SELECT id, name FROM ops_investors WHERE id = %s", (investor_id,))
         if not investor:
             return {"error": "Investor not found"}
         investors_to_scan = [investor]
     else:
-        investors_to_scan = fetch_all(
-            "SELECT id, name FROM ops_investors WHERE tier <= 2 ORDER BY tier, name"
+        investors_to_scan = await asyncio.to_thread(
+            fetch_all, "SELECT id, name FROM ops_investors WHERE tier <= 2 ORDER BY tier, name"
         ) or []
 
     total_new = 0
@@ -131,16 +132,18 @@ async def _scan_investor_blog(investor_id: int, blog_url: str) -> int:
         return 0
 
     # Store the blog index as a content item
-    existing = fetch_one("SELECT id FROM ops_investor_content WHERE source_url = %s", (blog_url,))
+    existing = await asyncio.to_thread(fetch_one, "SELECT id FROM ops_investor_content WHERE source_url = %s", (blog_url,))
     if existing:
         # Update content if blog index page
-        execute(
+        await asyncio.to_thread(
+            execute,
             "UPDATE ops_investor_content SET content = %s, scraped_at = %s WHERE id = %s",
             (content[:20000], datetime.now(timezone.utc), existing["id"]),
         )
         return 0
 
-    execute(
+    await asyncio.to_thread(
+        execute,
         """INSERT INTO ops_investor_content
            (investor_id, source_url, source_type, title, content, scraped_at)
            VALUES (%s, %s, 'blog', %s, %s, %s)
@@ -171,7 +174,7 @@ async def _search_investor_content(investor_id: int, query: str) -> int:
         if not url or not snippet:
             continue
 
-        existing = fetch_one("SELECT id FROM ops_investor_content WHERE source_url = %s", (url,))
+        existing = await asyncio.to_thread(fetch_one, "SELECT id FROM ops_investor_content WHERE source_url = %s", (url,))
         if existing:
             continue
 
@@ -182,7 +185,8 @@ async def _search_investor_content(investor_id: int, query: str) -> int:
         elif "portfolio" in url_lower or "announcement" in url_lower:
             source_type = "portfolio_announcement"
 
-        execute(
+        await asyncio.to_thread(
+            execute,
             """INSERT INTO ops_investor_content
                (investor_id, source_url, source_type, title, content, scraped_at)
                VALUES (%s, %s, %s, %s, %s, %s)
@@ -222,11 +226,12 @@ async def _scan_investor_tweets(investor_id: int, handle: str) -> int:
         if "/status/" not in url_lower:
             continue
 
-        existing = fetch_one("SELECT id FROM ops_investor_content WHERE source_url = %s", (url,))
+        existing = await asyncio.to_thread(fetch_one, "SELECT id FROM ops_investor_content WHERE source_url = %s", (url,))
         if existing:
             continue
 
-        execute(
+        await asyncio.to_thread(
+            execute,
             """INSERT INTO ops_investor_content
                (investor_id, source_url, source_type, title, content, scraped_at)
                VALUES (%s, %s, 'tweet', %s, %s, %s)
@@ -243,7 +248,8 @@ async def analyze_investor_content(content_id: int) -> dict:
     Analyze investor content for thesis alignment with Basis.
     Updates the ops_investor_content record.
     """
-    row = fetch_one(
+    row = await asyncio.to_thread(
+        fetch_one,
         """SELECT ic.*, i.name as investor_name, i.thesis_alignment, i.type as investor_type
            FROM ops_investor_content ic
            JOIN ops_investors i ON ic.investor_id = i.id
@@ -305,7 +311,8 @@ Type: {row.get('source_type', '')}
             logger.error(f"Investor content analysis failed: {e}")
             return {"error": str(e)}
 
-    execute(
+    await asyncio.to_thread(
+        execute,
         """UPDATE ops_investor_content SET
            analyzed = TRUE,
            thesis_extract = %s,
@@ -329,7 +336,7 @@ Type: {row.get('source_type', '')}
     return analysis
 
 
-def get_investor_content(limit: int = 30, investor_id: int = None, analyzed_only: bool = False) -> list:
+async def get_investor_content(limit: int = 30, investor_id: int = None, analyzed_only: bool = False) -> list:
     """Get recent investor content."""
     conditions = []
     params = []
@@ -343,7 +350,8 @@ def get_investor_content(limit: int = 30, investor_id: int = None, analyzed_only
     where = " WHERE " + " AND ".join(conditions) if conditions else ""
     params.append(limit)
 
-    return fetch_all(
+    return await asyncio.to_thread(
+        fetch_all,
         f"""SELECT ic.*, i.name as investor_name
             FROM ops_investor_content ic
             JOIN ops_investors i ON ic.investor_id = i.id
@@ -353,9 +361,10 @@ def get_investor_content(limit: int = 30, investor_id: int = None, analyzed_only
     ) or []
 
 
-def get_timing_signals(limit: int = 10) -> list:
+async def get_timing_signals(limit: int = 10) -> list:
     """Get investor content with timing signals — high-priority outreach opportunities."""
-    return fetch_all(
+    return await asyncio.to_thread(
+        fetch_all,
         """SELECT ic.*, i.name as investor_name, i.stage, i.tier
            FROM ops_investor_content ic
            JOIN ops_investors i ON ic.investor_id = i.id

@@ -10,6 +10,7 @@ Sources:
 Schedule: Daily
 """
 
+import asyncio
 import json
 import logging
 import math
@@ -194,7 +195,7 @@ async def run_bridge_flow_collection() -> dict:
                             "destination_chains": bridge.get("destinationChains", []),
                         },
                     }
-                    _store_bridge_flows([flow])
+                    await asyncio.to_thread(_store_bridge_flows, [flow])
                     total_flows += 1
                 else:
                     # Store per-chain directional flows
@@ -220,7 +221,7 @@ async def run_bridge_flow_collection() -> dict:
                         })
 
                     if flows:
-                        _store_bridge_flows(flows)
+                        await asyncio.to_thread(_store_bridge_flows, flows)
                         total_flows += len(flows)
 
                 bridges_processed += 1
@@ -232,7 +233,7 @@ async def run_bridge_flow_collection() -> dict:
     try:
         from app.data_layer.provenance_scaling import attest_data_batch, link_batch_to_proof
         if total_flows > 0:
-            attest_data_batch("bridge_flows", [{"flows": total_flows, "bridges": bridges_processed}])
+            await asyncio.to_thread(attest_data_batch, "bridge_flows", [{"flows": total_flows, "bridges": bridges_processed}])
             await link_batch_to_proof("bridge_flows", "bridge_flows")
     except Exception as e:
         logger.debug(f"Bridge flow provenance failed: {e}")

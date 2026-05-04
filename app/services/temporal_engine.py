@@ -9,6 +9,7 @@ The scoring engine (app/scoring.py, app/worker.py) is NOT modified.
 This layer feeds it inputs — it doesn't change how scoring works.
 """
 
+import asyncio
 import json
 import logging
 import statistics
@@ -532,7 +533,7 @@ CRISIS_EVENTS = {
 
 # Async wrappers for backward compatibility
 async def reconstruct_score(stablecoin_id: str, target_date: date, formula_version: str = None) -> dict:
-    return reconstruct_score_sync(stablecoin_id, target_date, formula_version)
+    return await asyncio.to_thread(reconstruct_score_sync, stablecoin_id, target_date, formula_version)
 
 async def reconstruct_range(stablecoin_id: str, from_date: date, to_date: date, formula_version: str = None) -> list[dict]:
-    return reconstruct_range_sync(stablecoin_id, from_date, to_date, formula_version)
+    return await asyncio.to_thread(reconstruct_range_sync, stablecoin_id, from_date, to_date, formula_version)

@@ -9,6 +9,7 @@ Collapsed from standalone governance-intel project into single module.
 Forums: Aave, MakerDAO, Compound, Morpho, Frax
 """
 
+import asyncio
 import re
 import time
 import json
@@ -750,18 +751,18 @@ def register_gov_routes(app):
     @app.get("/api/governance/stats")
     async def gov_stats():
         """Governance intelligence overview."""
-        return get_stats()
+        return await asyncio.to_thread(get_stats)
 
     @app.get("/api/governance/debates")
     async def gov_debates(days: int = FQuery(default=7, ge=1, le=90)):
         """Hot governance debates involving stablecoins."""
-        debates = get_hot_debates(days=days)
+        debates = await asyncio.to_thread(get_hot_debates, days=days)
         return {"debates": debates, "count": len(debates)}
 
     @app.get("/api/governance/sentiment")
     async def gov_sentiment(days: int = FQuery(default=14, ge=1, le=90)):
         """Stablecoin sentiment trends from governance forums."""
-        trends = get_sentiment_trends(days=days)
+        trends = await asyncio.to_thread(get_sentiment_trends, days=days)
         # Aggregate by coin
         by_coin = defaultdict(lambda: {"positive": 0, "negative": 0,
                                         "neutral": 0, "concerned": 0, "total": 0})
@@ -781,7 +782,7 @@ def register_gov_routes(app):
     @app.get("/api/governance/metrics")
     async def gov_metrics(days: int = FQuery(default=7, ge=1, le=90)):
         """What risk metrics are governance contributors discussing?"""
-        return {"metrics": get_metric_attention(days=days)}
+        return {"metrics": await asyncio.to_thread(get_metric_attention, days=days)}
 
     @app.post("/api/governance/crawl")
     async def gov_trigger_crawl(forums: list[str] = None, days: int = 30):

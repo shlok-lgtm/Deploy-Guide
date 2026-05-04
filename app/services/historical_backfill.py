@@ -5,6 +5,7 @@ Populates historical_prices from CoinGecko /coins/{id}/market_chart/range.
 Daily granularity, idempotent. Used by the temporal reconstruction engine.
 """
 
+import asyncio
 import json as _json
 import os
 import time
@@ -265,7 +266,7 @@ def backfill_all_sync(from_date: str = "2020-01-01", to_date: str = None) -> dic
 
 # Async wrappers for backward compatibility
 async def backfill_coin(coingecko_id: str, from_date: str = "2020-01-01", to_date: str = None) -> int:
-    return backfill_coin_sync(coingecko_id, from_date, to_date)
+    return await asyncio.to_thread(backfill_coin_sync, coingecko_id, from_date, to_date)
 
 async def backfill_all(from_date: str = "2020-01-01", to_date: str = None) -> dict:
-    return backfill_all_sync(from_date, to_date)
+    return await asyncio.to_thread(backfill_all_sync, from_date, to_date)

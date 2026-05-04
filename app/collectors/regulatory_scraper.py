@@ -338,7 +338,7 @@ async def check_exchange_regulatory(entity_slug: str, exchange_names: list[str] 
     results = {}
 
     # 1. SEC EDGAR check
-    sec_data = _check_sec_edgar(exchange_names)
+    sec_data = await asyncio.to_thread(_check_sec_edgar, exchange_names)
 
     # 2. MiCA status (heuristic)
     mica = _check_mica_status_heuristic(exchange_names)
@@ -350,7 +350,7 @@ async def check_exchange_regulatory(entity_slug: str, exchange_names: list[str] 
     # 4. Corporate disclosure rubric
     about_url = EXCHANGE_ABOUT_URLS.get(entity_slug)
     legal_url = EXCHANGE_LEGAL_URLS.get(entity_slug)
-    disclosure = _check_corporate_disclosure(about_url, legal_url)
+    disclosure = await asyncio.to_thread(_check_corporate_disclosure, about_url, legal_url)
     results["corporate_disclosure"] = disclosure["score"]
 
     # 5. Enforcement history

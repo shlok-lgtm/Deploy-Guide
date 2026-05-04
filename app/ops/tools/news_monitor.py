@@ -2,6 +2,7 @@
 CoinGecko news monitor — fetches stablecoin-related news,
 detects incidents, auto-drafts content angles.
 """
+import asyncio
 import os
 import json
 import logging
@@ -102,14 +103,15 @@ async def scan_news() -> dict:
             continue
 
         # Skip if already stored
-        existing = fetch_one("SELECT id FROM ops_coingecko_news WHERE news_id = %s", (news_id,))
+        existing = await asyncio.to_thread(fetch_one, "SELECT id FROM ops_coingecko_news WHERE news_id = %s", (news_id,))
         if existing:
             continue
 
         relevant, keywords = _is_stablecoin_relevant(title, description)
         is_incident = _detect_incident(title, description) if relevant else False
 
-        execute(
+        await asyncio.to_thread(
+            execute,
             """INSERT INTO ops_coingecko_news
                (news_id, title, description, url, thumb, source, published_at,
                 stablecoin_relevant, relevant_symbols, incident_detected)

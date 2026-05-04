@@ -15,6 +15,7 @@ Source type: "on_chain" instead of "pdf" or "html"
 Schedule: Hourly (runs in worker.py fast cycle)
 """
 
+import asyncio
 import logging
 import os
 import time
@@ -167,7 +168,7 @@ async def run_on_chain_cda_verification() -> dict:
                 reading = await reader(client)
                 results["assets_read"] += 1
                 if not reading.get("error"):
-                    _store_on_chain_reading(reading)
+                    await asyncio.to_thread(_store_on_chain_reading, reading)
                     results["stored"] += 1
                     logger.info(f"On-chain CDA: {reading['asset_symbol']} — {reading}")
                 else:

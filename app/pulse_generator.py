@@ -6,6 +6,7 @@ wallet stats, assessment events. Stored in daily_pulses table.
 Idempotent — safe to call multiple times per day.
 """
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -256,7 +257,7 @@ async def run_daily_pulse():
 
         state_root_inputs = {}
         for domain in ATTESTATION_DOMAINS:
-            att = get_latest_attestation(domain)
+            att = await asyncio.to_thread(get_latest_attestation, domain)
             if att:
                 state_root_inputs[domain] = {
                     "batch_hash": att["batch_hash"],

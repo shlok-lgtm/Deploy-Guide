@@ -18,6 +18,7 @@ Estimated calls/day:
 Schedule: Every slow cycle (3h)
 """
 
+import asyncio
 import json
 import logging
 import math
@@ -200,7 +201,7 @@ async def run_ohlcv_collection() -> dict:
     - Top 10 by TVL: 15-minute candles (96 per day)
     - All others: hourly candles (24 per day)
     """
-    top_pools, other_pools = _get_tracked_pools_tiered()
+    top_pools, other_pools = await asyncio.to_thread(_get_tracked_pools_tiered)
     all_pools = len(top_pools) + len(other_pools)
 
     logger.error(
@@ -232,7 +233,7 @@ async def run_ohlcv_collection() -> dict:
                 if ohlcv_list:
                     records = _parse_ohlcv(ohlcv_list, pool)
                     if records:
-                        _store_ohlcv_records(records)
+                        await asyncio.to_thread(_store_ohlcv_records, records)
                         total_records += len(records)
                         pools_processed += 1
                         top_processed += 1
@@ -254,7 +255,7 @@ async def run_ohlcv_collection() -> dict:
                 if ohlcv_list:
                     records = _parse_ohlcv(ohlcv_list, pool)
                     if records:
-                        _store_ohlcv_records(records)
+                        await asyncio.to_thread(_store_ohlcv_records, records)
                         total_records += len(records)
                         pools_processed += 1
             except Exception as e:
@@ -264,7 +265,7 @@ async def run_ohlcv_collection() -> dict:
     try:
         from app.data_layer.provenance_scaling import attest_data_batch, link_batch_to_proof
         if total_records > 0:
-            attest_data_batch("dex_pool_ohlcv", [{"records": total_records, "pools": pools_processed}])
+            await asyncio.to_thread(attest_data_batch, "dex_pool_ohlcv", [{"records": total_records, "pools": pools_processed}])
             await link_batch_to_proof("dex_pool_ohlcv", "liquidity_depth")
     except Exception:
         pass

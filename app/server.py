@@ -295,7 +295,8 @@ async def rate_limit_and_track(request: Request, call_next):
     ):
         response = await call_next(request)
         elapsed_ms = int((time.time() - start_time) * 1000)
-        log_request(
+        await asyncio.to_thread(
+            log_request,
             endpoint=path, method=request.method,
             status_code=response.status_code, response_time_ms=elapsed_ms,
             ip=ip, api_key_id=api_key_id, api_key_hash=api_key_hash, user_agent=ua,
@@ -331,7 +332,8 @@ async def rate_limit_and_track(request: Request, call_next):
 
     if not allowed:
         elapsed_ms = int((time.time() - start_time) * 1000)
-        log_request(
+        await asyncio.to_thread(
+            log_request,
             endpoint=path, method=request.method,
             status_code=429, response_time_ms=elapsed_ms,
             ip=ip, api_key_id=api_key_id, api_key_hash=api_key_hash, user_agent=ua,
@@ -355,7 +357,8 @@ async def rate_limit_and_track(request: Request, call_next):
 
     response = await call_next(request)
     elapsed_ms = int((time.time() - start_time) * 1000)
-    log_request(
+    await asyncio.to_thread(
+        log_request,
         endpoint=path, method=request.method,
         status_code=response.status_code, response_time_ms=elapsed_ms,
         ip=ip, api_key_id=api_key_id, api_key_hash=api_key_hash, user_agent=ua,
@@ -480,13 +483,13 @@ async def startup():
     init_pool()
     # Seed CDA issuer registry from config
     try:
-        _seed_cda_issuer_registry()
+        await asyncio.to_thread(_seed_cda_issuer_registry)
     except Exception as e:
         logger.warning(f"CDA registry seed skipped: {e}")
     # Register governance intelligence routes
     try:
         from app.governance import register_gov_routes, apply_gov_migration
-        apply_gov_migration()
+        await asyncio.to_thread(apply_gov_migration)
         register_gov_routes(app)
         logger.info("Governance intelligence routes registered")
     except Exception as e:
@@ -708,7 +711,7 @@ async def _delegate_to_asgi(asgi_app, request: Request):
 async def shutdown():
     try:
         from app.usage_tracker import flush as _flush_usage
-        _flush_usage()
+        await asyncio.to_thread(_flush_usage)
     except Exception as e:
         logger.warning(f"Usage tracker shutdown flush error: {e}")
     close_pool()
@@ -885,7 +888,7 @@ async def entity_markdown(slug: str):
     """Markdown alternate for entity pages."""
     from fastapi.responses import PlainTextResponse
     from app.rendering.markdown_alternate import render_entity_markdown
-    content = render_entity_markdown(slug.lower())
+    content = await asyncio.to_thread(render_entity_markdown, slug.lower())
     return PlainTextResponse(content=content, media_type="text/markdown")
 
 
@@ -894,7 +897,7 @@ async def rankings_markdown():
     """Markdown alternate for rankings page."""
     from fastapi.responses import PlainTextResponse
     from app.rendering.markdown_alternate import render_rankings_markdown
-    content = render_rankings_markdown()
+    content = await asyncio.to_thread(render_rankings_markdown)
     return PlainTextResponse(content=content, media_type="text/markdown")
 
 
@@ -903,7 +906,7 @@ async def proof_markdown(index_name: str, slug: str):
     """Markdown alternate for proof pages."""
     from fastapi.responses import PlainTextResponse
     from app.rendering.markdown_alternate import render_proof_markdown
-    content = render_proof_markdown(index_name.lower(), slug.lower())
+    content = await asyncio.to_thread(render_proof_markdown, index_name.lower(), slug.lower())
     return PlainTextResponse(content=content, media_type="text/markdown")
 
 
@@ -1175,16 +1178,12 @@ async def entity_page(slug: str, request: Request):
 @app.get("/disputes")
 async def disputes_ssr_page():
     """Server-rendered HTML page listing public disputes."""
-    from starlette.concurrency import run_in_threadpool
     from fastapi.responses import HTMLResponse
 
-    def _load_disputes():
-        return fetch_all(
+    try:
+        rows = await fetch_all_async(
             "SELECT * FROM disputes WHERE status != 'submitted' ORDER BY created_at DESC LIMIT 100"
         )
-
-    try:
-        rows = await run_in_threadpool(_load_disputes)
     except Exception:
         rows = []
 
@@ -1259,30 +1258,25 @@ a {{ color:#0a0a0a; }}
 @app.get("/sitemap.xml")
 async def sitemap_xml():
     """Dynamic sitemap listing all entity pages."""
-    from starlette.concurrency import run_in_threadpool
     from fastapi.responses import Response
 
-    def _build():
-        urls = []
-        # SII
-        rows = fetch_all("SELECT st.symbol, s.computed_at FROM scores s JOIN stablecoins st ON st.id=s.stablecoin_id")
-        for r in (rows or []):
-            urls.append((r["symbol"].lower(), r["computed_at"]))
-        # PSI
-        rows = fetch_all("SELECT DISTINCT ON (protocol_slug) protocol_slug, computed_at FROM psi_scores ORDER BY protocol_slug, computed_at DESC")
-        for r in (rows or []):
-            urls.append((r["protocol_slug"], r["computed_at"]))
-        # RPI
-        rows = fetch_all("SELECT DISTINCT ON (protocol_slug) protocol_slug, computed_at FROM rpi_scores ORDER BY protocol_slug, computed_at DESC")
-        for r in (rows or []):
-            urls.append((r["protocol_slug"], r["computed_at"]))
-        # Circle 7
-        rows = fetch_all("SELECT DISTINCT ON (entity_slug) entity_slug, computed_at FROM generic_index_scores ORDER BY entity_slug, computed_at DESC")
-        for r in (rows or []):
-            urls.append((r["entity_slug"], r["computed_at"]))
-        return urls
-
-    entities = await run_in_threadpool(_build)
+    entities = []
+    # SII
+    rows = await fetch_all_async("SELECT st.symbol, s.computed_at FROM scores s JOIN stablecoins st ON st.id=s.stablecoin_id")
+    for r in (rows or []):
+        entities.append((r["symbol"].lower(), r["computed_at"]))
+    # PSI
+    rows = await fetch_all_async("SELECT DISTINCT ON (protocol_slug) protocol_slug, computed_at FROM psi_scores ORDER BY protocol_slug, computed_at DESC")
+    for r in (rows or []):
+        entities.append((r["protocol_slug"], r["computed_at"]))
+    # RPI
+    rows = await fetch_all_async("SELECT DISTINCT ON (protocol_slug) protocol_slug, computed_at FROM rpi_scores ORDER BY protocol_slug, computed_at DESC")
+    for r in (rows or []):
+        entities.append((r["protocol_slug"], r["computed_at"]))
+    # Circle 7
+    rows = await fetch_all_async("SELECT DISTINCT ON (entity_slug) entity_slug, computed_at FROM generic_index_scores ORDER BY entity_slug, computed_at DESC")
+    for r in (rows or []):
+        entities.append((r["entity_slug"], r["computed_at"]))
     seen = set()
     xml_parts = ['<?xml version="1.0" encoding="UTF-8"?>', '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
     for slug, ts in entities:
@@ -1306,20 +1300,16 @@ async def sitemap_xml():
 @app.get("/sitemap-markdown.xml")
 async def sitemap_markdown_xml():
     """Sitemap listing only .md alternate URLs."""
-    from starlette.concurrency import run_in_threadpool
     from fastapi.responses import Response
 
-    def _build():
-        urls = []
-        rows = fetch_all("SELECT st.symbol, s.computed_at FROM scores s JOIN stablecoins st ON st.id=s.stablecoin_id")
-        for r in (rows or []):
-            urls.append((r["symbol"].lower(), r["computed_at"]))
-        rows = fetch_all("SELECT DISTINCT ON (protocol_slug) protocol_slug, computed_at FROM psi_scores ORDER BY protocol_slug, computed_at DESC")
-        for r in (rows or []):
-            urls.append((r["protocol_slug"], r["computed_at"]))
-        return urls
+    entities = []
+    rows = await fetch_all_async("SELECT st.symbol, s.computed_at FROM scores s JOIN stablecoins st ON st.id=s.stablecoin_id")
+    for r in (rows or []):
+        entities.append((r["symbol"].lower(), r["computed_at"]))
+    rows = await fetch_all_async("SELECT DISTINCT ON (protocol_slug) protocol_slug, computed_at FROM psi_scores ORDER BY protocol_slug, computed_at DESC")
+    for r in (rows or []):
+        entities.append((r["protocol_slug"], r["computed_at"]))
 
-    entities = await run_in_threadpool(_build)
     seen = set()
     xml_parts = ['<?xml version="1.0" encoding="UTF-8"?>', '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
     for slug, ts in entities:
@@ -1337,43 +1327,32 @@ async def sitemap_markdown_xml():
 @app.get("/playground/report/{token}")
 async def playground_report(token: str):
     """Public email-gated report link. noindex, nofollow."""
-    from starlette.concurrency import run_in_threadpool
     from fastapi.responses import HTMLResponse
 
-    def _get_and_render():
-        sub = fetch_one(
-            "SELECT * FROM playground_submissions WHERE report_link_token = %s",
-            (token,),
-        )
-        if not sub:
-            return None, "not_found"
-        from datetime import datetime, timezone
-        if sub.get("report_link_expires") and sub["report_link_expires"] < datetime.now(timezone.utc):
-            return None, "expired"
-
-        # Update access tracking
-        is_first = sub.get("email_verified_at") is None
-        execute("""
-            UPDATE playground_submissions SET
-                report_access_count = report_access_count + 1,
-                report_accessed_at = NOW()
-                %s
-            WHERE submission_id = %%s
-        """ % (", email_verified_at = NOW()" if is_first else ""), (sub["submission_id"],))
-
-        portfolio = sub.get("portfolio") or []
-        cqi = sub.get("computed_cqi") or {}
-
-        from app.playground import render_basel_sco60_full
-        return render_basel_sco60_full(portfolio, cqi), None
-
-    result = await run_in_threadpool(_get_and_render)
-    html, error = result
-
-    if error == "not_found":
+    sub = await fetch_one_async(
+        "SELECT * FROM playground_submissions WHERE report_link_token = %s",
+        (token,),
+    )
+    if not sub:
         raise HTTPException(status_code=404, detail="Report not found or link invalid")
-    if error == "expired":
+    if sub.get("report_link_expires") and sub["report_link_expires"] < datetime.now(timezone.utc):
         raise HTTPException(status_code=404, detail="This report link has expired")
+
+    # Update access tracking
+    is_first = sub.get("email_verified_at") is None
+    await execute_async("""
+        UPDATE playground_submissions SET
+            report_access_count = report_access_count + 1,
+            report_accessed_at = NOW()
+            %s
+        WHERE submission_id = %%s
+    """ % (", email_verified_at = NOW()" if is_first else ""), (sub["submission_id"],))
+
+    portfolio = sub.get("portfolio") or []
+    cqi = sub.get("computed_cqi") or {}
+
+    from app.playground import render_basel_sco60_full
+    html = await asyncio.to_thread(render_basel_sco60_full, portfolio, cqi)
 
     # Add noindex meta tag
     if html and "<head>" in html:
@@ -1394,7 +1373,7 @@ async def get_health():
     if cached:
         return cached
 
-    db_status = db_health_check()
+    db_status = await asyncio.to_thread(db_health_check)
     db_ok = db_status.get("status") == "healthy"
 
     try:
@@ -1457,7 +1436,7 @@ async def get_integrity_domain(domain: str):
 async def get_coherence_latest():
     """Most recent cross-domain coherence report."""
     from app.coherence import get_latest_report
-    report = get_latest_report()
+    report = await asyncio.to_thread(get_latest_report)
     if not report:
         raise HTTPException(status_code=404, detail="No coherence reports available")
     return report
@@ -1467,7 +1446,7 @@ async def get_coherence_latest():
 async def get_coherence_history(days: int = Query(default=7, ge=1, le=90)):
     """Recent coherence reports."""
     from app.coherence import get_report_history
-    return get_report_history(days)
+    return await asyncio.to_thread(get_report_history, days)
 
 
 # =============================================================================
@@ -2171,7 +2150,7 @@ async def public_list_methodology_hashes():
     """List all registered methodology hashes (no content — use detail endpoint for full content)."""
     try:
         from app.methodology_hashes import list_methodologies
-        return {"methodologies": list_methodologies()}
+        return {"methodologies": await asyncio.to_thread(list_methodologies)}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
@@ -2508,7 +2487,7 @@ async def admin_health(request: Request):
     _check_admin_key(request)
 
     try:
-        db_status = db_health_check()
+        db_status = await asyncio.to_thread(db_health_check)
 
         scores_result = await fetch_one_async("SELECT COUNT(*) as count FROM scores")
         scored_count = scores_result["count"] if scores_result else 0
@@ -3010,10 +2989,35 @@ def _check_keygen_rate(ip: str) -> bool:
         return True
 
 
+def _keygen_ensure_columns():
+    try:
+        from app.database import get_conn
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS email VARCHAR(255)")
+                cur.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS tier VARCHAR(20) DEFAULT 'pro'")
+                conn.commit()
+    except Exception:
+        pass  # columns may already exist
+
+
+def _keygen_store_email_tier(email, key_string):
+    try:
+        from app.database import get_conn
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE api_keys SET email = %s, tier = %s WHERE key = %s",
+                    (email, "pro", key_string),
+                )
+                conn.commit()
+    except Exception as e:
+        logger.warning(f"Failed to store email for key: {e}")
+
+
 @app.post("/api/keys/generate")
 async def generate_api_key(request: Request):
     from app.usage_tracker import create_api_key
-    from app.database import fetch_one, get_conn
 
     # Parse body
     try:
@@ -3044,33 +3048,13 @@ async def generate_api_key(request: Request):
         raise HTTPException(status_code=409, detail="An active key with this name already exists. Choose a different name.")
 
     # Ensure email/tier columns exist (idempotent migration)
-    def _ensure_columns():
-        try:
-            with get_conn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS email VARCHAR(255)")
-                    cur.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS tier VARCHAR(20) DEFAULT 'pro'")
-                    conn.commit()
-        except Exception:
-            pass  # columns may already exist
-    await asyncio.to_thread(_ensure_columns)
+    await asyncio.to_thread(_keygen_ensure_columns)
 
     # Create key
-    key_string = create_api_key(name)
+    key_string = await asyncio.to_thread(create_api_key, name)
 
     # Store email and tier
-    def _store_email_tier():
-        try:
-            with get_conn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "UPDATE api_keys SET email = %s, tier = %s WHERE key = %s",
-                        (email, "pro", key_string),
-                    )
-                    conn.commit()
-        except Exception as e:
-            logger.warning(f"Failed to store email for key: {e}")
-    await asyncio.to_thread(_store_email_tier)
+    await asyncio.to_thread(_keygen_store_email_tier, email, key_string)
 
     return {
         "api_key": key_string,
@@ -3593,7 +3577,7 @@ async def admin_decay_edges(request: Request):
     _check_admin_key(request)
     try:
         from app.indexer.edges import decay_edges
-        result = decay_edges()
+        result = await asyncio.to_thread(decay_edges)
         return result
     except HTTPException:
         raise
@@ -3608,7 +3592,7 @@ async def admin_prune_edges(request: Request):
     _check_admin_key(request)
     try:
         from app.indexer.edges import prune_stale_edges
-        result = prune_stale_edges()
+        result = await asyncio.to_thread(prune_stale_edges)
         return result
     except HTTPException:
         raise
@@ -3643,7 +3627,7 @@ async def seed_cda_registry(key: str = Query(default=None)):
     if not admin_key or not key or not hmac.compare_digest(key, admin_key):
         raise HTTPException(status_code=401, detail="Unauthorized — provide ?key=YOUR_ADMIN_KEY")
     try:
-        _seed_cda_issuer_registry()
+        await asyncio.to_thread(_seed_cda_issuer_registry)
         count = await fetch_one_async("SELECT COUNT(*) AS cnt FROM cda_issuer_registry WHERE is_active = TRUE")
         return {"status": "seeded", "active_issuers": count["cnt"] if count else 0}
     except HTTPException:
@@ -4168,7 +4152,7 @@ async def static_evidence_summary():
     """Summary stats for the static evidence layer."""
     try:
         from app.collectors.static_evidence import get_evidence_summary
-        return get_evidence_summary()
+        return await asyncio.to_thread(get_evidence_summary)
     except Exception as e:
         logger.warning(f"static_evidence_summary error: {e}")
         return {"error": str(e), "total_evidence_rows": 0}
@@ -4178,7 +4162,7 @@ async def static_evidence_summary():
 async def static_evidence_screenshot(evidence_id: int):
     """Serve raw screenshot PNG for an evidence row."""
     from app.collectors.static_evidence import get_screenshot
-    data = get_screenshot(evidence_id)
+    data = await asyncio.to_thread(get_screenshot, evidence_id)
     if not data:
         raise HTTPException(status_code=404, detail="Screenshot not found")
     return Response(
@@ -4192,7 +4176,7 @@ async def static_evidence_screenshot(evidence_id: int):
 async def static_evidence_for_entity(entity_slug: str):
     """All evidence rows for an entity (witness page data)."""
     from app.collectors.static_evidence import get_evidence_for_entity
-    rows = get_evidence_for_entity(entity_slug)
+    rows = await asyncio.to_thread(get_evidence_for_entity, entity_slug)
     if not rows:
         raise HTTPException(status_code=404, detail=f"No evidence for entity '{entity_slug}'")
     return {
@@ -4216,6 +4200,24 @@ async def static_evidence_for_entity(entity_slug: str):
     }
 
 
+def _bg_capture_static_evidence(components):
+    try:
+        from app.collectors.static_evidence import capture_static_evidence
+        result = capture_static_evidence(components)
+        logger.info(f"Admin static evidence capture: {result}")
+    except Exception as e:
+        logger.error(f"Admin static evidence capture failed: {e}")
+
+
+def _bg_refresh_stale_evidence():
+    try:
+        from app.collectors.static_evidence import refresh_stale_evidence
+        result = refresh_stale_evidence()
+        logger.info(f"Admin stale evidence refresh: {result}")
+    except Exception as e:
+        logger.error(f"Admin stale evidence refresh failed: {e}")
+
+
 @app.post("/api/admin/static-evidence/capture")
 async def admin_capture_static_evidence(request: Request, background_tasks: BackgroundTasks):
     """Admin: trigger static evidence capture for provided components."""
@@ -4226,16 +4228,7 @@ async def admin_capture_static_evidence(request: Request, background_tasks: Back
     if not components:
         raise HTTPException(status_code=400, detail="components list required")
 
-    from app.collectors.static_evidence import capture_static_evidence
-
-    def _run_capture():
-        try:
-            result = capture_static_evidence(components)
-            logger.info(f"Admin static evidence capture: {result}")
-        except Exception as e:
-            logger.error(f"Admin static evidence capture failed: {e}")
-
-    background_tasks.add_task(_run_capture)
+    background_tasks.add_task(_bg_capture_static_evidence, components)
     return {"status": "capture_started", "component_count": len(components)}
 
 
@@ -4244,16 +4237,7 @@ async def admin_refresh_stale_evidence(request: Request, background_tasks: Backg
     """Admin: re-capture all stale evidence."""
     _check_admin_key(request)
 
-    from app.collectors.static_evidence import refresh_stale_evidence
-
-    def _run_refresh():
-        try:
-            result = refresh_stale_evidence()
-            logger.info(f"Admin stale evidence refresh: {result}")
-        except Exception as e:
-            logger.error(f"Admin stale evidence refresh failed: {e}")
-
-    background_tasks.add_task(_run_refresh)
+    background_tasks.add_task(_bg_refresh_stale_evidence)
     return {"status": "refresh_started"}
 
 
@@ -4798,7 +4782,7 @@ async def psi_score_at_date(slug: str, date_str: str):
         from app.services.psi_temporal_engine import reconstruct_psi_score
 
         target = date_type.fromisoformat(date_str)
-        result = reconstruct_psi_score(slug, target)
+        result = await asyncio.to_thread(reconstruct_psi_score, slug, target)
         return result
     except Exception as e:
         import traceback
@@ -4817,7 +4801,7 @@ async def psi_score_range(
     from_date = date.fromisoformat(start) if start else to_date - timedelta(days=30)
     if (to_date - from_date).days > 365:
         raise HTTPException(status_code=400, detail="Max range is 365 days")
-    scores = reconstruct_psi_range(slug, from_date, to_date)
+    scores = await asyncio.to_thread(reconstruct_psi_range, slug, from_date, to_date)
     return {
         "protocol": slug,
         "from": from_date.isoformat(),
@@ -4840,7 +4824,7 @@ async def psi_backtest_event(slug: str, event: str):
         )
     from_date = date.fromisoformat(crisis["from"])
     to_date = date.fromisoformat(crisis["to"])
-    scores = reconstruct_psi_range(slug, from_date, to_date)
+    scores = await asyncio.to_thread(reconstruct_psi_range, slug, from_date, to_date)
     return {
         "event": event,
         "event_name": crisis["name"],
@@ -4886,11 +4870,11 @@ async def admin_run_protocol_expansion(request: Request):
             enrich_protocol_backlog,
             promote_eligible_protocols,
         )
-        collect_collateral_exposure()
-        synced = sync_collateral_to_backlog()
-        discovered = discover_protocols()
-        enriched = enrich_protocol_backlog()
-        promoted = promote_eligible_protocols()
+        await asyncio.to_thread(collect_collateral_exposure)
+        synced = await asyncio.to_thread(sync_collateral_to_backlog)
+        discovered = await asyncio.to_thread(discover_protocols)
+        enriched = await asyncio.to_thread(enrich_protocol_backlog)
+        promoted = await asyncio.to_thread(promote_eligible_protocols)
         return {
             "synced": synced,
             "discovered": discovered,
@@ -5179,7 +5163,7 @@ async def rpi_rankings(lens: Optional[str] = Query(default=None)):
         if lens and entry["rpi_base"] is not None:
             from app.rpi.scorer import _load_lens_components, compute_lensed_score
             lens_ids = [l.strip() for l in lens.split(",") if l.strip()]
-            lens_components = _load_lens_components(row["protocol_slug"], lens_ids)
+            lens_components = await asyncio.to_thread(_load_lens_components, row["protocol_slug"], lens_ids)
             lensed = compute_lensed_score(entry["rpi_base"], lens_ids, lens_components)
             entry["rpi_lensed"] = lensed["rpi_lensed"]
             entry["lens_blend_used"] = lensed["lens_blend_used"]
@@ -5286,10 +5270,15 @@ async def rpi_history_at_date(slug: str, date_str: str):
         from datetime import date as date_type
         from app.rpi.historical import reconstruct_rpi_score
         target = date_type.fromisoformat(date_str)
-        return reconstruct_rpi_score(slug, target)
+        return await asyncio.to_thread(reconstruct_rpi_score, slug, target)
     except Exception as e:
         import traceback
         return {"error": str(e), "traceback": traceback.format_exc()}
+
+
+def _bg_run_rpi_backfill(protocols, since_years, interval_days):
+    from app.rpi.historical import run_historical_backfill
+    run_historical_backfill(protocols, since_years, interval_days)
 
 
 @app.post("/api/admin/rpi-backfill")
@@ -5305,11 +5294,7 @@ async def admin_rpi_backfill(request: Request, background_tasks: BackgroundTasks
     since_years = body.get("since_years", 2)
     interval_days = body.get("interval_days", 30)
 
-    def _run_backfill():
-        from app.rpi.historical import run_historical_backfill
-        run_historical_backfill(protocols, since_years, interval_days)
-
-    background_tasks.add_task(_run_backfill)
+    background_tasks.add_task(_bg_run_rpi_backfill, protocols, since_years, interval_days)
     return {"status": "backfill_started", "protocols": protocols or "all", "since_years": since_years}
 
 
@@ -5414,7 +5399,7 @@ async def rpi_score_detail(slug: str, lens: Optional[str] = Query(default=None))
     if lens and result["rpi_base"] is not None:
         from app.rpi.scorer import _load_lens_components, compute_lensed_score
         lens_ids = [l.strip() for l in lens.split(",") if l.strip()]
-        lens_components = _load_lens_components(slug, lens_ids)
+        lens_components = await asyncio.to_thread(_load_lens_components, slug, lens_ids)
         lensed = compute_lensed_score(result["rpi_base"], lens_ids, lens_components)
         result["rpi_lensed"] = lensed["rpi_lensed"]
         result["lens_scores"] = lensed["lens_scores"]
@@ -5523,7 +5508,7 @@ async def treasury_exposure():
     for r in rows:
         rows_by_slug.setdefault(r["protocol_slug"], []).append(r)
 
-    protocols, coverage = _build_protocol_treasury(rows_by_slug)
+    protocols, coverage = await asyncio.to_thread(_build_protocol_treasury, rows_by_slug)
     protocols.sort(key=lambda p: p["treasury_total_usd"], reverse=True)
 
     return {"protocols": protocols, "coverage_summary": coverage}
@@ -5544,7 +5529,7 @@ async def protocol_treasury(slug: str):
     if not rows:
         raise HTTPException(status_code=404, detail=f"No treasury data for '{slug}'")
 
-    protocols, coverage = _build_protocol_treasury({slug: rows})
+    protocols, coverage = await asyncio.to_thread(_build_protocol_treasury, {slug: rows})
     return protocols[0] if protocols else {}
 
 
@@ -5668,7 +5653,7 @@ async def treasury_profile(address: str):
     profile = None
     try:
         from app.wallet_profile import generate_wallet_profile
-        profile = generate_wallet_profile(addr_lower)
+        profile = await asyncio.to_thread(generate_wallet_profile, addr_lower)
     except Exception:
         pass
 
@@ -5837,7 +5822,7 @@ async def collateral_exposure():
     unscored_agg = {}  # symbol -> {total_usd, protocol_count}
 
     for slug, proto_rows in by_slug.items():
-        proto = _build_collateral_protocol(proto_rows)
+        proto = await asyncio.to_thread(_build_collateral_protocol, proto_rows)
         if proto:
             protocols.append(proto)
             total_exposure += proto["total_stablecoin_collateral_usd"]
@@ -5884,7 +5869,7 @@ async def protocol_collateral_exposure(slug: str):
     """, (slug, slug))
     if not rows:
         raise HTTPException(status_code=404, detail=f"No collateral data for '{slug}'")
-    return _build_collateral_protocol(rows)
+    return await asyncio.to_thread(_build_collateral_protocol, rows)
 
 
 @app.get("/api/stablecoins/{symbol}/collateral-exposure")
@@ -6149,14 +6134,14 @@ async def drift_vault_balances():
 async def coverage_summary():
     """Component coverage summary across all Circle 7 indices."""
     from app.component_coverage import get_all_coverage
-    return get_all_coverage()
+    return await asyncio.to_thread(get_all_coverage)
 
 
 @app.get("/api/{index_id}/coverage")
 async def index_coverage(index_id: str):
     """Component coverage breakdown for a specific index."""
     from app.component_coverage import get_coverage
-    result = get_coverage(index_id)
+    result = await asyncio.to_thread(get_coverage, index_id)
     if not result:
         raise HTTPException(status_code=404, detail=f"No coverage data for index: {index_id}")
     return result
@@ -6408,10 +6393,10 @@ async def attribution_query(
 
     if protocol:
         from app.collectors.governance_events import get_attribution_by_protocol
-        return get_attribution_by_protocol(protocol, period)
+        return await asyncio.to_thread(get_attribution_by_protocol, protocol, period)
     else:
         from app.collectors.governance_events import get_attribution_by_contributor
-        return get_attribution_by_contributor(contributor)
+        return await asyncio.to_thread(get_attribution_by_contributor, contributor)
 
 
 # =============================================================================
@@ -6431,7 +6416,7 @@ async def query_wallets(request: Request):
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Request body must be a JSON object")
 
-    result = execute_query(body)
+    result = await asyncio.to_thread(execute_query, body)
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
     return result
@@ -6462,7 +6447,7 @@ async def query_template_execute(request: Request):
     if not isinstance(params, dict):
         raise HTTPException(status_code=400, detail="'params' must be a JSON object")
 
-    result = execute_template(template_name, params)
+    result = await asyncio.to_thread(execute_template, template_name, params)
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
     return result
@@ -6592,7 +6577,7 @@ async def divergence_spec():
 async def compose_cqi(asset: str = Query(...), protocol: str = Query(...)):
     """Compute Collateral Quality Index for an asset-in-protocol pair."""
     from app.composition import compute_cqi
-    result = compute_cqi(asset, protocol)
+    result = await asyncio.to_thread(compute_cqi, asset, protocol)
     if "error" in result:
         raise HTTPException(status_code=404, detail=result["error"])
     return result
@@ -6602,7 +6587,7 @@ async def compose_cqi(asset: str = Query(...), protocol: str = Query(...)):
 async def compose_cqi_matrix():
     """CQI for all stablecoin x protocol combinations."""
     from app.composition import compute_cqi_matrix
-    return compute_cqi_matrix()
+    return await asyncio.to_thread(compute_cqi_matrix)
 
 
 @app.get("/api/cqi/{protocol_slug}/{stablecoin_symbol}/contagion")
@@ -6622,7 +6607,7 @@ async def cqi_contagion(
 
     # Get CQI score
     from app.composition import compute_cqi
-    cqi = compute_cqi(sym_upper, protocol_slug)
+    cqi = await asyncio.to_thread(compute_cqi, sym_upper, protocol_slug)
     if "error" in cqi:
         raise HTTPException(status_code=404, detail=cqi["error"])
 
@@ -6750,14 +6735,14 @@ async def cqi_contagion(
 async def compose_rqs_all():
     """Reserve Quality Score for all PSI-scored protocols."""
     from app.composition import compute_rqs_all
-    return compute_rqs_all()
+    return await asyncio.to_thread(compute_rqs_all)
 
 
 @app.get("/api/compose/rqs/{slug}")
 async def compose_rqs_protocol(slug: str):
     """Reserve Quality Score for a single protocol's stablecoin treasury."""
     from app.composition import compute_rqs_for_protocol
-    result = compute_rqs_for_protocol(slug)
+    result = await asyncio.to_thread(compute_rqs_for_protocol, slug)
     if "error" in result and "rqs_score" not in result:
         raise HTTPException(status_code=404, detail=result["error"])
     return result
@@ -6794,7 +6779,7 @@ async def admin_usage(request: Request, days: int = 7):
     _check_admin_key(request)
     try:
         from app.usage_tracker import get_usage_stats
-        return get_usage_stats(days=days)
+        return await asyncio.to_thread(get_usage_stats, days=days)
     except HTTPException:
         raise
     except Exception as e:
@@ -6807,7 +6792,7 @@ async def admin_create_key(request: Request, name: str = Query(...)):
     _check_admin_key(request)
     try:
         from app.usage_tracker import create_api_key
-        key = create_api_key(name)
+        key = await asyncio.to_thread(create_api_key, name)
         return {
             "api_key": key,
             "name": name,
@@ -6825,7 +6810,7 @@ async def admin_list_keys(request: Request):
     _check_admin_key(request)
     try:
         from app.usage_tracker import list_api_keys
-        return {"keys": list_api_keys()}
+        return {"keys": await asyncio.to_thread(list_api_keys)}
     except HTTPException:
         raise
     except Exception as e:
@@ -6837,14 +6822,18 @@ async def admin_list_keys(request: Request):
 # Admin: API Budget Allocator
 # =============================================================================
 
+def _get_budget_status():
+    from app.budget.manager import ApiBudgetManager
+    budget = ApiBudgetManager()
+    return budget.get_status()
+
+
 @app.get("/api/admin/budget")
 async def admin_budget_status(request: Request):
     """Returns today's API budget allocation and usage."""
     _check_admin_key(request)
     try:
-        from app.budget.manager import ApiBudgetManager
-        budget = ApiBudgetManager()
-        return budget.get_status()
+        return await asyncio.to_thread(_get_budget_status)
     except HTTPException:
         raise
     except Exception as e:
@@ -6913,32 +6902,34 @@ async def ops_recent_reports(request: Request):
     }
 
 
+def _do_log_keeper_publish(body):
+    try:
+        from app.database import get_conn
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO keeper_publish_log (chain, scores_published, gas_used, tx_hash, success, error_message)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, (
+                    body.get("chain", "unknown"),
+                    body.get("scores_published", 0),
+                    body.get("gas_used"),
+                    body.get("tx_hash"),
+                    body.get("success", True),
+                    body.get("error_message"),
+                ))
+            conn.commit()
+        return {"status": "logged"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
 @app.post("/api/admin/keeper-log")
 async def log_keeper_publish(request: Request):
     """Log a keeper publish event. Called by the keeper after each on-chain update."""
     _check_admin_key(request)
     body = await request.json()
-    def _log_publish():
-        try:
-            from app.database import get_conn
-            with get_conn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute("""
-                        INSERT INTO keeper_publish_log (chain, scores_published, gas_used, tx_hash, success, error_message)
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                    """, (
-                        body.get("chain", "unknown"),
-                        body.get("scores_published", 0),
-                        body.get("gas_used"),
-                        body.get("tx_hash"),
-                        body.get("success", True),
-                        body.get("error_message"),
-                    ))
-                conn.commit()
-            return {"status": "logged"}
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
-    return await asyncio.to_thread(_log_publish)
+    return await asyncio.to_thread(_do_log_keeper_publish, body)
 
 
 # =============================================================================
@@ -7683,7 +7674,7 @@ async def get_liquidity_depth(asset_id: str):
     """Per-asset, per-venue liquidity profile (DEX + CEX)."""
     try:
         from app.data_layer.liquidity_collector import get_liquidity_profile
-        return get_liquidity_profile(asset_id)
+        return await asyncio.to_thread(get_liquidity_profile, asset_id)
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
@@ -7693,7 +7684,7 @@ async def get_yield_data(protocol: str = Query(default=None)):
     """Pool-level yield, TVL, utilization for any protocol."""
     try:
         from app.data_layer.yield_collector import get_yield_summary
-        return get_yield_summary(protocol)
+        return await asyncio.to_thread(get_yield_summary, protocol)
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
@@ -7837,7 +7828,7 @@ async def simulate_index(request: Request):
     try:
         body = await request.json()
         from app.data_layer.index_simulator import simulate_index as _simulate
-        return _simulate(body)
+        return await asyncio.to_thread(_simulate, body)
     except Exception as e:
         import traceback
         return JSONResponse(status_code=500, content={"error": str(e), "traceback": traceback.format_exc()})
@@ -7851,7 +7842,7 @@ async def indices_coverage_matrix():
     """
     try:
         from app.data_layer.index_simulator import get_coverage_matrix
-        return get_coverage_matrix()
+        return await asyncio.to_thread(get_coverage_matrix)
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
@@ -7981,7 +7972,7 @@ async def drift_exploit_analysis():
     # 4. CQI pairs
     for symbol in ["usdc", "usdt", "dai"]:
         try:
-            cqi = compute_cqi(symbol, "drift")
+            cqi = await asyncio.to_thread(compute_cqi, symbol, "drift")
             if "error" not in cqi:
                 result["cqi_pairs"][f"{symbol}_x_drift"] = {
                     "cqi": cqi.get("cqi_score"),
@@ -8085,7 +8076,7 @@ async def generate_report(
         lens_result = None
         lens_version = None
         if lens:
-            lens_config = load_lens(lens)
+            lens_config = await asyncio.to_thread(load_lens, lens)
             if not lens_config:
                 raise HTTPException(status_code=400, detail=f"Unknown lens: {lens}. Use GET /api/lenses to see available lenses.")
             lens_result = apply_lens(lens_config, data)
@@ -8096,7 +8087,8 @@ async def generate_report(
                                           state_hashes=data.get("state_hashes"))
 
         # Store attestation
-        store_report_attestation(
+        await asyncio.to_thread(
+            store_report_attestation,
             entity_type, entity_id, template, lens, lens_version,
             report_hash, data.get("score_hashes", []),
             data.get("cqi_hashes"),
@@ -8151,7 +8143,7 @@ async def generate_report(
 async def verify_report_endpoint(report_hash: str):
     """Verify a report's attestation chain."""
     from app.report_attestation import verify_report
-    return verify_report(report_hash)
+    return await asyncio.to_thread(verify_report, report_hash)
 
 
 @app.get("/api/reports/templates")
@@ -8165,7 +8157,7 @@ async def list_report_templates():
 async def list_report_lenses():
     """List available regulatory lenses."""
     from app.lenses import list_lenses
-    return {"lenses": list_lenses()}
+    return {"lenses": await asyncio.to_thread(list_lenses)}
 
 
 @app.get("/api/reports/sbt/{token_id}")
@@ -8182,7 +8174,7 @@ async def sbt_metadata(token_id: int):
     from app.templates.sbt_metadata import render as render_sbt
     from app.report_attestation import compute_report_hash
 
-    data = assemble_report_data(row["entity_type"], row["entity_id"])
+    data = await asyncio.to_thread(assemble_report_data, row["entity_type"], row["entity_id"])
     if not data:
         # Fallback: minimal metadata from sbt_tokens table
         import json as _json
@@ -8303,7 +8295,7 @@ async def engagement_by_hash(entity_type: str, entity_id: str, report_hash: str)
 async def list_all_lenses():
     """List all available regulatory lenses (built-in + custom)."""
     from app.lenses import list_lenses
-    lenses = list_lenses()
+    lenses = await asyncio.to_thread(list_lenses)
     return {"lenses": lenses, "count": len(lenses)}
 
 
@@ -8338,7 +8330,7 @@ async def get_lens_detail(lens_id: str):
         }
 
     # Fallback: JSON file lens
-    config = load_lens(lens_id)
+    config = await asyncio.to_thread(load_lens, lens_id)
     if not config:
         raise HTTPException(status_code=404, detail=f"Lens '{lens_id}' not found")
 
@@ -8449,7 +8441,7 @@ async def test_lens(lens_id: str):
     from app.lenses import load_lens, apply_lens
     from app.report import assemble_report_data
 
-    lens_config = load_lens(lens_id)
+    lens_config = await asyncio.to_thread(load_lens, lens_id)
     if not lens_config:
         raise HTTPException(status_code=404, detail=f"Lens '{lens_id}' not found")
 
@@ -8465,7 +8457,7 @@ async def test_lens(lens_id: str):
     pass_count = 0
     for row in rows:
         symbol = row["symbol"] or row["stablecoin_id"]
-        data = assemble_report_data("stablecoin", symbol)
+        data = await asyncio.to_thread(assemble_report_data, "stablecoin", symbol)
         if not data:
             results.append({
                 "entity_id": symbol,
@@ -8647,6 +8639,37 @@ async def provenance_register_static(request: Request):
     return {"status": "registered", "id": row["id"] if row else None, "source_domain": _src}
 
 
+_PROVENANCE_REQUIRED_FIELDS = ["source_domain", "source_endpoint", "response_hash",
+                               "attestation_hash", "proof_url", "attestor_pubkey",
+                               "proved_at", "cycle_hour"]
+
+
+def _do_register_provenance_batch(proofs):
+    from app.database import get_cursor
+    registered = []
+    with get_cursor(dict_cursor=True) as cur:
+        for proof in proofs:
+            missing = [f for f in _PROVENANCE_REQUIRED_FIELDS if f not in proof]
+            if missing:
+                continue
+            _psrc = _normalize_source_domain(proof["source_domain"], proof.get("source_endpoint", ""))
+            cur.execute(
+                """INSERT INTO provenance_proofs
+                   (source_domain, source_endpoint, response_hash, attestation_hash,
+                    proof_url, attestor_pubkey, proved_at, cycle_hour)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                   RETURNING id""",
+                (_psrc, proof["source_endpoint"],
+                 proof["response_hash"], proof["attestation_hash"],
+                 proof["proof_url"], proof["attestor_pubkey"],
+                 proof["proved_at"], proof["cycle_hour"]),
+            )
+            row = cur.fetchone()
+            if row:
+                registered.append(row["id"])
+    return registered
+
+
 @app.post("/api/provenance/register/batch")
 async def provenance_register_batch(request: Request):
     """Register multiple proofs in one request (avoids rate-limit issues)."""
@@ -8656,34 +8679,7 @@ async def provenance_register_batch(request: Request):
     if not proofs:
         raise HTTPException(status_code=400, detail="proofs array is required")
 
-    required = ["source_domain", "source_endpoint", "response_hash",
-                "attestation_hash", "proof_url", "attestor_pubkey",
-                "proved_at", "cycle_hour"]
-    def _register_batch():
-        from app.database import get_cursor
-        registered = []
-        with get_cursor(dict_cursor=True) as cur:
-            for proof in proofs:
-                missing = [f for f in required if f not in proof]
-                if missing:
-                    continue
-                _psrc = _normalize_source_domain(proof["source_domain"], proof.get("source_endpoint", ""))
-                cur.execute(
-                    """INSERT INTO provenance_proofs
-                       (source_domain, source_endpoint, response_hash, attestation_hash,
-                        proof_url, attestor_pubkey, proved_at, cycle_hour)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                       RETURNING id""",
-                    (_psrc, proof["source_endpoint"],
-                     proof["response_hash"], proof["attestation_hash"],
-                     proof["proof_url"], proof["attestor_pubkey"],
-                     proof["proved_at"], proof["cycle_hour"]),
-                )
-                row = cur.fetchone()
-                if row:
-                    registered.append(row["id"])
-        return registered
-    registered = await asyncio.to_thread(_register_batch)
+    registered = await asyncio.to_thread(_do_register_provenance_batch, proofs)
 
     return {
         "status": "registered",
@@ -9894,14 +9890,14 @@ def _register_spa_catch_all(app_instance):
                 symbol = full_path.split("proof/sii/")[1].split("/")[0].split("?")[0]
                 if symbol:
                     return HTMLResponse(
-                        content=_render_proof_html(symbol.lower(), "sii"),
+                        content=await asyncio.to_thread(_render_proof_html, symbol.lower(), "sii"),
                         headers={"Cache-Control": "public, max-age=300", "Basis-URL-Stability": "permanent"}
                     )
             elif full_path.startswith("proof/psi/"):
                 slug = full_path.split("proof/psi/")[1].split("/")[0].split("?")[0]
                 if slug:
                     return HTMLResponse(
-                        content=_render_proof_html(slug.lower(), "psi"),
+                        content=await asyncio.to_thread(_render_proof_html, slug.lower(), "psi"),
                         headers={"Cache-Control": "public, max-age=300", "Basis-URL-Stability": "permanent"}
                     )
         except Exception as e:
@@ -9942,7 +9938,7 @@ def _register_spa_catch_all(app_instance):
                     with open(index_path, "r", encoding="utf-8") as _f:
                         _idx = _f.read()
                     return HTMLResponse(
-                        content=render_incident_ssr_shell(slug.lower(), _idx),
+                        content=await asyncio.to_thread(render_incident_ssr_shell, slug.lower(), _idx),
                         headers={
                             "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
                             "Pragma": "no-cache",
@@ -9958,7 +9954,7 @@ def _register_spa_catch_all(app_instance):
                 entity = full_path.split("witness/static/")[1].split("/")[0].split("?")[0]
                 if entity:
                     return HTMLResponse(
-                        content=_render_witness_static_html(entity.lower()),
+                        content=await asyncio.to_thread(_render_witness_static_html, entity.lower()),
                         headers={"Cache-Control": "public, max-age=300", "Basis-URL-Stability": "permanent"}
                     )
         except Exception as e:
@@ -9969,12 +9965,12 @@ def _register_spa_catch_all(app_instance):
             try:
                 if full_path in ("", "/"):
                     return HTMLResponse(
-                        content=_render_rankings_html(),
+                        content=await asyncio.to_thread(_render_rankings_html),
                         headers={"Cache-Control": "public, max-age=300", "Basis-URL-Stability": "permanent"}
                     )
                 elif full_path == "witness":
                     return HTMLResponse(
-                        content=_render_witness_html(),
+                        content=await asyncio.to_thread(_render_witness_html),
                         headers={"Cache-Control": "public, max-age=300", "Basis-URL-Stability": "permanent"}
                     )
             except Exception as e:

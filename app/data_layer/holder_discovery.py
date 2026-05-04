@@ -263,7 +263,7 @@ async def run_holder_discovery() -> dict:
     try:
         from app.data_layer.provenance_scaling import attest_data_batch
         if total_discovered > 0:
-            attest_data_batch("wallet_holdings", [{"discovered": total_discovered, "seeded": total_seeded}])
+            await asyncio.to_thread(attest_data_batch, "wallet_holdings", [{"discovered": total_discovered, "seeded": total_seeded}])
     except Exception:
         pass
 

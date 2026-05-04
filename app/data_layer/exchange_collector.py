@@ -12,6 +12,7 @@ Sources:
 Schedule: Hourly for trust scores/volume, daily for detailed data
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -245,14 +246,14 @@ async def run_exchange_collection() -> dict:
 
         # Store all snapshots
         if snapshots:
-            _store_exchange_snapshots(snapshots)
+            await asyncio.to_thread(_store_exchange_snapshots, snapshots)
             total_snapshots = len(snapshots)
 
     # Provenance
     try:
         from app.data_layer.provenance_scaling import attest_data_batch, link_batch_to_proof
         if total_snapshots > 0:
-            attest_data_batch("exchange_snapshots", [{"exchanges": total_snapshots}])
+            await asyncio.to_thread(attest_data_batch, "exchange_snapshots", [{"exchanges": total_snapshots}])
             await link_batch_to_proof("exchange_snapshots", "exchange_snapshots")
     except Exception as e:
         logger.debug(f"Exchange provenance failed: {e}")

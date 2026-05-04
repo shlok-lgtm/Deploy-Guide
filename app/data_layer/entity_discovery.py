@@ -16,6 +16,7 @@ Category → Index mapping:
 Schedule: Weekly
 """
 
+import asyncio
 import json
 import logging
 import time
@@ -203,7 +204,7 @@ async def run_entity_discovery() -> dict:
 
     # Store discovery signals
     if candidates:
-        _store_discovered_entities(candidates)
+        await asyncio.to_thread(_store_discovered_entities, candidates)
 
     # Summary by index
     index_summary = {

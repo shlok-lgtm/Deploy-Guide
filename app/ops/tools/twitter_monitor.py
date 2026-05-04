@@ -2,6 +2,7 @@
 Twitter monitor — uses Parallel Search to find recent tweets from target handles.
 Stores in ops_target_content with source_type='tweet', auto-triggers analysis.
 """
+import asyncio
 import logging
 from datetime import datetime, timezone
 from app.database import fetch_one, fetch_all, execute
@@ -23,12 +24,12 @@ async def scan_target_tweets(target_id: int = None, max_per_handle: int = 10) ->
     If target_id provided, scan only that target. Otherwise scan all Tier 1+2.
     """
     if target_id:
-        targets = fetch_all(
+        targets = await asyncio.to_thread(fetch_all,
             """SELECT t.id, t.name, t.tier FROM ops_targets t WHERE t.id = %s""",
             (target_id,),
         )
     else:
-        targets = fetch_all(
+        targets = await asyncio.to_thread(fetch_all,
             """SELECT t.id, t.name, t.tier FROM ops_targets t
                WHERE t.tier <= 2 ORDER BY t.tier, t.name"""
         )
@@ -42,7 +43,7 @@ async def scan_target_tweets(target_id: int = None, max_per_handle: int = 10) ->
 
     for target in targets:
         # Get Twitter handles from contacts
-        contacts = fetch_all(
+        contacts = await asyncio.to_thread(fetch_all,
             """SELECT twitter_handle FROM ops_target_contacts
                WHERE target_id = %s AND twitter_handle IS NOT NULL AND twitter_handle != ''""",
             (target["id"],),
@@ -108,13 +109,13 @@ async def _scan_handle(target_id: int, handle: str, max_results: int = 10) -> in
             continue
 
         # Skip if already stored
-        existing = fetch_one("SELECT id FROM ops_target_content WHERE source_url = %s", (url,))
+        existing = await asyncio.to_thread(fetch_one, "SELECT id FROM ops_target_content WHERE source_url = %s", (url,))
         if existing:
             continue
 
         content = snippet or title or f"Tweet from @{handle}"
 
-        execute(
+        await asyncio.to_thread(execute,
             """INSERT INTO ops_target_content
                (target_id, source_url, source_type, title, content, scraped_at)
                VALUES (%s, %s, 'tweet', %s, %s, %s)

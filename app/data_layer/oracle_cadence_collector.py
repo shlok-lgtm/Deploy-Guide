@@ -176,7 +176,7 @@ async def _sample_oracles(client: httpx.AsyncClient) -> dict:
     if new_rounds > 0:
         try:
             from app.data_layer.provenance_scaling import attest_data_batch
-            attest_data_batch("oracle_cadence", [{"new_rounds": new_rounds}])
+            await asyncio.to_thread(attest_data_batch, "oracle_cadence", [{"new_rounds": new_rounds}])
         except Exception:
             pass
 

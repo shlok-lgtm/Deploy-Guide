@@ -497,7 +497,8 @@ async def _handle_stress_event(oracle: dict, reading: dict, deviation_pct: float
         )
 
         if new_event and new_event.get("id"):
-            tag_pre_stress_readings(
+            await asyncio.to_thread(
+                tag_pre_stress_readings,
                 event_id=new_event["id"],
                 oracle_address=oracle_addr,
                 chain=chain,
@@ -508,7 +509,7 @@ async def _handle_stress_event(oracle: dict, reading: dict, deviation_pct: float
 
         try:
             from app.state_attestation import attest_state
-            attest_state("oracle_stress_events", [{
+            await asyncio.to_thread(attest_state, "oracle_stress_events", [{
                 "oracle_address": oracle_addr,
                 "event_type": event_type,
                 "asset_symbol": asset,

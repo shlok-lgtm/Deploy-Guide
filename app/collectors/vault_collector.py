@@ -179,7 +179,7 @@ async def score_vault_docs(entity_slug: str) -> dict:
     }
 
     for criterion_id, criterion_def in VAULT_DOCS_RUBRIC.items():
-        score, evidence_url, snippet = _score_vault_criterion(docs_url, criterion_def)
+        score, evidence_url, snippet = await asyncio.to_thread(_score_vault_criterion, docs_url, criterion_def)
         component_id = component_map[criterion_id]
 
         # Normalize: 0-25 criterion score → 0-100 component score
@@ -568,11 +568,11 @@ async def score_vault(entity: dict, all_pools: list[dict], hacks_cache: list = N
 
     # --- Phase 1 automation: replace static with live data ---
     # Contract age from Etherscan
-    age_automated = _automate_vault_contract_age(entity, static)
+    age_automated = await asyncio.to_thread(_automate_vault_contract_age, entity, static)
     raw_values.update(age_automated)
 
     # Audit status and upgrade mechanism from smart contract analysis
-    sc_automated = _automate_vault_smart_contract(entity, static)
+    sc_automated = await asyncio.to_thread(_automate_vault_smart_contract, entity, static)
     raw_values.update(sc_automated)
 
     # Dependency chain depth from DeFiLlama yields metadata
@@ -580,11 +580,11 @@ async def score_vault(entity: dict, all_pools: list[dict], hacks_cache: list = N
     raw_values.update(depth_automated)
 
     # Incident history from DeFiLlama hacks
-    incident_automated = _automate_vault_incident_history(entity, static, hacks_cache)
+    incident_automated = await asyncio.to_thread(_automate_vault_incident_history, entity, static, hacks_cache)
     raw_values.update(incident_automated)
 
     # Withdrawal delay from DeFiLlama yields metadata
-    delay_automated = _automate_vault_withdrawal_delay(entity, static, matched_pools)
+    delay_automated = await asyncio.to_thread(_automate_vault_withdrawal_delay, entity, static, matched_pools)
     raw_values.update(delay_automated)
 
     # --- Phase 3C: Documentation quality scoring ---
@@ -651,14 +651,14 @@ async def store_vault_score(result: dict) -> None:
 
 async def run_vsri_scoring() -> list[dict]:
     """Score all vault entities. Called from worker."""
-    all_pools = fetch_yield_pools()
+    all_pools = await asyncio.to_thread(fetch_yield_pools)
     await asyncio.sleep(1)
 
     # Pre-fetch DeFiLlama hacks data (cached 24h, shared across all entities)
     hacks_cache = []
     try:
         from app.collectors.defillama import fetch_defillama_hacks
-        hacks_cache = fetch_defillama_hacks()
+        hacks_cache = await asyncio.to_thread(fetch_defillama_hacks)
     except Exception as e:
         logger.warning(f"VSRI hacks pre-fetch failed: {e}")
 
@@ -680,7 +680,7 @@ async def run_vsri_scoring() -> list[dict]:
     try:
         from app.state_attestation import attest_state
         if results:
-            attest_state("vsri_components", [
+            await asyncio.to_thread(attest_state, "vsri_components", [
                 {"slug": r["entity_slug"], "score": r["overall_score"]}
                 for r in results
             ])

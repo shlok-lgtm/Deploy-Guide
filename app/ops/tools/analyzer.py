@@ -1,6 +1,7 @@
 """
 Analyzer tool — Claude API for worldview extraction, bridge finding, comment drafting.
 """
+import asyncio
 import os
 import logging
 import json
@@ -65,7 +66,8 @@ async def analyze_content(content_id: int):
 
     Updates the ops_target_content record in place.
     """
-    row = fetch_one(
+    row = await asyncio.to_thread(
+        fetch_one,
         """SELECT c.*, t.name as target_name, t.worldview_summary, t.gap, t.positioning
            FROM ops_target_content c
            LEFT JOIN ops_targets t ON c.target_id = t.id
@@ -128,7 +130,8 @@ Type: {row.get('source_type', '')}
         return None
 
     # Update the content record
-    execute(
+    await asyncio.to_thread(
+        execute,
         """UPDATE ops_target_content SET
            analyzed = TRUE,
            content_summary = %s,

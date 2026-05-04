@@ -27,7 +27,7 @@ async def run_daily_cycle():
     logger.info("=== Daily cycle starting ===")
 
     budget = ApiBudgetManager()
-    row = budget.get_or_create_today()
+    row = await asyncio.to_thread(budget.get_or_create_today)
     logger.info(f"Daily Etherscan budget: {row['daily_limit']} calls")
 
     # 1. SII scoring (non-negotiable, highest priority)
@@ -55,14 +55,14 @@ async def run_daily_cycle():
     logger.info("--- Phase 4: Metrics rollup ---")
     try:
         from app.ops.tools.metrics_rollup import compute_and_store_daily_rollup
-        compute_and_store_daily_rollup()
+        await asyncio.to_thread(compute_and_store_daily_rollup)
     except Exception as e:
         logger.error(f"Metrics rollup failed: {e}")
 
     # Flush MCP tool call buffer
     try:
         from app.mcp_server import _flush_mcp_log
-        _flush_mcp_log()
+        await asyncio.to_thread(_flush_mcp_log)
     except Exception:
         pass
 
@@ -76,7 +76,7 @@ async def run_daily_cycle():
         logger.error(f"Oracle monitor failed: {e}")
 
     # 6. Log summary
-    final = budget.get_or_create_today()
+    final = await asyncio.to_thread(budget.get_or_create_today)
     total_used = (
         final["sii_calls_used"]
         + final["psi_calls_used"]
@@ -96,12 +96,12 @@ async def run_daily_cycle():
 
 async def _run_sii_phase(budget: ApiBudgetManager):
     """Run SII scoring cycle with budget tracking."""
-    budget.mark_started("sii")
+    await asyncio.to_thread(budget.mark_started, "sii")
 
-    available = budget.available_for("sii")
+    available = await asyncio.to_thread(budget.available_for, "sii")
     if available < 5000:
         logger.error(f"Insufficient Etherscan budget for SII: {available} available")
-        budget.mark_completed("sii")
+        await asyncio.to_thread(budget.mark_completed, "sii")
         return
 
     try:
@@ -114,14 +114,14 @@ async def _run_sii_phase(budget: ApiBudgetManager):
     except Exception as e:
         logger.error(f"SII scoring cycle failed: {e}")
 
-    budget.mark_completed("sii")
+    await asyncio.to_thread(budget.mark_completed, "sii")
 
 
 async def _run_psi_phase(budget: ApiBudgetManager):
     """Run PSI scoring cycle with budget tracking."""
-    budget.mark_started("psi")
+    await asyncio.to_thread(budget.mark_started, "psi")
 
-    available = budget.available_for("psi")
+    available = await asyncio.to_thread(budget.available_for, "psi")
     if available < 1000:
         logger.warning(
             f"Low Etherscan budget for PSI: {available}. "
@@ -179,18 +179,18 @@ async def _run_psi_phase(budget: ApiBudgetManager):
     except Exception as e:
         logger.error(f"Chain discovery error: {e}")
 
-    budget.mark_completed("psi")
+    await asyncio.to_thread(budget.mark_completed, "psi")
 
 
 async def _run_wallet_phase(budget: ApiBudgetManager):
     """Run wallet refresh + expansion with budget tracking."""
     # Phase 3a: Refresh existing wallets
-    budget.mark_started("wallet_refresh")
+    await asyncio.to_thread(budget.mark_started, "wallet_refresh")
 
-    refresh_available = budget.available_for("wallet_refresh")
+    refresh_available = await asyncio.to_thread(budget.available_for, "wallet_refresh")
     if refresh_available < 1000:
         logger.info(f"Etherscan budget too low for wallet refresh: {refresh_available}")
-        budget.mark_completed("wallet_refresh")
+        await asyncio.to_thread(budget.mark_completed, "wallet_refresh")
     else:
         try:
             from app.indexer.pipeline import run_pipeline
@@ -208,7 +208,7 @@ async def _run_wallet_phase(budget: ApiBudgetManager):
             if wallets > 0 and calls_estimate == 0:
                 calls_estimate = max(wallets * 2, 1000)
 
-            budget.record_calls("wallet_refresh", calls_estimate)
+            await asyncio.to_thread(budget.record_calls, "wallet_refresh", calls_estimate)
             logger.info(
                 f"Wallet refresh complete: {wallets} wallets indexed, "
                 f"~{calls_estimate} Etherscan calls recorded"
@@ -216,12 +216,12 @@ async def _run_wallet_phase(budget: ApiBudgetManager):
         except Exception as e:
             logger.error(f"Wallet refresh failed: {e}")
 
-        budget.mark_completed("wallet_refresh")
+        await asyncio.to_thread(budget.mark_completed, "wallet_refresh")
 
     # Phase 3b: Expand coverage with remaining budget
-    budget.mark_started("wallet_expansion")
+    await asyncio.to_thread(budget.mark_started, "wallet_expansion")
 
-    expansion_available = budget.available_for("wallet_expansion")
+    expansion_available = await asyncio.to_thread(budget.available_for, "wallet_expansion")
     if expansion_available > 5000:
         try:
             from app.indexer.expander import run_wallet_expansion
@@ -230,7 +230,8 @@ async def _run_wallet_phase(budget: ApiBudgetManager):
             expansion_result = await run_wallet_expansion(
                 max_etherscan_calls=expansion_available
             )
-            budget.record_calls(
+            await asyncio.to_thread(
+                budget.record_calls,
                 "wallet_expansion",
                 expansion_result["etherscan_calls_used"],
             )
@@ -245,4 +246,4 @@ async def _run_wallet_phase(budget: ApiBudgetManager):
             f"Only {expansion_available} Etherscan calls remaining — skipping expansion"
         )
 
-    budget.mark_completed("wallet_expansion")
+    await asyncio.to_thread(budget.mark_completed, "wallet_expansion")

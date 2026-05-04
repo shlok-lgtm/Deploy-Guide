@@ -274,7 +274,7 @@ async def collect_clustered_concentration() -> dict:
             if existing:
                 continue
 
-            clusters, metrics = _compute_clusters(symbol, coin_id)
+            clusters, metrics = await asyncio.to_thread(_compute_clusters, symbol, coin_id)
             if not clusters or not metrics:
                 continue
 
