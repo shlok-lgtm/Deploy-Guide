@@ -10,6 +10,19 @@ jobs:
       - name: Audit await-in-args bug pattern
         run: python3 scripts/audit_await_in_args.py --quiet
 
+  audit-sync-db-advisory:
+    # ADVISORY MODE — does not fail build.
+    # Promote to blocking (remove `|| true`) once violations < 50
+    # and the count has been stable for 2 weeks. Tracked in
+    # docs/incidents/2026-05-04-phase3-closure.md (TBD).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - name: Audit sync-DB-in-async (advisory)
+        run: python3 scripts/audit_sync_db_in_async.py || true
+
   oracle-keys-parity:
     # Asserts both Python (app/oracle_keys.py) and TypeScript
     # (keeper/optionC_keys.ts) implementations of the entityId scheme
