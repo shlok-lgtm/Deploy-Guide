@@ -335,7 +335,30 @@ async def run_enrichment_pipeline() -> dict:
             logger.warning(f"RPI incident detection failed: {e}")
 
         from app.rpi.scorer import run_rpi_scoring
-        return await asyncio.to_thread(run_rpi_scoring)
+        result = await asyncio.to_thread(run_rpi_scoring)
+
+        # Attest RPI component scores
+        try:
+            from app.state_attestation import attest_state
+            if result:
+                records = [
+                    {"slug": r.get("protocol_slug", ""), "score": r.get("overall_score")}
+                    for r in result if isinstance(r, dict)
+                ]
+                await asyncio.to_thread(attest_state, "rpi_components", records)
+        except Exception as ae:
+            logger.error(f"RPI components attestation failed: {ae}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="rpi_components_attestation_failure",
+                    error_message=str(ae),
+                    cycle_phase="enrichment",
+                )
+            except Exception:
+                pass
+
+        return result
 
     pipeline.add(EnrichmentTask(
         name="rpi_scoring", func=_run_rpi,
