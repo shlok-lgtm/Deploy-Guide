@@ -416,7 +416,7 @@ DOMAINS = {
         "max_age_hours": 26,
         "coherence_rules": [_pulse_summary_coherence],
     },
-    "actor_classification": {
+    "actors": {
         "freshness_query": "SELECT COUNT(*) AS cnt, MAX(classified_at) AS latest FROM wallet_graph.actor_classifications WHERE actor_type != 'unknown'",
         "max_age_hours": 48,
         "coherence_rules": [_actor_probability_range, _actor_type_consistency],
