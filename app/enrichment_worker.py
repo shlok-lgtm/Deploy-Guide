@@ -419,7 +419,8 @@ async def run_enrichment_pipeline() -> dict:
 
     async def _run_actor_classification():
         from app.actor_classification import classify_all_active
-        return await asyncio.to_thread(classify_all_active)
+        # 300 wallets × ~1.5s feature extraction ≈ 7.5 min, fits in 600s timeout.
+        return await asyncio.to_thread(classify_all_active, limit=300)
 
     pipeline.add(EnrichmentTask(
         name="actor_classification", func=_run_actor_classification,
