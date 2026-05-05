@@ -2359,13 +2359,6 @@ async def run_slow_cycle():
                 f"PSI expansion: {synced} stablecoins synced, {discovered} discovered, "
                 f"{enriched} enriched, {promoted} promoted"
             )
-            try:
-                from app.state_attestation import attest_state
-                if discovered or promoted:
-                    _loop = asyncio.get_event_loop()
-                    await _loop.run_in_executor(None, attest_state, "psi_discoveries", [{"synced": synced, "discovered": discovered, "enriched": enriched, "promoted": promoted}])
-            except Exception as ae:
-                logger.debug(f"PSI discovery attestation skipped: {ae}")
         else:
             logger.info(f"PSI expansion skipped — last ran {hours_since:.0f}h ago")
     except Exception as e:

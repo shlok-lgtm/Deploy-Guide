@@ -241,6 +241,48 @@ def make_db_gate(query: str, min_hours: float = 24) -> Callable[[], bool]:
 # ``await asyncio.to_thread(task.gate_check)`` in _execute_task.
 _db_gate = make_db_gate
 
+
+async def _run_psi_expansion():
+    """PSI expansion: sync collateral, discover, enrich, promote protocols."""
+    from app.collectors.psi_collector import (
+        collect_collateral_exposure,
+        sync_collateral_to_backlog,
+        discover_protocols,
+        enrich_protocol_backlog,
+        promote_eligible_protocols,
+    )
+    await asyncio.to_thread(collect_collateral_exposure)
+    synced = await asyncio.to_thread(sync_collateral_to_backlog)
+    discovered = await asyncio.to_thread(discover_protocols)
+    enriched = await asyncio.to_thread(enrich_protocol_backlog)
+    promoted = await asyncio.to_thread(promote_eligible_protocols)
+    result = {
+        "synced": synced, "discovered": discovered,
+        "enriched": enriched, "promoted": promoted,
+    }
+    # Attest PSI discovery state when new protocols discovered or promoted
+    if discovered or promoted:
+        try:
+            from app.state_attestation import attest_state
+            await asyncio.to_thread(
+                attest_state,
+                "psi_discoveries",
+                [{"synced": synced, "discovered": discovered, "enriched": enriched, "promoted": promoted}],
+            )
+        except Exception as ae:
+            logger.error(f"[enrichment] psi_discoveries attestation failed: {ae}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="psi_discoveries_attestation_failure",
+                    error_message=str(ae),
+                    cycle_phase="psi_expansion",
+                )
+            except Exception:
+                pass
+    return result
+
+
 async def run_enrichment_pipeline() -> dict:
     """
     Build and run the full enrichment pipeline.
@@ -611,24 +653,6 @@ async def run_enrichment_pipeline() -> dict:
     ))
 
     # ---- PSI expansion pipeline ----
-
-    async def _run_psi_expansion():
-        from app.collectors.psi_collector import (
-            collect_collateral_exposure,
-            sync_collateral_to_backlog,
-            discover_protocols,
-            enrich_protocol_backlog,
-            promote_eligible_protocols,
-        )
-        await asyncio.to_thread(collect_collateral_exposure)
-        synced = await asyncio.to_thread(sync_collateral_to_backlog)
-        discovered = await asyncio.to_thread(discover_protocols)
-        enriched = await asyncio.to_thread(enrich_protocol_backlog)
-        promoted = await asyncio.to_thread(promote_eligible_protocols)
-        return {
-            "synced": synced, "discovered": discovered,
-            "enriched": enriched, "promoted": promoted,
-        }
 
     pipeline.add(EnrichmentTask(
         name="psi_expansion", func=_run_psi_expansion,
