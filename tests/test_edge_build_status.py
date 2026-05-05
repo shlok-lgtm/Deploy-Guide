@@ -14,7 +14,8 @@ class TestEdgeBuildStatusOnApiFailure(unittest.TestCase):
     @patch("app.indexer.edges.get_chain_contracts")
     @patch("app.indexer.edges._fetch_tokentx_page", new_callable=AsyncMock)
     def test_first_page_none_writes_api_failure(self, mock_fetch, mock_contracts, mock_execute):
-        mock_fetch.return_value = None
+        from app.indexer.edges import _FetchResult
+        mock_fetch.return_value = _FetchResult(error_type="explorer_timeout", error_detail="test")
         mock_contracts.return_value = {}
 
         client = AsyncMock()
@@ -46,10 +47,11 @@ class TestEdgeBuildStatusOnApiFailure(unittest.TestCase):
     @patch("app.indexer.edges.get_chain_contracts")
     @patch("app.indexer.edges._fetch_tokentx_page", new_callable=AsyncMock)
     def test_successful_fetch_writes_complete(self, mock_fetch, mock_contracts, mock_execute):
+        from app.indexer.edges import _FetchResult
         mock_fetch.side_effect = [
-            [{"contractAddress": "0xabc", "from": "0x111", "to": "0x222",
-              "value": "1000000", "timeStamp": "1700000000"}],
-            [],
+            _FetchResult(transfers=[{"contractAddress": "0xabc", "from": "0x111", "to": "0x222",
+              "value": "1000000", "timeStamp": "1700000000"}]),
+            _FetchResult(transfers=[]),
         ]
         mock_contracts.return_value = {
             "0xabc": {"decimals": 6, "symbol": "USDC"},
