@@ -415,6 +415,17 @@ async def run_enrichment_pipeline() -> dict:
         timeout_seconds=900, group="wallet", priority=3,
     ))
 
+    # ---- Actor classification ----
+
+    async def _run_actor_classification():
+        from app.actor_classification import classify_all_active
+        return await asyncio.to_thread(classify_all_active)
+
+    pipeline.add(EnrichmentTask(
+        name="actor_classification", func=_run_actor_classification,
+        timeout_seconds=600, group="wallet", priority=2,
+    ))
+
     # ---- Wallet expansion + profiles ----
 
     async def _run_wallet_expansion():
