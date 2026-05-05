@@ -358,6 +358,15 @@ def store_component_readings(components: list[dict]):
             ))
 
 
+def _calc_freshness_pct(score_data: dict) -> float:
+    """Return data freshness as 0-100 percentage."""
+    have = score_data.get("component_count", 0)
+    total = score_data.get("components_total") or have
+    if total <= 0:
+        return 0.0
+    return round(min(100.0, (have / total) * 100), 1)
+
+
 def store_score(stablecoin_id: str, score_data: dict, price_ctx: dict):
     """Upsert current score into scores table."""
     # Get previous score for change calculation
@@ -456,7 +465,7 @@ def store_score(stablecoin_id: str, score_data: dict, price_ctx: dict):
             score_data["oracle_score"], score_data["governance_score"],
             score_data["network_score"],
             score_data["component_count"], score_data["formula_version"],
-            round(score_data["component_count"] / 51 * 100, 1),  # freshness pct (51 collectible components)
+            _calc_freshness_pct(score_data),
             price_ctx.get("current_price"), price_ctx.get("market_cap"),
             price_ctx.get("volume_24h"),
             daily_change, weekly_change,
