@@ -85,8 +85,17 @@ def _run_rule(rule_name: str, data: dict, disclosure_type: str) -> dict:
             if total_backing and supply:
                 try:
                     cr = float(total_backing) / float(supply)
-                except (ValueError, TypeError, ZeroDivisionError):
-                    pass
+                except (ValueError, TypeError, ZeroDivisionError) as e:
+                    logger.warning(f"cda_validator: _run_rule collateral_ratio compute failed: {e}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="services__run_rule_collateral_ratio_compute_failure",
+                            error_message=str(e)[:500],
+                            cycle_phase="cda_validator",
+                        )
+                    except Exception:
+                        pass
         if cr is None:
             return {"passed": False, "applicable": False, "message": "No collateral ratio data"}
         try:

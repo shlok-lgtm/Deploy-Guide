@@ -77,8 +77,17 @@ def _get_stablecoin_addresses_on_chain(chain_name: str) -> list:
             finally:
                 try:
                     track_api_call(provider="coingecko", endpoint=f"/coins/{stable['coingecko_id']}", caller="services.chain_spec_generator", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"chain_spec_generator: _get_stablecoin_addresses_on_chain track_api_call failed: {e}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="services__get_stablecoin_addresses_on_chain_track_api_call_failure",
+                            error_message=str(e)[:500],
+                            cycle_phase="chain_spec_generator",
+                        )
+                    except Exception:
+                        pass
             if resp.status_code != 200:
                 continue
 
@@ -93,7 +102,16 @@ def _get_stablecoin_addresses_on_chain(chain_name: str) -> list:
                     "platform_id": platform_id,
                 })
         except Exception as e:
-            logger.debug(f"CoinGecko lookup failed for {stable['symbol']} on {chain_name}: {e}")
+            logger.warning(f"CoinGecko lookup failed for {stable['symbol']} on {chain_name}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="services__get_stablecoin_addresses_on_chain_coingecko_lookup_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="chain_spec_generator",
+                )
+            except Exception:
+                pass
 
     return results
 
