@@ -70,7 +70,16 @@ def _get_etherscan_bytecode(address: str) -> str | None:
         if result and result != "0x":
             return result
     except Exception as e:
-        logger.debug(f"Etherscan bytecode fetch failed for {address}: {e}")
+        logger.warning(f"Etherscan bytecode fetch failed for {address}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__get_etherscan_bytecode_failure",
+                error_message=str(e)[:500],
+                cycle_phase="contract_upgrades",
+            )
+        except Exception:
+            pass
     return None
 
 
@@ -94,7 +103,16 @@ def _rpc_get_code(rpc_url: str, address: str) -> str | None:
         if result and result != "0x":
             return result
     except Exception as e:
-        logger.debug(f"RPC eth_getCode failed for {address}: {e}")
+        logger.warning(f"RPC eth_getCode failed for {address}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__rpc_get_code_failure",
+                error_message=str(e)[:500],
+                cycle_phase="contract_upgrades",
+            )
+        except Exception:
+            pass
     return None
 
 
@@ -320,8 +338,17 @@ def _record_upgrade(
             "current_implementation": impl_address,
             "upgrade_detected_at": now.isoformat(),
         }], str(target["entity_id"]))
-    except Exception as ae:
-        logger.debug(f"Contract upgrade attestation failed: {ae}")
+    except Exception as e:
+        logger.warning(f"Contract upgrade attestation failed: {ae}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__record_upgrade_failure",
+                error_message=str(e)[:500],
+                cycle_phase="contract_upgrades",
+            )
+        except Exception:
+            pass
 
     logger.warning(
         f"CONTRACT UPGRADE DETECTED: {target['entity_symbol']} "

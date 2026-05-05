@@ -66,7 +66,16 @@ def _screen_target(target_name: str, target_type: str) -> dict | None:
             return None
         return resp.json()
     except Exception as e:
-        logger.debug(f"OpenSanctions request failed for {target_name}: {e}")
+        logger.warning(f"OpenSanctions request failed for {target_name}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__screen_target_failure",
+                error_message=str(e)[:500],
+                cycle_phase="sanctions_screening",
+            )
+        except Exception:
+            pass
         return None
 
 
@@ -171,7 +180,16 @@ def run_sanctions_screening() -> dict:
                 logger.debug(f"Sanctions clear: {target_name}")
 
         except Exception as e:
-            logger.debug(f"Sanctions screening failed for {target.get('target_name')}: {e}")
+            logger.warning(f"Sanctions screening failed for {target.get('target_name')}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors_run_sanctions_screening_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="sanctions_screening",
+                )
+            except Exception:
+                pass
 
     # Attest batch
     if targets_screened > 0:
@@ -182,8 +200,17 @@ def run_sanctions_screening() -> dict:
                 "targets_screened": targets_screened,
                 "matches_found": matches_found,
             }])
-        except Exception as ae:
-            logger.debug(f"Sanctions screening attestation failed: {ae}")
+        except Exception as e:
+            logger.warning(f"Sanctions screening attestation failed: {ae}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors_run_sanctions_screening_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="sanctions_screening",
+                )
+            except Exception:
+                pass
 
     summary = {
         "targets_screened": targets_screened,

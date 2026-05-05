@@ -107,7 +107,16 @@ def _fetch_internal_txs(contract_address: str) -> list[dict]:
             return []
         return data.get("result", [])
     except Exception as e:
-        logger.debug(f"Etherscan internal txs failed for {contract_address}: {e}")
+        logger.warning(f"Etherscan internal txs failed for {contract_address}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__fetch_internal_txs_failure",
+                error_message=str(e)[:500],
+                cycle_phase="contract_dependencies",
+            )
+        except Exception:
+            pass
         return []
 
 
@@ -135,8 +144,17 @@ def _fetch_etherscan_label(address: str) -> str | None:
         results = data.get("result", [])
         if results and isinstance(results, list) and results[0].get("ContractName"):
             return results[0]["ContractName"]
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"fetch etherscan label failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__fetch_etherscan_label_failure",
+                error_message=str(e)[:500],
+                cycle_phase="contract_dependencies",
+            )
+        except Exception:
+            pass
     return None
 
 
@@ -286,8 +304,17 @@ def _detect_dependencies(entity: dict) -> list[dict]:
             if label:
                 dep["depends_on_label"] = label
                 dep["depends_on_type"] = _classify_by_label(label)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"detect dependencies failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors__detect_dependencies_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="contract_dependencies",
+                )
+            except Exception:
+                pass
 
     return list(dependencies.values())
 
@@ -350,8 +377,17 @@ def _reconcile_dependencies(entity: dict, current_deps: list[dict], results: dic
                     "depends_on": dep["depends_on_address"],
                     "chain": dep["depends_on_chain"],
                 }], str(entity_id))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"reconcile dependencies failed: {e}")
+                try:
+                    from app.worker import _record_cycle_error
+                    _record_cycle_error(
+                        error_type="collectors__reconcile_dependencies_failure",
+                        error_message=str(e)[:500],
+                        cycle_phase="contract_dependencies",
+                    )
+                except Exception:
+                    pass
 
         results["dependencies_found"] += 1
 
@@ -426,8 +462,17 @@ def _store_daily_snapshot(entity: dict, current_deps: list[dict], results: dict)
             "snapshot_date": today.isoformat(),
             "dependency_count": len(dep_addresses),
         }], str(entity_id))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"store daily snapshot failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__store_daily_snapshot_failure",
+                error_message=str(e)[:500],
+                cycle_phase="contract_dependencies",
+            )
+        except Exception:
+            pass
 
     results["snapshots_stored"] += 1
 

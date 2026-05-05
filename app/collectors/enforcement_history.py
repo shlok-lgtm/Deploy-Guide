@@ -79,7 +79,16 @@ def _search_courtlistener(search_term: str) -> list[dict]:
                 "absolute_url": f"https://www.courtlistener.com{item.get('absolute_url', '')}",
             })
     except Exception as e:
-        logger.debug(f"CourtListener search failed for '{search_term}': {e}")
+        logger.warning(f"CourtListener search failed for '{search_term}': {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__search_courtlistener_failure",
+                error_message=str(e)[:500],
+                cycle_phase="enforcement_history",
+            )
+        except Exception:
+            pass
     return results
 
 
@@ -121,7 +130,16 @@ def _search_sec_edgar(search_term: str) -> list[dict]:
                 "absolute_url": f"https://efts.sec.gov/LATEST/search-index?q={search_term}",
             })
     except Exception as e:
-        logger.debug(f"SEC EDGAR search failed for '{search_term}': {e}")
+        logger.warning(f"SEC EDGAR search failed for '{search_term}': {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__search_sec_edgar_failure",
+                error_message=str(e)[:500],
+                cycle_phase="enforcement_history",
+            )
+        except Exception:
+            pass
     return results
 
 
@@ -237,7 +255,16 @@ def collect_enforcement_records() -> dict:
                         )
 
                     except Exception as e:
-                        logger.debug(f"Failed to store enforcement record: {e}")
+                        logger.warning(f"Failed to store enforcement record: {e}")
+                        try:
+                            from app.worker import _record_cycle_error
+                            _record_cycle_error(
+                                error_type="collectors_collect_enforcement_records_failure",
+                                error_message=str(e)[:500],
+                                cycle_phase="enforcement_history",
+                            )
+                        except Exception:
+                            pass
 
             # Attest per entity
             if new_records > 0:
@@ -248,13 +275,31 @@ def collect_enforcement_records() -> dict:
                         "new_records": new_records,
                         "scanned_at": datetime.now(timezone.utc).isoformat(),
                     }])
-                except Exception as ae:
-                    logger.debug(f"Enforcement attestation failed: {ae}")
+                except Exception as e:
+                    logger.warning(f"Enforcement attestation failed: {ae}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="collectors_collect_enforcement_records_failure",
+                            error_message=str(e)[:500],
+                            cycle_phase="enforcement_history",
+                        )
+                    except Exception:
+                        pass
 
             logger.info(f"ENFORCEMENT SCAN: {symbol} found {new_records} new records")
 
         except Exception as e:
-            logger.debug(f"Enforcement scan failed for {symbol}: {e}")
+            logger.warning(f"Enforcement scan failed for {symbol}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors_collect_enforcement_records_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="enforcement_history",
+                )
+            except Exception:
+                pass
 
     summary = {
         "entities_scanned": entities_scanned,

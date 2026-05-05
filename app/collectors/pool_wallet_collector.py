@@ -93,8 +93,19 @@ async def _fetch_top_holders_multichain(
                 ]
 
             # Status != 1 — try Etherscan fallback
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.debug(f"Blockscout holder fetch failed for {contract[:10]}… on {chain}: {e}")
+            logger.warning(f"Blockscout holder fetch failed for {contract[:10]}… on {chain}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors__fetch_top_holders_multichain_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="pool_wallet_collector",
+                )
+            except Exception:
+                pass
 
     # Fallback: Etherscan V2 (uses shared Etherscan budget)
     if chain == "ethereum":
@@ -126,8 +137,19 @@ async def _fetch_top_holders_multichain(
                 if h.get("TokenHolderAddress") or h.get("address")
             ]
         return []
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"Etherscan holder fetch fallback failed for {contract[:10]}… on {chain}: {e}")
+        logger.warning(f"Etherscan holder fetch fallback failed for {contract[:10]}… on {chain}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__fetch_top_holders_multichain_failure",
+                error_message=str(e)[:500],
+                cycle_phase="pool_wallet_collector",
+            )
+        except Exception:
+            pass
         return []
 
 
@@ -213,8 +235,19 @@ async def run_pool_wallet_collection(max_pages_per_pool: int = 30) -> dict:
                             addr_lower, contract.lower(),
                         ))
                         pool_discovered += 1
+                    except asyncio.CancelledError:
+                        raise
                     except Exception as e:
-                        logger.debug(f"  Failed to upsert pool wallet {addr_lower[:10]}…: {e}")
+                        logger.warning(f"  Failed to upsert pool wallet {addr_lower[:10]}…: {e}")
+                        try:
+                            from app.worker import _record_cycle_error
+                            _record_cycle_error(
+                                error_type="collectors_run_pool_wallet_collection_failure",
+                                error_message=str(e)[:500],
+                                cycle_phase="pool_wallet_collector",
+                            )
+                        except Exception:
+                            pass
 
                     # Seed into wallet_graph.wallets if new
                     if addr_lower not in existing_addrs:
@@ -230,8 +263,19 @@ async def run_pool_wallet_collection(max_pages_per_pool: int = 30) -> dict:
                             ))
                             existing_addrs.add(addr_lower)
                             pool_seeded += 1
+                        except asyncio.CancelledError:
+                            raise
                         except Exception as e:
-                            logger.debug(f"  Failed to seed wallet {addr_lower[:10]}…: {e}")
+                            logger.warning(f"  Failed to seed wallet {addr_lower[:10]}…: {e}")
+                            try:
+                                from app.worker import _record_cycle_error
+                                _record_cycle_error(
+                                    error_type="collectors_run_pool_wallet_collection_failure",
+                                    error_message=str(e)[:500],
+                                    cycle_phase="pool_wallet_collector",
+                                )
+                            except Exception:
+                                pass
 
             logger.info(
                 f"  {label}: {pool_discovered} holders stored, "
@@ -261,8 +305,19 @@ async def run_pool_wallet_collection(max_pages_per_pool: int = 30) -> dict:
                 "seeded": total_seeded,
                 "protocols": list(by_protocol.keys()),
             }])
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"Pool wallet attestation skipped: {e}")
+        logger.warning(f"Pool wallet attestation skipped: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_run_pool_wallet_collection_failure",
+                error_message=str(e)[:500],
+                cycle_phase="pool_wallet_collector",
+            )
+        except Exception:
+            pass
 
     return {
         "pools_processed": pools_processed,
