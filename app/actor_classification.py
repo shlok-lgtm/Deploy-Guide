@@ -11,6 +11,7 @@ Features are derived from data already in wallet_graph.wallet_edges and
 wallet_graph.wallets — no new data collection required.
 """
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -321,24 +322,22 @@ def classify_all_active(limit: int = 2000) -> dict:
     """
     rows = fetch_all(
         """
+        WITH active_addresses AS (
+            SELECT DISTINCT LOWER(from_address) AS addr
+            FROM wallet_graph.wallet_edges
+            WHERE last_transfer_at > NOW() - INTERVAL '90 days'
+            UNION
+            SELECT DISTINCT LOWER(to_address) AS addr
+            FROM wallet_graph.wallet_edges
+            WHERE last_transfer_at > NOW() - INTERVAL '90 days'
+        )
         SELECT DISTINCT w.address
         FROM wallet_graph.wallets w
-        WHERE EXISTS (
-              SELECT 1 FROM wallet_graph.wallet_edges e
-              WHERE (LOWER(e.from_address) = LOWER(w.address) OR LOWER(e.to_address) = LOWER(w.address))
-                AND e.last_transfer_at > NOW() - INTERVAL '90 days'
-          )
-          AND (
-              NOT EXISTS (
-                  SELECT 1 FROM wallet_graph.actor_classifications ac
-                  WHERE ac.wallet_address = LOWER(w.address)
-              )
-              OR EXISTS (
-                  SELECT 1 FROM wallet_graph.actor_classifications ac
-                  WHERE ac.wallet_address = LOWER(w.address)
-                    AND ac.classified_at < NOW() - INTERVAL '24 hours'
-              )
-          )
+        INNER JOIN active_addresses a ON LOWER(w.address) = a.addr
+        LEFT JOIN wallet_graph.actor_classifications ac
+          ON ac.wallet_address = LOWER(w.address)
+        WHERE ac.wallet_address IS NULL
+           OR ac.classified_at < NOW() - INTERVAL '24 hours'
         LIMIT %s
         """,
         (limit,),
@@ -357,6 +356,8 @@ def classify_all_active(limit: int = 2000) -> dict:
                 by_type[result["actor_type"]] = by_type.get(result["actor_type"], 0) + 1
             else:
                 skipped += 1
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.warning(f"Classification error for {r['address'][:12]}…: {e}")
             skipped += 1
@@ -383,7 +384,16 @@ def classify_all_active(limit: int = 2000) -> dict:
         if classified > 0:
             attest_state("actors", [{"classified": classified, "reclassified": reclassified, "by_type": by_type}])
     except Exception as ae:
-        logger.debug(f"Actor attestation skipped: {ae}")
+        logger.error(f"Actor attestation FAILED: {ae}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="actor_attestation_failure",
+                error_message=str(ae)[:500],
+                cycle_phase="actor_classification",
+            )
+        except Exception:
+            pass
 
     return {
         "classified": classified,
