@@ -385,15 +385,12 @@ def classify_all_active(limit: int = 2000) -> dict:
             attest_state("actors", [{"classified": classified, "reclassified": reclassified, "by_type": by_type}])
     except Exception as ae:
         logger.error(f"Actor attestation FAILED: {ae}")
-        try:
-            from app.worker import _record_cycle_error
-            _record_cycle_error(
-                error_type="actor_attestation_failure",
-                error_message=str(ae)[:500],
-                cycle_phase="actor_classification",
-            )
-        except Exception:
-            pass
+        from app.worker import _record_cycle_error
+        _record_cycle_error(
+            error_type="actor_attestation_failure",
+            error_message=str(ae)[:500],
+            cycle_phase="actor_classification",
+        )
 
     return {
         "classified": classified,
