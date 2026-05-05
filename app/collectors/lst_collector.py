@@ -124,7 +124,16 @@ def fetch_lst_market_data(coingecko_id: str) -> dict | None:
         if resp.status_code == 200:
             return resp.json()
     except Exception as e:
-        logger.debug(f"CoinGecko LST fetch failed for {coingecko_id}: {e}")
+        logger.warning(f"CoinGecko LST fetch failed for {coingecko_id}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_fetch_lst_market_data_failure",
+                error_message=str(e)[:500],
+                cycle_phase="lst_collector",
+            )
+        except Exception:
+            pass
     return None
 
 
@@ -140,7 +149,16 @@ def fetch_eth_price() -> float | None:
         if resp.status_code == 200:
             return resp.json().get("ethereum", {}).get("usd")
     except Exception as e:
-        logger.debug(f"ETH price fetch failed: {e}")
+        logger.warning(f"ETH price fetch failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_fetch_eth_price_failure",
+                error_message=str(e)[:500],
+                cycle_phase="lst_collector",
+            )
+        except Exception:
+            pass
     return None
 
 
@@ -222,7 +240,16 @@ def fetch_defillama_all_pools() -> list:
         if resp.status_code == 200:
             return resp.json().get("data", [])
     except Exception as e:
-        logger.debug(f"DeFiLlama bulk pool fetch failed: {e}")
+        logger.warning(f"DeFiLlama bulk pool fetch failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_fetch_defillama_all_pools_failure",
+                error_message=str(e)[:500],
+                cycle_phase="lst_collector",
+            )
+        except Exception:
+            pass
     return []
 
 
@@ -257,7 +284,16 @@ def fetch_defillama_pool_data(symbol: str) -> dict:
                 chains = set(p.get("chain", "") for p in matching if p.get("chain"))
                 raw["cross_chain_liquidity"] = len(chains)
     except Exception as e:
-        logger.debug(f"DeFiLlama pool data failed for {symbol}: {e}")
+        logger.warning(f"DeFiLlama pool data failed for {symbol}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_fetch_defillama_pool_data_failure",
+                error_message=str(e)[:500],
+                cycle_phase="lst_collector",
+            )
+        except Exception:
+            pass
     return raw
 
 
@@ -299,7 +335,16 @@ def fetch_rated_data(protocol_slug: str) -> dict:
                 # 1 - HHI approximation: if single operator has share s, diversity ≈ 1 - s²
                 raw["operator_diversity_hhi"] = 1.0 - (share ** 2)
     except Exception as e:
-        logger.debug(f"Rated.network fetch failed for {protocol_slug}: {e}")
+        logger.warning(f"Rated.network fetch failed for {protocol_slug}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_fetch_rated_data_failure",
+                error_message=str(e)[:500],
+                cycle_phase="lst_collector",
+            )
+        except Exception:
+            pass
     return raw
 
 

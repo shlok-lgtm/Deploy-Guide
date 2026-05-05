@@ -171,7 +171,16 @@ def fetch_exchange_data(coingecko_id: str) -> dict | None:
         if resp.status_code == 200:
             return resp.json()
     except Exception as e:
-        logger.debug(f"CoinGecko exchange fetch failed for {coingecko_id}: {e}")
+        logger.warning(f"CoinGecko exchange fetch failed for {coingecko_id}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_fetch_exchange_data_failure",
+                error_message=str(e)[:500],
+                cycle_phase="cex_collector",
+            )
+        except Exception:
+            pass
     return None
 
 
@@ -282,9 +291,17 @@ def _automate_cex_reserve_dashboard(entity: dict, static: dict) -> dict:
             automated["realtime_reserve_dashboard"] = 80  # dashboard exists
         else:
             automated["realtime_reserve_dashboard"] = 20
-    except Exception:
-        # Keep static value on failure
-        pass
+    except Exception as e:
+        logger.warning(f"automate cex reserve dashboard failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__automate_cex_reserve_dashboard_failure",
+                error_message=str(e)[:500],
+                cycle_phase="cex_collector",
+            )
+        except Exception:
+            pass
 
     return automated
 
@@ -341,7 +358,16 @@ def extract_cex_raw_values(entity: dict, hacks_cache: list = None) -> dict:
                 static_score = static.get(comp_id, 0)
                 raw[comp_id] = max(live_score, static_score)
     except Exception as e:
-        logger.debug(f"CXRI regulatory check failed for {slug}: {e}")
+        logger.warning(f"CXRI regulatory check failed for {slug}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_extract_cex_raw_values_failure",
+                error_message=str(e)[:500],
+                cycle_phase="cex_collector",
+            )
+        except Exception:
+            pass
 
     return raw
 

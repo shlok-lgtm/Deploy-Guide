@@ -209,7 +209,16 @@ def fetch_bridge_volume(bridge_id: int) -> dict | None:
         if resp.status_code == 200:
             return resp.json()
     except Exception as e:
-        logger.debug(f"Bridge volume fetch failed for ID {bridge_id}: {e}")
+        logger.warning(f"Bridge volume fetch failed for ID {bridge_id}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_fetch_bridge_volume_failure",
+                error_message=str(e)[:500],
+                cycle_phase="bridge_collector",
+            )
+        except Exception:
+            pass
     return None
 
 
@@ -254,7 +263,16 @@ def _automate_bridge_contract_age(entity: dict, static: dict) -> dict:
                     automated["contract_age_days"] = max(age_days, static_age)
                     logger.info(f"BRI contract age {entity['slug']}: {age_days} days")
     except Exception as e:
-        logger.debug(f"BRI contract age failed for {entity['slug']}: {e}")
+        logger.warning(f"BRI contract age failed for {entity['slug']}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__automate_bridge_contract_age_failure",
+                error_message=str(e)[:500],
+                cycle_phase="bridge_collector",
+            )
+        except Exception:
+            pass
 
     return automated
 
@@ -329,7 +347,16 @@ def _automate_bridge_bounty(entity: dict, static: dict) -> dict:
             # Keep static value if Immunefi didn't find it
             automated["bug_bounty_size"] = static.get("bug_bounty_size", 0)
     except Exception as e:
-        logger.debug(f"BRI Immunefi fetch failed for {slug}: {e}")
+        logger.warning(f"BRI Immunefi fetch failed for {slug}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__automate_bridge_bounty_failure",
+                error_message=str(e)[:500],
+                cycle_phase="bridge_collector",
+            )
+        except Exception:
+            pass
 
     return automated
 
