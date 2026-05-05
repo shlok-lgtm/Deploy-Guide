@@ -192,8 +192,19 @@ async def _fetch_holders_etherscan(
                 status=_status,
                 latency_ms=int((time.monotonic() - _t0) * 1000),
             )
-        except Exception:
-            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"[holder_ingestion] track_api_call failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="data_layer__fetch_holders_etherscan_track_api_call_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="holder_ingestion_collector",
+                )
+            except Exception:
+                pass
 
 
 async def _fetch_holders_blockscout(
@@ -389,8 +400,19 @@ async def run_holder_ingestion() -> dict:
         total_new = sum(s["new_wallets"] for s in stats.values())
         if total_new > 0:
             await asyncio.to_thread(attest_data_batch, "wallet_holder_discovery", [dict(stats)])
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"[holder_ingestion] attestation failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_run_holder_ingestion_attestation_failure",
+                error_message=str(e)[:500],
+                cycle_phase="holder_ingestion_collector",
+            )
+        except Exception:
+            pass
 
     # SUMMARY
     for etype, s in sorted(stats.items()):
