@@ -165,8 +165,19 @@ async def _run_contagion_traversal(
                 ORDER BY wallet_address, computed_at DESC
             """, (connected_addrs,))
             risk_map = {r["wallet_address"]: r for r in (risk_rows or [])}
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"contagion_archive: _run_contagion_traversal risk score lookup failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="services__run_contagion_traversal_risk_lookup_failure",
+                error_message=str(e)[:500],
+                cycle_phase="contagion_archive",
+            )
+        except Exception:
+            pass
 
     affected = []
     for r in contagion_rows:
@@ -273,8 +284,19 @@ async def archive_contagion_event(
                 "trigger_after": trigger_after,
                 "detected_at": now.isoformat(),
             }], str(source_entity_id))
+        except asyncio.CancelledError:
+            raise
         except Exception as ae:
-            logger.debug(f"Contagion event attestation failed: {ae}")
+            logger.warning(f"Contagion event attestation failed: {ae}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="services_archive_contagion_event_attestation_failure",
+                    error_message=str(ae)[:500],
+                    cycle_phase="contagion_archive",
+                )
+            except Exception:
+                pass
 
         depth2_wallets = propagation_summary.get("total_affected_wallets", 0)
         exposure = propagation_summary.get("estimated_exposure_usd", 0)
@@ -349,5 +371,16 @@ async def archive_divergence_signals(signals: list):
                 trigger_after=trigger_after,
                 severity=severity,
             )
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.debug(f"Failed to archive contagion for signal: {e}")
+            logger.warning(f"Failed to archive contagion for signal: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="services_archive_divergence_signals_archive_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="contagion_archive",
+                )
+            except Exception:
+                pass

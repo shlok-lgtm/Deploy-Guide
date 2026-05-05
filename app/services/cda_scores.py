@@ -7,6 +7,7 @@ Called by the offline collector for each stablecoin.
 If no CDA data exists, returns empty list — scoring continues with existing data.
 """
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -106,8 +107,19 @@ async def get_cda_components(stablecoin_id: str) -> list[dict]:
                 "normalized_score": round(freshness_score, 2),
                 "data_source": source,
             })
-        except (ValueError, TypeError):
-            pass
+        except asyncio.CancelledError:
+            raise
+        except (ValueError, TypeError) as e:
+            logger.warning(f"cda_scores: get_cda_components attestation_freshness parse failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="services_get_cda_components_attestation_freshness_parse_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="cda_scores",
+                )
+            except Exception:
+                pass
 
     # 2. Reserve-to-Supply Ratio (category: transparency)
     reserves = data.get("total_reserves_usd")
@@ -226,8 +238,19 @@ async def get_cda_components_typed(stablecoin_id: str, disclosure_type: str = No
                 "normalized_score": round(freshness_score, 2),
                 "data_source": source,
             })
-        except (ValueError, TypeError):
-            pass
+        except asyncio.CancelledError:
+            raise
+        except (ValueError, TypeError) as e:
+            logger.warning(f"cda_scores: get_cda_components_typed attestation_freshness parse failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="services_get_cda_components_typed_attestation_freshness_parse_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="cda_scores",
+                )
+            except Exception:
+                pass
 
     if components:
         logger.info(

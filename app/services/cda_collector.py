@@ -311,8 +311,17 @@ def _extract_reserve_data_from_markdown(markdown: str) -> dict | None:
             elif "million" in text_after:
                 num *= 1_000_000
             data["total_reserves_usd"] = num
-        except ValueError:
-            pass
+        except ValueError as e:
+            logger.warning(f"cda_collector: total_reserves_usd parse failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="services__extract_reserve_data_from_markdown_total_reserves_parse_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="cda_collector",
+                )
+            except Exception:
+                pass
 
     # Total supply patterns
     supply_match = re.search(
@@ -323,8 +332,17 @@ def _extract_reserve_data_from_markdown(markdown: str) -> dict | None:
         val = supply_match.group(1).replace(",", "")
         try:
             data["total_supply"] = float(val)
-        except ValueError:
-            pass
+        except ValueError as e:
+            logger.warning(f"cda_collector: total_supply parse failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="services__extract_reserve_data_from_markdown_total_supply_parse_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="cda_collector",
+                )
+            except Exception:
+                pass
 
     # Attestation date patterns
     date_match = re.search(
@@ -396,8 +414,19 @@ async def _try_reducto_pdf(symbol: str, pdf_url: str, prefix: str, disclosure_ty
             VALUES (%s, %s, %s)
             ON CONFLICT (asset_symbol, source_url) DO UPDATE SET discovered_at = NOW(), active = TRUE
         """, (symbol, _issuer_domain, pdf_url))
+    except asyncio.CancelledError:
+        raise
     except Exception as _ue:
-        logger.debug(f"{prefix} — cda_source_urls upsert skipped: {_ue}")
+        logger.warning(f"{prefix} — cda_source_urls upsert skipped: {_ue}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="services__try_reducto_pdf_cda_source_urls_upsert_failure",
+                error_message=str(_ue)[:500],
+                cycle_phase="cda_collector",
+            )
+        except Exception:
+            pass
 
     # Run validation
     try:
@@ -771,8 +800,17 @@ async def _step_parallel_task(issuer: dict, prefix: str) -> dict | None:
                 structured["total_reserves_usd"] = float(
                     str(total_reserves).replace(",", "").replace("$", "")
                 )
-            except ValueError:
-                pass
+            except ValueError as e:
+                logger.warning(f"cda_collector: _step_parallel_task total_reserves_usd parse failed: {e}")
+                try:
+                    from app.worker import _record_cycle_error
+                    _record_cycle_error(
+                        error_type="services__step_parallel_task_total_reserves_parse_failure",
+                        error_message=str(e)[:500],
+                        cycle_phase="cda_collector",
+                    )
+                except Exception:
+                    pass
 
         await asyncio.to_thread(
             _store_extraction,
@@ -1090,8 +1128,19 @@ async def _collect_api_source(symbol: str, url: str, prefix: str) -> dict | None
                     from urllib.parse import urlparse as _urlparse
                     _provider = _urlparse(url).netloc or "issuer"
                     track_api_call(provider=_provider, endpoint="GET", caller="services.cda_collector", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
-                except Exception:
-                    pass
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.warning(f"cda_collector: _collect_api_source track_api_call failed: {e}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="services__collect_api_source_track_api_call_failure",
+                            error_message=str(e)[:500],
+                            cycle_phase="cda_collector",
+                        )
+                    except Exception:
+                        pass
             resp.raise_for_status()
             data = resp.json()
 
@@ -1245,8 +1294,19 @@ async def run_collection():
         )
         if recent:
             await asyncio.to_thread(attest_state, "cda_extractions", [dict(r) for r in recent])
+    except asyncio.CancelledError:
+        raise
     except Exception as ae:
-        logger.debug(f"CDA attestation skipped: {ae}")
+        logger.warning(f"CDA attestation skipped: {ae}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="services_run_collection_cda_attestation_failure",
+                error_message=str(ae)[:500],
+                cycle_phase="cda_collector",
+            )
+        except Exception:
+            pass
 
 
 async def collect_single_issuer(asset_symbol: str):
