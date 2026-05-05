@@ -322,25 +322,31 @@ def classify_all_active(limit: int = 2000) -> dict:
     """
     rows = fetch_all(
         """
-        WITH active_addresses AS (
-            SELECT DISTINCT LOWER(from_address) AS addr
-            FROM wallet_graph.wallet_edges
-            WHERE last_transfer_at > NOW() - INTERVAL '90 days'
-            UNION
-            SELECT DISTINCT LOWER(to_address) AS addr
-            FROM wallet_graph.wallet_edges
-            WHERE last_transfer_at > NOW() - INTERVAL '90 days'
+        WITH addr_transfer_totals AS (
+            SELECT addr, SUM(transfer_count) AS total_transfers
+            FROM (
+                SELECT LOWER(from_address) AS addr, transfer_count
+                FROM wallet_graph.wallet_edges
+                WHERE last_transfer_at > NOW() - INTERVAL '90 days'
+                UNION ALL
+                SELECT LOWER(to_address) AS addr, transfer_count
+                FROM wallet_graph.wallet_edges
+                WHERE last_transfer_at > NOW() - INTERVAL '90 days'
+            ) edges_both_sides
+            GROUP BY addr
+            HAVING SUM(transfer_count) >= %s
         )
-        SELECT DISTINCT w.address
+        SELECT w.address
         FROM wallet_graph.wallets w
-        INNER JOIN active_addresses a ON LOWER(w.address) = a.addr
+        INNER JOIN addr_transfer_totals a ON LOWER(w.address) = a.addr
         LEFT JOIN wallet_graph.actor_classifications ac
           ON ac.wallet_address = LOWER(w.address)
         WHERE ac.wallet_address IS NULL
            OR ac.classified_at < NOW() - INTERVAL '24 hours'
+        ORDER BY ac.classified_at NULLS FIRST, a.total_transfers DESC
         LIMIT %s
         """,
-        (limit,),
+        (MIN_TX_COUNT, limit),
     )
 
     classified = 0

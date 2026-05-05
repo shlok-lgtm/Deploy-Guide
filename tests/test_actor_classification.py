@@ -30,7 +30,7 @@ class TestClassifyAllActive(unittest.TestCase):
         assert result["by_type"]["human"] == 2
         assert mock_fetch_all.call_count == 1
         sql = mock_fetch_all.call_args[0][0]
-        assert "active_addresses" in sql, "Should use CTE-based query"
+        assert "addr_transfer_totals" in sql, "Should use transfer-count CTE query"
 
     @patch("app.actor_classification.fetch_one")
     @patch("app.actor_classification.classify_wallet")
