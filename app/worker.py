@@ -1755,18 +1755,6 @@ async def run_slow_cycle():
             from app.rpi.scorer import run_rpi_scoring
             rpi_results = await asyncio.to_thread(run_rpi_scoring)
             logger.info(f"RPI scoring complete: {len(rpi_results)} protocols scored")
-
-            # Attest RPI scores (14th domain)
-            try:
-                from app.state_attestation import attest_state
-                if rpi_results:
-                    _loop = asyncio.get_event_loop()
-                    await _loop.run_in_executor(None, attest_state, "rpi_components", [
-                        {"slug": r.get("protocol_slug", ""), "score": r.get("overall_score")}
-                        for r in rpi_results if isinstance(r, dict)
-                    ])
-            except Exception as ae:
-                logger.debug(f"RPI attestation skipped: {ae}")
         else:
             logger.info(f"RPI scoring skipped — last ran {rpi_age_hours:.0f}h ago")
     except Exception as e:
