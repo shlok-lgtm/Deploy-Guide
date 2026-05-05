@@ -17,6 +17,7 @@ if co-located. The hub worker also calls `run_provenance_health_recheck()`
 in the slow cycle.
 """
 
+import asyncio
 import json
 import logging
 import time
@@ -251,8 +252,19 @@ async def _report_alert(source_id: str, event: str, old_url: str = None,
             (source_id, event, old_url, redirect_url,
              json.dumps(details) if details else None),
         )
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"Failed to write health alert for {source_id}: {e}")
+        logger.warning(f"Failed to write health alert for {source_id}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer__report_alert_failure",
+                error_message=str(e)[:500],
+                cycle_phase="prover_source_registry",
+            )
+        except Exception:
+            pass
 
 
 # =============================================================================
@@ -290,8 +302,19 @@ async def bump_recheck_timestamp(source_id: str):
             "UPDATE provenance_sources SET last_failure = NOW() WHERE id = %s",
             (source_id,),
         )
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"Failed to bump recheck timestamp for {source_id}: {e}")
+        logger.warning(f"Failed to bump recheck timestamp for {source_id}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_bump_recheck_timestamp_failure",
+                error_message=str(e)[:500],
+                cycle_phase="prover_source_registry",
+            )
+        except Exception:
+            pass
 
 
 async def run_provenance_health_recheck():
@@ -343,8 +366,19 @@ async def run_provenance_health_recheck():
                     try:
                         _provider = urlparse(url).netloc or "unknown"
                         track_api_call(provider=_provider, endpoint="HEAD", caller="data_layer.prover_source_registry", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
-                    except Exception:
-                        pass
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        logger.warning(f"[prover_source_registry] track_api_call failed: {e}")
+                        try:
+                            from app.worker import _record_cycle_error
+                            _record_cycle_error(
+                                error_type="data_layer_run_provenance_health_recheck_track_api_call_failure",
+                                error_message=str(e)[:500],
+                                cycle_phase="prover_source_registry",
+                            )
+                        except Exception:
+                            pass
 
                 if resp.status_code == 200:
                     await record_re_enable(source_id)
@@ -417,8 +451,19 @@ async def seed_from_local_config() -> int:
             )
             if row:
                 seeded += 1
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.debug(f"Failed to seed source {src.get('id')}: {e}")
+            logger.warning(f"Failed to seed source {src.get('id')}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="data_layer_seed_from_local_config_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="prover_source_registry",
+                )
+            except Exception:
+                pass
 
     if seeded:
         logger.info(f"Seeded {seeded} sources from local config into DB")
@@ -433,8 +478,17 @@ def _get_local_sources() -> list[dict]:
     try:
         from app.data_layer.provenance_scaling import PROVENANCE_SOURCES
         from app.collectors.registry import _build_url, _infer_source_type
-    except ImportError:
-        logger.debug("Local provenance config not available")
+    except ImportError as e:
+        logger.warning(f"Local provenance config not available: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer__get_local_sources_import_failure",
+                error_message=str(e)[:500],
+                cycle_phase="prover_source_registry",
+            )
+        except Exception:
+            pass
         return []
 
     sources = []
@@ -485,6 +539,17 @@ async def get_source_counts() -> dict:
                 "disabled": row["disabled"],
                 "total": row["total"],
             }
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"Failed to get source counts: {e}")
+        logger.warning(f"Failed to get source counts: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_get_source_counts_failure",
+                error_message=str(e)[:500],
+                cycle_phase="prover_source_registry",
+            )
+        except Exception:
+            pass
     return {"active": 0, "disabled": 0, "total": 0}
