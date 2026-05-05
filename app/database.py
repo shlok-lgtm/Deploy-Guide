@@ -48,7 +48,7 @@ def _warn_if_async_context(helper_name: str) -> None:
 _pool: Optional[ThreadedConnectionPool] = None
 
 
-def init_pool(database_url: Optional[str] = None, min_conn: int = 2, max_conn: int = 10):
+def init_pool(database_url: Optional[str] = None, min_conn: int = 5, max_conn: int = 50):
     """Initialize the connection pool. Call once at startup."""
     global _pool
     url = database_url or os.environ.get("DATABASE_URL", "")
