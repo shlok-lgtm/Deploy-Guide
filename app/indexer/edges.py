@@ -43,6 +43,37 @@ else:
 _EXPLORER_CHAIN_KEY = "chainid" if BLOCK_EXPLORER_PROVIDER == "etherscan" else "chain_id"
 
 
+class _FetchResult:
+    """Sentinel for _fetch_tokentx_page outcomes."""
+    __slots__ = ("transfers", "error_type", "error_detail")
+
+    def __init__(self, transfers=None, error_type=None, error_detail=None):
+        self.transfers = transfers
+        self.error_type = error_type
+        self.error_detail = error_detail
+
+    @property
+    def ok(self):
+        return self.error_type is None
+
+    @property
+    def transient(self):
+        return self.error_type in ("explorer_timeout", "explorer_network_error", "explorer_server_error")
+
+
+def _record_explorer_error(error_type: str, detail: str, chain: str = "ethereum"):
+    """Write explorer failure to cycle_errors for V9.11 Layer 2 visibility."""
+    try:
+        from app.worker import _record_cycle_error
+        _record_cycle_error(
+            error_type=error_type,
+            error_message=detail[:500],
+            cycle_phase=f"edge_builder:{chain}",
+        )
+    except Exception:
+        pass
+
+
 async def _fetch_tokentx_page(
     client: httpx.AsyncClient,
     wallet_address: str,
@@ -51,8 +82,13 @@ async def _fetch_tokentx_page(
     offset: int = 100,
     explorer_base: str = None,
     chain_id: int = 1,
-) -> list[dict] | None:
-    """Fetch one page of ERC-20 token transfer events for a wallet."""
+) -> _FetchResult:
+    """Fetch one page of ERC-20 token transfer events for a wallet.
+
+    Returns _FetchResult with .transfers (list) on success, or
+    .error_type + .error_detail on failure. Callers use .ok and
+    .transient to decide retry vs escalation.
+    """
     base_url = explorer_base or EXPLORER_BASE
     try:
         resp = await client.get(
@@ -69,17 +105,61 @@ async def _fetch_tokentx_page(
             },
             timeout=15.0,
         )
-        data = resp.json()
-        if data.get("status") == "1" and isinstance(data.get("result"), list):
-            return data["result"]
-        msg = data.get("result", "")
-        if "Max rate limit" in str(msg):
-            logger.warning("Explorer rate limit hit, backing off")
-            await asyncio.sleep(2.0)
-        return None
+    except httpx.TimeoutException:
+        detail = f"Timeout fetching tokentx for {wallet_address[:10]}… page={page}"
+        logger.warning(detail)
+        await asyncio.to_thread(_record_explorer_error, "explorer_timeout", detail)
+        return _FetchResult(error_type="explorer_timeout", error_detail=detail)
+    except httpx.NetworkError as e:
+        detail = f"Network error fetching tokentx for {wallet_address[:10]}…: {e}"
+        logger.warning(detail)
+        await asyncio.to_thread(_record_explorer_error, "explorer_network_error", detail)
+        return _FetchResult(error_type="explorer_network_error", error_detail=detail)
     except Exception as e:
-        logger.debug(f"tokentx fetch error for {wallet_address[:10]}…: {e}")
-        return None
+        detail = f"Unexpected error fetching tokentx for {wallet_address[:10]}…: {type(e).__name__}: {e}"
+        logger.error(detail)
+        await asyncio.to_thread(_record_explorer_error, "explorer_unknown_error", detail)
+        return _FetchResult(error_type="explorer_unknown_error", error_detail=detail)
+
+    if resp.status_code >= 500:
+        detail = f"Explorer returned {resp.status_code} for {wallet_address[:10]}…"
+        logger.warning(detail)
+        await asyncio.to_thread(_record_explorer_error, "explorer_server_error", detail)
+        return _FetchResult(error_type="explorer_server_error", error_detail=detail)
+
+    if resp.status_code in (401, 403):
+        detail = f"Explorer auth failure ({resp.status_code}) for {wallet_address[:10]}…"
+        logger.error(detail)
+        await asyncio.to_thread(_record_explorer_error, "explorer_auth_failure", detail)
+        return _FetchResult(error_type="explorer_auth_failure", error_detail=detail)
+
+    if resp.status_code == 429:
+        detail = "Explorer rate limit (HTTP 429)"
+        logger.warning(detail)
+        await asyncio.to_thread(_record_explorer_error, "explorer_rate_limit", detail)
+        await asyncio.sleep(2.0)
+        return _FetchResult(error_type="explorer_rate_limit", error_detail=detail)
+
+    try:
+        data = resp.json()
+    except Exception as e:
+        detail = f"Malformed JSON from explorer for {wallet_address[:10]}…: {e}"
+        logger.error(detail)
+        await asyncio.to_thread(_record_explorer_error, "explorer_malformed_response", detail)
+        return _FetchResult(error_type="explorer_malformed_response", error_detail=detail)
+
+    if data.get("status") == "1" and isinstance(data.get("result"), list):
+        return _FetchResult(transfers=data["result"])
+
+    msg = data.get("result", "")
+    if "Max rate limit" in str(msg):
+        detail = f"Explorer rate limit (in-body) for {wallet_address[:10]}…"
+        logger.warning(detail)
+        await asyncio.to_thread(_record_explorer_error, "explorer_rate_limit", detail)
+        await asyncio.sleep(2.0)
+        return _FetchResult(error_type="explorer_rate_limit", error_detail=detail)
+
+    return _FetchResult(transfers=[])
 
 
 def _compute_weight(total_value_usd: float, transfer_count: int, last_transfer_at: datetime) -> float:
@@ -114,19 +194,26 @@ async def build_edges_for_wallet(
     total_transfers = 0
     pages_fetched = 0
     first_page_failed = False
+    consecutive_transient = 0
 
     for page in range(1, max_pages + 1):
-        transfers = await _fetch_tokentx_page(
+        result = await _fetch_tokentx_page(
             client, wallet_lower, api_key, page=page,
             explorer_base=explorer_base, chain_id=chain_id,
         )
         await asyncio.sleep(EXPLORER_RATE_LIMIT_DELAY)
 
-        if transfers is None:
+        if not result.ok:
             if page == 1:
                 first_page_failed = True
+            if result.transient:
+                consecutive_transient += 1
+                if consecutive_transient < 3:
+                    continue
             break
 
+        consecutive_transient = 0
+        transfers = result.transfers
         pages_fetched += 1
 
         if not transfers:
@@ -213,7 +300,7 @@ async def build_edges_for_wallet(
         )
         edges_upserted += 1
 
-    # Update build status — only mark complete if API actually responded
+    # Update build status — only mark complete if API responded
     if first_page_failed:
         await execute_async(
             """
@@ -226,15 +313,6 @@ async def build_edges_for_wallet(
             """,
             (wallet_lower, chain),
         )
-        try:
-            from app.worker import _record_cycle_error
-            _record_cycle_error(
-                error_type="edge_builder_api_failure",
-                error_message=f"First page fetch returned None for {wallet_lower[:10]}… on {chain}",
-                cycle_phase="edge_builder",
-            )
-        except Exception:
-            pass
     else:
         await execute_async(
             """
