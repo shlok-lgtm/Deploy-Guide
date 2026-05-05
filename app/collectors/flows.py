@@ -17,7 +17,9 @@ import os
 import math
 import asyncio
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 
 import httpx
 
@@ -29,6 +31,29 @@ logger = logging.getLogger(__name__)
 ETHERSCAN_V2_BASE = "https://api.etherscan.io/v2/api"
 RATE_LIMIT_DELAY = 0.15  # slightly conservative to avoid contention with holder queries
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
+
+
+def _write_cycle_error(error_type: str, error_message: str) -> None:
+    """Persist a flows-collection error to cycle_errors. Never raises."""
+    try:
+        from app.worker import _record_cycle_error
+        _record_cycle_error(
+            error_type=error_type,
+            error_message=error_message,
+            cycle_phase="flows_collection",
+        )
+    except Exception:
+        pass
+
+
+@dataclass
+class _FlowsFetchResult:
+    """Structured result from _fetch_recent_transfers so callers can
+    distinguish API failure from genuine zero transfers."""
+    success: bool
+    transfers: list
+    error_type: Optional[str] = None
+    error_message: Optional[str] = None
 
 
 def _get_stablecoin_config(stablecoin_id: str) -> dict | None:
@@ -50,8 +75,12 @@ def _get_stablecoin_config(stablecoin_id: str) -> dict | None:
 
 async def _fetch_recent_transfers(
     client: httpx.AsyncClient, contract: str, api_key: str
-) -> list[dict]:
-    """Fetch the most recent 200 token transfers for a contract."""
+) -> _FlowsFetchResult:
+    """Fetch the most recent 200 token transfers for a contract.
+
+    Returns a _FlowsFetchResult so callers can distinguish API failure
+    (rate-limit, timeout, transport error) from a genuine empty result set.
+    """
     params = {
         "chainid": 1,
         "module": "account",
@@ -65,15 +94,58 @@ async def _fetch_recent_transfers(
     try:
         resp = await client.get(ETHERSCAN_V2_BASE, params=params, timeout=20)
         data = resp.json()
-        if data.get("status") == "1" and data.get("result"):
-            return data["result"]
-        if "Max rate limit" in str(data.get("result", "")):
+
+        # Rate limit surfaced inside the JSON body (status "0")
+        result_str = str(data.get("result", ""))
+        if "Max rate limit" in result_str:
             logger.warning("Etherscan rate limit hit in flows collector")
             await asyncio.sleep(1.0)
-        return []
+            return _FlowsFetchResult(
+                success=False,
+                transfers=[],
+                error_type="rate_limit",
+                error_message=result_str[:500],
+            )
+
+        # Etherscan returned a non-success status (e.g. invalid key, bad params)
+        if data.get("status") != "1":
+            return _FlowsFetchResult(
+                success=False,
+                transfers=[],
+                error_type="api_error",
+                error_message=result_str[:500],
+            )
+
+        # Success
+        return _FlowsFetchResult(
+            success=True,
+            transfers=data.get("result") or [],
+        )
+
+    except httpx.TimeoutException as e:
+        logger.error(f"Etherscan tokentx timeout for {contract}: {e}")
+        return _FlowsFetchResult(
+            success=False,
+            transfers=[],
+            error_type="timeout",
+            error_message=str(e)[:500],
+        )
+    except httpx.HTTPError as e:
+        logger.error(f"Etherscan tokentx transport error for {contract}: {e}")
+        return _FlowsFetchResult(
+            success=False,
+            transfers=[],
+            error_type="transport",
+            error_message=str(e)[:500],
+        )
     except Exception as e:
         logger.error(f"Etherscan tokentx error for {contract}: {e}")
-        return []
+        return _FlowsFetchResult(
+            success=False,
+            transfers=[],
+            error_type="transport",
+            error_message=str(e)[:500],
+        )
 
 
 def _parse_mint_burn(transfers: list[dict], decimals: int, price: float) -> dict:
@@ -268,11 +340,21 @@ async def collect_flows_components(
     market_cap = await _fl.run_in_executor(None, _get_market_cap, stablecoin_id)
 
     # Fetch recent transfers
-    transfers = await _fetch_recent_transfers(client, contract, api_key)
+    fetch_result = await _fetch_recent_transfers(client, contract, api_key)
     await asyncio.sleep(RATE_LIMIT_DELAY)
 
+    if not fetch_result.success:
+        # API failure — record to cycle_errors so it's distinguishable from
+        # genuine zero-transfer periods.
+        _write_cycle_error(
+            error_type=f"flows_{fetch_result.error_type}",
+            error_message=f"{stablecoin_id}: {fetch_result.error_message}",
+        )
+        return []
+
+    transfers = fetch_result.transfers
     if not transfers:
-        logger.debug(f"No transfers found for {stablecoin_id}")
+        logger.info(f"No transfers found for {stablecoin_id} (genuine zero)")
         return []
 
     # Parse mint/burn volumes
