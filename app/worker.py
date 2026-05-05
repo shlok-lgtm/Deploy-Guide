@@ -2224,17 +2224,7 @@ async def run_slow_cycle():
             f"Divergence detection: {div_summary.get('total_signals', 0)} signals "
             f"({div_summary.get('critical', 0)} critical, {div_summary.get('alerts', 0)} alerts)"
         )
-        try:
-            from app.state_attestation import attest_state
-            signals = div_result.get("divergence_signals", [])
-            if signals:
-                _loop = asyncio.get_event_loop()
-                await _loop.run_in_executor(None, attest_state, "divergence_signals", [
-                    {"type": s.get("type"), "severity": s.get("severity")}
-                    for s in signals
-                ])
-        except Exception as e:
-            logger.warning(f"Divergence attestation failed: {e}")
+        # Attestation moved to enrichment_worker._run_divergence()
     except Exception as e:
         logger.warning(f"Divergence detection failed: {e}")
 
