@@ -61,8 +61,19 @@ async def _eth_call(client: httpx.AsyncClient, rpc_url: str, to: str, data: str)
     finally:
         try:
             track_api_call(provider="alchemy", endpoint="eth_call", caller="data_layer.oracle_cadence_collector", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
-        except Exception:
-            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"[oracle_cadence] track_api_call failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="data_layer__eth_call_track_api_call_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="oracle_cadence_collector",
+                )
+            except Exception:
+                pass
     result = resp.json()
     if "error" in result:
         raise Exception(result["error"].get("message", str(result["error"])))
@@ -177,8 +188,19 @@ async def _sample_oracles(client: httpx.AsyncClient) -> dict:
         try:
             from app.data_layer.provenance_scaling import attest_data_batch
             await asyncio.to_thread(attest_data_batch, "oracle_cadence", [{"new_rounds": new_rounds}])
-        except Exception:
-            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"[oracle_cadence] attestation failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="data_layer__sample_oracles_attestation_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="oracle_cadence_collector",
+                )
+            except Exception:
+                pass
 
     return {
         "oracles": len(oracles),

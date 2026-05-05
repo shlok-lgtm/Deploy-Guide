@@ -228,8 +228,17 @@ async def run_mint_burn_collection() -> dict:
                                 ts = datetime.fromtimestamp(
                                     int(tx["timeStamp"]), tz=timezone.utc
                                 )
-                            except (ValueError, OSError):
-                                pass
+                            except (ValueError, OSError) as e:
+                                logger.warning(f"[mint_burn_collector] timestamp parse failed: {e}")
+                                try:
+                                    from app.worker import _record_cycle_error
+                                    _record_cycle_error(
+                                        error_type="data_layer_run_mint_burn_collection_timestamp_parse_failure",
+                                        error_message=str(e)[:500],
+                                        cycle_phase="mint_burn_collector",
+                                    )
+                                except Exception:
+                                    pass
 
                         evt = {
                             "stablecoin_id": stablecoin_id,
@@ -289,8 +298,19 @@ async def run_mint_burn_collection() -> dict:
                         json.dumps(evt),
                     ),
                 )
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.debug(f"Mint/burn signal emission failed: {e}")
+            logger.warning(f"Mint/burn signal emission failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="data_layer_run_mint_burn_collection_signal_emission_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="mint_burn_collector",
+                )
+            except Exception:
+                pass
 
     # Check for redemption acceleration pattern
     anomalies = await _detect_redemption_acceleration()
@@ -301,8 +321,19 @@ async def run_mint_burn_collection() -> dict:
         if total_mints + total_burns > 0:
             await asyncio.to_thread(attest_data_batch, "mint_burn_events", [{"mints": total_mints, "burns": total_burns}])
             await link_batch_to_proof("mint_burn_events", "mint_burn_events")
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"Mint/burn provenance failed: {e}")
+        logger.warning(f"Mint/burn provenance failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_run_mint_burn_collection_provenance_failure",
+                error_message=str(e)[:500],
+                cycle_phase="mint_burn_collector",
+            )
+        except Exception:
+            pass
 
     logger.info(
         f"Mint/burn collection complete: {total_mints} mints, {total_burns} burns, "
@@ -370,7 +401,18 @@ async def _detect_redemption_acceleration() -> list[dict]:
                         "mean_per_6h_window": round(mean, 2),
                         "z_score": round(z_score, 2),
                     })
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"Redemption acceleration detection failed: {e}")
+        logger.warning(f"Redemption acceleration detection failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer__detect_redemption_acceleration_failure",
+                error_message=str(e)[:500],
+                cycle_phase="mint_burn_collector",
+            )
+        except Exception:
+            pass
 
     return anomalies
