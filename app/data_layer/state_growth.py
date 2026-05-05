@@ -138,8 +138,19 @@ async def _bulk_row_counts() -> dict[str, int]:
         for r in (rows or []):
             counts[r["full_name"]] = int(r["n_live_tup"])
             counts[r["relname"]] = int(r["n_live_tup"])
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"[state_growth] pg_stat row count fetch failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer__bulk_row_counts_pg_stat_failure",
+                error_message=str(e)[:500],
+                cycle_phase="state_growth",
+            )
+        except Exception:
+            pass
 
     # Override pg_stat for tables with upsert/DELETE+INSERT churn patterns.
     # pg_stat n_live_tup inflates massively between VACUUM cycles for these.
@@ -163,8 +174,19 @@ async def _bulk_row_counts() -> dict[str, int]:
                 counts[table_name] = real_count
                 plain = table_name.split(".")[-1] if "." in table_name else table_name
                 counts[plain] = real_count
-        except Exception:
-            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"[state_growth] table count override failed for {table_name}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="data_layer__bulk_row_counts_override_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="state_growth",
+                )
+            except Exception:
+                pass
 
     return counts
 
@@ -210,8 +232,19 @@ async def snapshot_row_counts():
     try:
         pg = await _bulk_row_counts()
         await asyncio.to_thread(_snapshot_row_counts_sync, pg)
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"Row count snapshot failed: {e}")
+        logger.warning(f"Row count snapshot failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_snapshot_row_counts_failure",
+                error_message=str(e)[:500],
+                cycle_phase="state_growth",
+            )
+        except Exception:
+            pass
 
 
 async def _load_snapshots() -> dict:
@@ -242,8 +275,19 @@ async def _load_snapshots() -> dict:
             if "week_start" not in entry or sd <= entry.get("week_start_date", today):
                 entry["week_start"] = count
                 entry["week_start_date"] = sd
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"[state_growth] snapshot load failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer__load_snapshots_failure",
+                error_message=str(e)[:500],
+                cycle_phase="state_growth",
+            )
+        except Exception:
+            pass
 
     # If no snapshot history yet, seed from daily_pulses state_accumulation
     has_yesterday = any("yesterday" in v for v in result.values())
@@ -283,8 +327,19 @@ async def _load_snapshots() -> dict:
                     result.setdefault("wallet_graph.wallet_risk_scores", {})["yesterday"] = int(ns["wallets_scored"])
                 if ns.get("edge_count"):
                     result.setdefault("wallet_graph.wallet_edges", {})["yesterday"] = int(ns["edge_count"])
-        except Exception:
-            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"[state_growth] daily_pulses fallback failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="data_layer__load_snapshots_pulse_fallback_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="state_growth",
+                )
+            except Exception:
+                pass
 
     return result
 
@@ -433,8 +488,19 @@ async def get_state_growth() -> dict:
                     if daily_limit else None
                 ),
             }
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"[state_growth] api utilization fetch failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_get_state_growth_api_utilization_failure",
+                error_message=str(e)[:500],
+                cycle_phase="state_growth",
+            )
+        except Exception:
+            pass
 
     # =========================================================================
     # 5. Provenance coverage
@@ -527,8 +593,19 @@ async def get_state_growth() -> dict:
         )
         if row:
             db_size_mb = round(float(row["size_mb"]), 1)
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"[state_growth] db size fetch failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_get_state_growth_db_size_failure",
+                error_message=str(e)[:500],
+                cycle_phase="state_growth",
+            )
+        except Exception:
+            pass
 
     storage = {
         "estimated_total_mb": total_size_mb,
@@ -564,8 +641,19 @@ async def get_state_growth() -> dict:
                 "avg_latency_ms": r.get("avg_latency_ms", 0),
                 "total_components": r.get("total_components", 0),
             })
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"[state_growth] collector health fetch failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_get_state_growth_collector_health_failure",
+                error_message=str(e)[:500],
+                cycle_phase="state_growth",
+            )
+        except Exception:
+            pass
 
     # =========================================================================
     # 10. Active alerts — things needing human attention
@@ -610,8 +698,19 @@ async def get_state_growth() -> dict:
         keeper_status["cycles_24h"] = await _safe_count(
             "SELECT COUNT(*) as cnt FROM ops.keeper_cycles WHERE started_at >= NOW() - INTERVAL '24 hours'"
         )
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"[state_growth] keeper status fetch failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_get_state_growth_keeper_status_failure",
+                error_message=str(e)[:500],
+                cycle_phase="state_growth",
+            )
+        except Exception:
+            pass
 
     # =========================================================================
     # 12. Scoring performance — cycle durations and throughput
@@ -653,8 +752,19 @@ async def get_state_growth() -> dict:
         scoring_performance["avg_components_per_coin"] = (
             round(float(avg_comps["avg_cnt"]), 1) if avg_comps and avg_comps.get("avg_cnt") else 0
         )
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"[state_growth] scoring performance fetch failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_get_state_growth_scoring_performance_failure",
+                error_message=str(e)[:500],
+                cycle_phase="state_growth",
+            )
+        except Exception:
+            pass
 
     # =========================================================================
     # 13. CDA freshness — per-issuer extraction staleness
@@ -688,8 +798,19 @@ async def get_state_growth() -> dict:
                 "days_since": days_since,
                 "stale": False if no_attestation else (days_since is None or days_since > 30),
             })
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"[state_growth] cda freshness fetch failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_get_state_growth_cda_freshness_failure",
+                error_message=str(e)[:500],
+                cycle_phase="state_growth",
+            )
+        except Exception:
+            pass
 
     # =========================================================================
     # 14. Component coverage — per-index: defined, automated, static, empty
@@ -731,8 +852,19 @@ async def get_state_growth() -> dict:
         component_coverage["rpi"] = {
             "unique_components": rpi_comp_count,
         }
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"[state_growth] component coverage fetch failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_get_state_growth_component_coverage_failure",
+                error_message=str(e)[:500],
+                cycle_phase="state_growth",
+            )
+        except Exception:
+            pass
 
     # =========================================================================
     # 15. CQI contagion coverage
@@ -749,8 +881,19 @@ async def get_state_growth() -> dict:
             "coverage_pct": round(pairs_with_pools / max(pairs_total, 1) * 100, 1),
             "pool_wallets_discovered": await _safe_count("SELECT COUNT(*) as cnt FROM protocol_pool_wallets"),
         }
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"[state_growth] cqi contagion fetch failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_get_state_growth_cqi_contagion_failure",
+                error_message=str(e)[:500],
+                cycle_phase="state_growth",
+            )
+        except Exception:
+            pass
 
     # =========================================================================
     # 16. x402 revenue
@@ -789,8 +932,19 @@ async def get_state_growth() -> dict:
              "revenue_usd": round(float(r["revenue"]), 6) if r.get("revenue") else 0}
             for r in top_endpoints
         ]
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"[state_growth] x402 revenue fetch failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_get_state_growth_x402_revenue_failure",
+                error_message=str(e)[:500],
+                cycle_phase="state_growth",
+            )
+        except Exception:
+            pass
 
     # =========================================================================
     # 17. Security scanning — contract surveillance status
@@ -836,8 +990,19 @@ async def get_state_growth() -> dict:
             scored_entities.update(str(r["id"]) for r in sii_entities)
             psi_entities = await fetch_all_async("SELECT DISTINCT protocol_slug FROM psi_scores") or []
             scored_entities.update(r["protocol_slug"] for r in psi_entities)
-        except Exception:
-            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"[state_growth] scored entities query failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="data_layer_get_state_growth_scored_entities_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="state_growth",
+                )
+            except Exception:
+                pass
 
         monitored_entities = set(r["entity_id"] for r in monitored)
         unmonitored = sorted(scored_entities - monitored_entities)
@@ -871,8 +1036,19 @@ async def get_state_growth() -> dict:
             security_scanning["last_scan"] = lt.isoformat() if hasattr(lt, 'isoformat') else str(lt)
         else:
             security_scanning["last_scan"] = None
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"[state_growth] security scanning fetch failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_get_state_growth_security_scanning_failure",
+                error_message=str(e)[:500],
+                cycle_phase="state_growth",
+            )
+        except Exception:
+            pass
 
     return {
         "generated_at": now.isoformat(),
