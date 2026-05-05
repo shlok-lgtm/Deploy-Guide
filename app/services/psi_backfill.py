@@ -77,8 +77,17 @@ def backfill_protocol_tvl(slug: str) -> int:
         finally:
             try:
                 track_api_call(provider="defillama", endpoint=f"/protocol/{slug}", caller="services.psi_backfill", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
-            except Exception:
-                pass
+            except Exception as _track_err:
+                logger.warning(f"psi_backfill: backfill_protocol_tvl track_api_call failed: {_track_err}")
+                try:
+                    from app.worker import _record_cycle_error
+                    _record_cycle_error(
+                        error_type="services_backfill_protocol_tvl_track_api_call_failure",
+                        error_message=str(_track_err)[:500],
+                        cycle_phase="psi_backfill",
+                    )
+                except Exception:
+                    pass
         if resp.status_code != 200:
             logger.warning(f"DeFiLlama {slug} returned {resp.status_code}")
             return 0
@@ -119,7 +128,16 @@ def backfill_protocol_tvl(slug: str) -> int:
             """, (slug, record_date.isoformat(), tvl_val, chain_count))
             records += 1
         except Exception as e:
-            logger.debug(f"TVL insert error for {slug} @ {record_date}: {e}")
+            logger.warning(f"TVL insert error for {slug} @ {record_date}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="services_backfill_protocol_tvl_insert_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="psi_backfill",
+                )
+            except Exception:
+                pass
 
     logger.info(f"Backfilled {records} TVL records for {slug}")
     return records
@@ -158,8 +176,17 @@ def backfill_protocol_token(slug: str, gecko_id: str, from_date: str = "2024-01-
             finally:
                 try:
                     track_api_call(provider="coingecko", endpoint=f"/coins/{gecko_id}/market_chart/range", caller="services.psi_backfill", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
-                except Exception:
-                    pass
+                except Exception as _track_err:
+                    logger.warning(f"psi_backfill: backfill_protocol_token track_api_call failed: {_track_err}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="services_backfill_protocol_token_track_api_call_failure",
+                            error_message=str(_track_err)[:500],
+                            cycle_phase="psi_backfill",
+                        )
+                    except Exception:
+                        pass
             if resp.status_code == 429:
                 logger.warning("CoinGecko rate limit — sleeping 60s")
                 time.sleep(5)
@@ -202,8 +229,17 @@ def backfill_protocol_token(slug: str, gecko_id: str, from_date: str = "2024-01-
                         token_volume = COALESCE(EXCLUDED.token_volume, historical_protocol_data.token_volume)
                 """, (slug, d.isoformat(), price, mcap_map.get(d), vol_map.get(d)))
                 records += 1
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"psi_backfill: backfill_protocol_token insert failed for {slug} @ {d}: {e}")
+                try:
+                    from app.worker import _record_cycle_error
+                    _record_cycle_error(
+                        error_type="services_backfill_protocol_token_insert_failure",
+                        error_message=str(e)[:500],
+                        cycle_phase="psi_backfill",
+                    )
+                except Exception:
+                    pass
 
         current = chunk_end
         time.sleep(0.2)

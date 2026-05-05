@@ -4,6 +4,7 @@ PDF document parsing with schema-level extraction and confidence scoring.
 Used for attestation PDFs (Grant Thornton, BDO, Deloitte reports).
 Docs: https://docs.reducto.ai
 """
+import asyncio
 import os
 import time
 import httpx
@@ -301,8 +302,19 @@ async def parse_pdf(pdf_url: str, schema: dict = None, disclosure_type: str = No
             finally:
                 try:
                     track_api_call(provider="reducto", endpoint="/extract", caller="services.reducto_client", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
-                except Exception:
-                    pass
+                except asyncio.CancelledError:
+                    raise
+                except Exception as _track_err:
+                    logger.warning(f"reducto_client: parse_pdf track_api_call failed: {_track_err}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="services_parse_pdf_track_api_call_failure",
+                            error_message=str(_track_err)[:500],
+                            cycle_phase="reducto_client",
+                        )
+                    except Exception:
+                        pass
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
@@ -336,8 +348,19 @@ async def parse_to_markdown(pdf_url: str) -> dict:
             finally:
                 try:
                     track_api_call(provider="reducto", endpoint="/parse", caller="services.reducto_client", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
-                except Exception:
-                    pass
+                except asyncio.CancelledError:
+                    raise
+                except Exception as _track_err:
+                    logger.warning(f"reducto_client: parse_to_markdown track_api_call failed: {_track_err}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="services_parse_to_markdown_track_api_call_failure",
+                            error_message=str(_track_err)[:500],
+                            cycle_phase="reducto_client",
+                        )
+                    except Exception:
+                        pass
             resp.raise_for_status()
             return resp.json()
         except Exception as e:

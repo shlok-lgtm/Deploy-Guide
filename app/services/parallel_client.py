@@ -70,8 +70,19 @@ async def extract(url: str, objective: str = None, full_content: bool = True) ->
             finally:
                 try:
                     track_api_call(provider="parallel", endpoint="/v1beta/extract", caller="services.parallel_client", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
-                except Exception:
-                    pass
+                except asyncio.CancelledError:
+                    raise
+                except Exception as _track_err:
+                    logger.warning(f"parallel_client: extract track_api_call failed: {_track_err}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="services_extract_track_api_call_failure",
+                            error_message=str(_track_err)[:500],
+                            cycle_phase="parallel_client",
+                        )
+                    except Exception:
+                        pass
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
@@ -111,8 +122,19 @@ async def extract_batch(urls: List[str], objective: str = None, full_content: bo
             finally:
                 try:
                     track_api_call(provider="parallel", endpoint="/v1beta/extract_batch", caller="services.parallel_client", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
-                except Exception:
-                    pass
+                except asyncio.CancelledError:
+                    raise
+                except Exception as _track_err:
+                    logger.warning(f"parallel_client: extract_batch track_api_call failed: {_track_err}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="services_extract_batch_track_api_call_failure",
+                            error_message=str(_track_err)[:500],
+                            cycle_phase="parallel_client",
+                        )
+                    except Exception:
+                        pass
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
@@ -148,8 +170,19 @@ async def search(query: str, num_results: int = 10) -> dict:
             finally:
                 try:
                     track_api_call(provider="parallel", endpoint="/v1beta/search", caller="services.parallel_client", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
-                except Exception:
-                    pass
+                except asyncio.CancelledError:
+                    raise
+                except Exception as _track_err:
+                    logger.warning(f"parallel_client: search track_api_call failed: {_track_err}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="services_search_track_api_call_failure",
+                            error_message=str(_track_err)[:500],
+                            cycle_phase="parallel_client",
+                        )
+                    except Exception:
+                        pass
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
@@ -220,8 +253,19 @@ async def task(
             finally:
                 try:
                     track_api_call(provider="parallel", endpoint="/v1/tasks/runs", caller="services.parallel_client", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
-                except Exception:
-                    pass
+                except asyncio.CancelledError:
+                    raise
+                except Exception as _track_err:
+                    logger.warning(f"parallel_client: task create track_api_call failed: {_track_err}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="services_task_create_track_api_call_failure",
+                            error_message=str(_track_err)[:500],
+                            cycle_phase="parallel_client",
+                        )
+                    except Exception:
+                        pass
             resp.raise_for_status()
             run_data = resp.json()
         except Exception as e:
@@ -252,8 +296,19 @@ async def task(
             finally:
                 try:
                     track_api_call(provider="parallel", endpoint="/v1/tasks/runs/result", caller="services.parallel_client", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
-                except Exception:
-                    pass
+                except asyncio.CancelledError:
+                    raise
+                except Exception as _track_err:
+                    logger.warning(f"parallel_client: task result track_api_call failed: {_track_err}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="services_task_result_track_api_call_failure",
+                            error_message=str(_track_err)[:500],
+                            cycle_phase="parallel_client",
+                        )
+                    except Exception:
+                        pass
             resp.raise_for_status()
             result = resp.json()
         except httpx.HTTPStatusError as e:
@@ -326,8 +381,19 @@ async def monitor_create(
             finally:
                 try:
                     track_api_call(provider="parallel", endpoint="/v1alpha/monitors", caller="services.parallel_client", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
-                except Exception:
-                    pass
+                except asyncio.CancelledError:
+                    raise
+                except Exception as _track_err:
+                    logger.warning(f"parallel_client: monitor_create track_api_call failed: {_track_err}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="services_monitor_create_track_api_call_failure",
+                            error_message=str(_track_err)[:500],
+                            cycle_phase="parallel_client",
+                        )
+                    except Exception:
+                        pass
             resp.raise_for_status()
             return resp.json()
         except httpx.HTTPStatusError as e:
@@ -360,8 +426,19 @@ async def monitor_list() -> dict:
             finally:
                 try:
                     track_api_call(provider="parallel", endpoint="/v1alpha/monitors", caller="services.parallel_client", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
-                except Exception:
-                    pass
+                except asyncio.CancelledError:
+                    raise
+                except Exception as _track_err:
+                    logger.warning(f"parallel_client: monitor_list track_api_call failed: {_track_err}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="services_monitor_list_track_api_call_failure",
+                            error_message=str(_track_err)[:500],
+                            cycle_phase="parallel_client",
+                        )
+                    except Exception:
+                        pass
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
@@ -390,8 +467,19 @@ async def monitor_delete(monitor_id: str) -> dict:
             finally:
                 try:
                     track_api_call(provider="parallel", endpoint=f"/v1alpha/monitors/{monitor_id}", caller="services.parallel_client", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
-                except Exception:
-                    pass
+                except asyncio.CancelledError:
+                    raise
+                except Exception as _track_err:
+                    logger.warning(f"parallel_client: monitor_delete track_api_call failed: {_track_err}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="services_monitor_delete_track_api_call_failure",
+                            error_message=str(_track_err)[:500],
+                            cycle_phase="parallel_client",
+                        )
+                    except Exception:
+                        pass
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
@@ -421,8 +509,19 @@ async def monitor_events(monitor_id: str, lookback: str = "10d") -> dict:
             finally:
                 try:
                     track_api_call(provider="parallel", endpoint=f"/v1alpha/monitors/{monitor_id}/events", caller="services.parallel_client", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
-                except Exception:
-                    pass
+                except asyncio.CancelledError:
+                    raise
+                except Exception as _track_err:
+                    logger.warning(f"parallel_client: monitor_events track_api_call failed: {_track_err}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="services_monitor_events_track_api_call_failure",
+                            error_message=str(_track_err)[:500],
+                            cycle_phase="parallel_client",
+                        )
+                    except Exception:
+                        pass
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
