@@ -582,6 +582,27 @@ async def run_enrichment_pipeline() -> dict:
         from app.divergence import detect_all_divergences
         result = await detect_all_divergences(store=True)
         logger.info(f"[enrichment] divergence result: {result.get('summary', {}).get('total_signals', 0) if isinstance(result, dict) else result}")
+        # Attest divergence signals so the domain stays fresh
+        try:
+            from app.state_attestation import attest_state
+            signals = result.get("divergence_signals", []) if isinstance(result, dict) else []
+            if signals:
+                records = [
+                    {"type": s.get("type"), "severity": s.get("severity")}
+                    for s in signals
+                ]
+                await asyncio.to_thread(attest_state, "divergence_signals", records)
+        except Exception as e:
+            logger.error(f"[enrichment] divergence attestation failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="divergence_attestation_failure",
+                    error_message=str(e),
+                    cycle_phase="enrichment",
+                )
+            except Exception:
+                pass
         return result
 
     pipeline.add(EnrichmentTask(
