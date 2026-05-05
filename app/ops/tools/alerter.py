@@ -131,7 +131,7 @@ async def send_alert(alert_type: str, message: str, context: dict = None, severi
     try:
         await execute_async(
             "INSERT INTO ops_alert_log (alert_type, channel, message, context) VALUES (%s, %s, %s, %s)",
-            (alert_type, "telegram" if sent_any else "log_only", message, json.dumps(context or {})),
+            (alert_type, "telegram" if sent_any else "log_only", message, json.dumps(context or {}, default=str)),
         )
     except Exception:
         pass
