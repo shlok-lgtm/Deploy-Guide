@@ -949,7 +949,31 @@ async def run_enrichment_pipeline() -> dict:
     async def _run_provenance_update():
         from app.data_layer.provenance_scaling import update_catalog_provenance, run_provenance_linking
         await run_provenance_linking()
-        return await update_catalog_provenance()
+        result = await update_catalog_provenance()
+
+        # Provenance attestation — relocated from orphaned worker.py slow cycle
+        try:
+            from app.database import fetch_all
+            from app.state_attestation import attest_state
+            prov_rows = await asyncio.to_thread(
+                fetch_all,
+                "SELECT source_domain, attestation_hash, proved_at FROM provenance_proofs WHERE proved_at > NOW() - INTERVAL '2 hours'",
+            )
+            if prov_rows:
+                await asyncio.to_thread(attest_state, "provenance", [dict(r) for r in prov_rows])
+        except Exception as e:
+            logger.error(f"[enrichment] provenance attestation failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="provenance_attestation_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="enrichment_provenance_update",
+                )
+            except Exception:
+                pass
+
+        return result
 
     pipeline.add(EnrichmentTask(
         name="provenance_update", func=_run_provenance_update,
