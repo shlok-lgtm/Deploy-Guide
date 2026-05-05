@@ -31,6 +31,21 @@ def _headers() -> dict:
     return h
 
 
+def _is_high_trust(ticker: dict) -> bool:
+    """Check if a ticker is from a high-trust exchange.
+
+    CoinGecko historically returned trust_score as a string ("green", "yellow",
+    "red").  Modern responses may return ``null`` for that field and instead
+    provide a numeric ``trust_score_rank``.  We accept either signal.
+    """
+    if ticker.get("trust_score") == "green":
+        return True
+    rank = ticker.get("trust_score_rank")
+    if isinstance(rank, (int, float)) and rank <= 10:
+        return True
+    return False
+
+
 async def fetch_current(client: httpx.AsyncClient, coingecko_id: str) -> dict:
     """Get current coin data including tickers."""
     url = f"{BASE_URL}/coins/{coingecko_id}"
@@ -197,6 +212,7 @@ async def collect_peg_components(
         t.get("converted_last", {}).get("usd", 1.0)
         for t in tickers[:20]
         if t.get("trust_score") in ("green", "yellow")
+        or _is_high_trust(t)
     ]
     if len(ticker_prices) >= 3:
         variance = statistics.stdev(ticker_prices)
@@ -460,8 +476,8 @@ async def collect_market_activity_components(
     
     # Trust Score Ratio
     if tickers:
-        green = sum(1 for t in tickers if t.get("trust_score") == "green")
-        trust_ratio = green / len(tickers)
+        high_trust = sum(1 for t in tickers if _is_high_trust(t))
+        trust_ratio = high_trust / len(tickers)
         components.append({
             "component_id": "exchange_trust_ratio",
             "category": "market_activity",
