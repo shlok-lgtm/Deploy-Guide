@@ -113,6 +113,7 @@ async def build_edges_for_wallet(
     edge_map: dict[tuple[str, str], dict] = {}
     total_transfers = 0
     pages_fetched = 0
+    first_page_failed = False
 
     for page in range(1, max_pages + 1):
         transfers = await _fetch_tokentx_page(
@@ -120,6 +121,12 @@ async def build_edges_for_wallet(
             explorer_base=explorer_base, chain_id=chain_id,
         )
         await asyncio.sleep(EXPLORER_RATE_LIMIT_DELAY)
+
+        if transfers is None:
+            if page == 1:
+                first_page_failed = True
+            break
+
         pages_fetched += 1
 
         if not transfers:
@@ -206,26 +213,50 @@ async def build_edges_for_wallet(
         )
         edges_upserted += 1
 
-    # Update build status
-    await execute_async(
-        """
-        INSERT INTO wallet_graph.edge_build_status
-            (wallet_address, chain, last_built_at, transfers_processed, edges_created, pages_fetched, status)
-        VALUES (%s, %s, NOW(), %s, %s, %s, 'complete')
-        ON CONFLICT (wallet_address, chain) DO UPDATE SET
-            last_built_at = NOW(),
-            transfers_processed = EXCLUDED.transfers_processed,
-            edges_created = EXCLUDED.edges_created,
-            pages_fetched = EXCLUDED.pages_fetched,
-            status = 'complete'
-        """,
-        (wallet_lower, chain, total_transfers, edges_upserted, pages_fetched),
-    )
+    # Update build status — only mark complete if API actually responded
+    if first_page_failed:
+        await execute_async(
+            """
+            INSERT INTO wallet_graph.edge_build_status
+                (wallet_address, chain, build_attempted_at, transfers_processed, edges_created, pages_fetched, status)
+            VALUES (%s, %s, NOW(), 0, 0, 0, 'api_failure')
+            ON CONFLICT (wallet_address, chain) DO UPDATE SET
+                build_attempted_at = NOW(),
+                status = 'api_failure'
+            """,
+            (wallet_lower, chain),
+        )
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="edge_builder_api_failure",
+                error_message=f"First page fetch returned None for {wallet_lower[:10]}… on {chain}",
+                cycle_phase="edge_builder",
+            )
+        except Exception:
+            pass
+    else:
+        await execute_async(
+            """
+            INSERT INTO wallet_graph.edge_build_status
+                (wallet_address, chain, last_built_at, build_attempted_at, transfers_processed, edges_created, pages_fetched, status)
+            VALUES (%s, %s, NOW(), NOW(), %s, %s, %s, 'complete')
+            ON CONFLICT (wallet_address, chain) DO UPDATE SET
+                last_built_at = NOW(),
+                build_attempted_at = NOW(),
+                transfers_processed = EXCLUDED.transfers_processed,
+                edges_created = EXCLUDED.edges_created,
+                pages_fetched = EXCLUDED.pages_fetched,
+                status = 'complete'
+            """,
+            (wallet_lower, chain, total_transfers, edges_upserted, pages_fetched),
+        )
 
     return {
         "transfers_processed": total_transfers,
         "edges_upserted": edges_upserted,
         "pages_fetched": pages_fetched,
+        "api_failure": first_page_failed,
     }
 
 
