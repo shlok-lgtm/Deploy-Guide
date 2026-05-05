@@ -23,6 +23,12 @@ HELIUS_API_KEY = os.environ.get("HELIUS_API_KEY", "")
 HELIUS_RPC_URL = f"https://mainnet.helius-rpc.com/?api-key={HELIUS_API_KEY}"
 HELIUS_API_URL = "https://api.helius.xyz"
 
+# USDPT readiness: WRONG — collect_solana_components gates on this dict
+#   (line 319: `mint = SOLANA_STABLECOIN_MINTS.get(stablecoin_id)` returns
+#   None and the function early-exits with `[]`). A Solana-native stablecoin
+#   that auto-promotes (e.g. USDPT) will silently produce zero Solana
+#   components until its (id → mint) entry is added here. No exception, no
+#   warning above DEBUG.
 # Solana SPL mint addresses for SII-scored stablecoins
 SOLANA_STABLECOIN_MINTS = {
     "usdc": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
@@ -37,6 +43,12 @@ TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 
 RATE_LIMIT_DELAY = 0.15  # seconds between Helius calls
 
+# USDPT readiness: SAFE — read at line 411 with default 50_000
+#   (`SOLANA_HOLDER_ESTIMATES.get(stablecoin_id, 50_000)`). A missing entry
+#   yields a conservative low-end count rather than a failure. The 50K
+#   default lands at ~normalize_log score 60 vs USDC's 100, which under-
+#   represents a popular new coin but does not skew the score in a
+#   directionally-wrong way for a freshly launched asset.
 # Estimated unique Solana SPL token account counts (from Solscan/Solana FM)
 # Updated periodically — serves as fallback since full enumeration is too expensive
 SOLANA_HOLDER_ESTIMATES = {
@@ -49,23 +61,55 @@ SOLANA_HOLDER_ESTIMATES = {
 # Mirrors app/collectors/smart_contract.py approach for EVM
 # =============================================================================
 
+# USDPT readiness: WRONG — read at line 628 with default False
+#   (`SOLANA_VERIFIED_PROGRAMS.get(stablecoin_id, False)`). Default False
+#   forces normalized_score=0.0 on solana_contract_verified, which is
+#   directionally wrong for any coin deployed on the standard SPL Token
+#   program (program is itself verified). The flag is per-stablecoin-id
+#   here only because Token-2022 mints have a different program owner;
+#   the default should branch on program-id rather than on a hardcoded
+#   per-id allowlist. See task 4 of the audit for the
+#   STABLECOIN_REGISTRY[id]["spl_token_program"] proposal.
 # Program verification status — checked against OtterSec Verified / Solana Verify
 SOLANA_VERIFIED_PROGRAMS = {
     "usdc": True,    # Circle's SPL token — standard SPL Token program (verified)
     "usdt": True,    # Tether SPL token — standard SPL Token program (verified)
 }
 
+# USDPT readiness: WRONG — read at line 642 with default {} →
+#   `bounty_info.get("active")` is falsy → bounty_score=20.0. A missing
+#   entry is treated identically to "no active bounty," which penalises
+#   any new issuer until a maintainer adds the row. For USDPT specifically:
+#   Anchorage Digital Bank N.A. likely has a HackerOne or Immunefi
+#   programme that needs to be looked up at registry-add time, otherwise
+#   the SII smart_contract category will be biased low.
 # Bug bounty programs (Solana-specific or cross-chain coverage)
 SOLANA_BUG_BOUNTY = {
     "usdc": {"active": True, "max_payout": 250_000, "platform": "Immunefi", "note": "Cross-chain program covers Solana"},
     "usdt": {"active": False, "max_payout": 0},
 }
 
+# USDPT readiness: SAFE — read at line 666 with default []
+#   (`SOLANA_EXPLOIT_HISTORY.get(stablecoin_id, [])`). Empty list yields
+#   exploit_score=100.0, which is the correct directional default for a
+#   freshly launched coin with no incident history. The risk is only that
+#   future incidents need to be backfilled; absence here means "no record"
+#   rather than "no exploits".
 # Exploit history on Solana (separate from EVM incidents)
 SOLANA_EXPLOIT_HISTORY = {
     # USDC and USDT on Solana: no direct Solana-specific exploits
 }
 
+# USDPT readiness: SAFE — this dict is currently UNREAD by
+#   collect_solana_components. Pausability is computed live from the
+#   on-chain freeze authority at line 610 (`pause_score = 60.0 if
+#   has_freeze else 100.0`), so a missing entry has no effect on scoring.
+#   The dict is kept as a static fallback per its docstring above, but
+#   no code path consults it. Recommend either wiring it in as the
+#   freeze-authority fallback when `get_solana_mint_info` returns {},
+#   or deleting it to avoid a stale-config trap. For USDPT specifically:
+#   Anchorage as a regulated trust will retain freeze authority, so the
+#   live read should always succeed.
 # Pausability on Solana: mapped from freeze authority capability
 # If the token has a freeze authority, the issuer can freeze individual accounts (≈ pause)
 # This is detected live from on-chain data in section 4, but we need a static fallback
