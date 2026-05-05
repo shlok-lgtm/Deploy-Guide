@@ -191,8 +191,19 @@ async def run_multichain_holder_scan() -> dict:
                                              rank_in_entity = EXCLUDED.rank_in_entity,
                                              discovered_at = NOW()
                             """, (h["address"], symbol, contract, chain, h["balance_usd"], h["rank"]))
-                    except Exception:
-                        pass
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        logger.warning(f"[multichain_holder] discovery insert failed for {symbol}/{chain}: {e}")
+                        try:
+                            from app.worker import _record_cycle_error
+                            _record_cycle_error(
+                                error_type="data_layer_run_multichain_holder_scan_discovery_insert_failure",
+                                error_message=str(e)[:500],
+                                cycle_phase="multichain_holder_collector",
+                            )
+                        except Exception:
+                            pass
 
                 # Insert chain presence
                 new_presences = 0
@@ -203,8 +214,19 @@ async def run_multichain_holder_scan() -> dict:
                         )
                         if _statusmsg and "INSERT" in _statusmsg:
                             new_presences += 1
-                    except Exception:
-                        pass
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        logger.warning(f"[multichain_holder] chain presence insert failed for {symbol}/{chain}: {e}")
+                        try:
+                            from app.worker import _record_cycle_error
+                            _record_cycle_error(
+                                error_type="data_layer_run_multichain_holder_scan_presence_insert_failure",
+                                error_message=str(e)[:500],
+                                cycle_phase="multichain_holder_collector",
+                            )
+                        except Exception:
+                            pass
                 stats[chain]["new_presences"] += new_presences
 
                 # Promote new wallets to wallet_graph
@@ -227,8 +249,19 @@ async def run_multichain_holder_scan() -> dict:
         total_presences = sum(s["new_presences"] for s in stats.values())
         if total_presences > 0:
             await asyncio.to_thread(attest_data_batch, "wallet_chain_presence", [dict(stats)])
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"[multichain_holder] attestation failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_run_multichain_holder_scan_attestation_failure",
+                error_message=str(e)[:500],
+                cycle_phase="multichain_holder_collector",
+            )
+        except Exception:
+            pass
 
     # SUMMARY
     for chain, s in sorted(stats.items()):

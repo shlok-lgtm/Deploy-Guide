@@ -198,8 +198,19 @@ async def run_entity_snapshots() -> dict:
                         "entity_type": "protocol_token",
                         "coingecko_id": cg_id,
                     })
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"PSI entity lookup failed: {e}")
+        logger.warning(f"PSI entity lookup failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_run_entity_snapshots_psi_lookup_failure",
+                error_message=str(e)[:500],
+                cycle_phase="entity_snapshots",
+            )
+        except Exception:
+            pass
 
     # Circle 7 entities — LSTs, bridges, vaults, exchanges, DAOs, TTIs
     CIRCLE7_CG_MAP = {
@@ -230,8 +241,19 @@ async def run_entity_snapshots() -> dict:
                 "entity_type": "circle7",
                 "coingecko_id": cg_id,
             })
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"Circle 7 entity mapping failed: {e}")
+        logger.warning(f"Circle 7 entity mapping failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_run_entity_snapshots_circle7_mapping_failure",
+                error_message=str(e)[:500],
+                cycle_phase="entity_snapshots",
+            )
+        except Exception:
+            pass
 
     if not entities:
         return {"error": "no entities to snapshot"}
@@ -303,8 +325,19 @@ async def run_entity_snapshots() -> dict:
         if total_snapshots > 0:
             await asyncio.to_thread(attest_data_batch, "entity_snapshots_hourly", [{"entities": total_snapshots}])
             await link_batch_to_proof("entity_snapshots_hourly", "entity_snapshots_hourly")
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"Entity snapshot provenance failed: {e}")
+        logger.warning(f"Entity snapshot provenance failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_run_entity_snapshots_provenance_failure",
+                error_message=str(e)[:500],
+                cycle_phase="entity_snapshots",
+            )
+        except Exception:
+            pass
 
     logger.info(f"Entity snapshots complete: {total_snapshots}/{len(entities)} entities")
 

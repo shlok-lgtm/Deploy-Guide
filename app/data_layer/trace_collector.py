@@ -153,8 +153,19 @@ async def run_trace_collection() -> dict:
                         status=_tx_status,
                         latency_ms=int((time.monotonic() - _t0) * 1000),
                     )
-                except Exception:
-                    pass
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.warning(f"[trace_collector] track_api_call (tx) failed: {e}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="data_layer_run_trace_collection_track_tx_failure",
+                            error_message=str(e)[:500],
+                            cycle_phase="trace_collector",
+                        )
+                    except Exception:
+                        pass
             logger.error(f"[trace_collector] step E.{i}: HTTP {resp.status_code}")
             if resp.status_code != 200:
                 total_errors += 1
@@ -195,8 +206,19 @@ async def run_trace_collection() -> dict:
                             status=_trace_status,
                             latency_ms=int((time.monotonic() - _t1) * 1000),
                         )
-                    except Exception:
-                        pass
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        logger.warning(f"[trace_collector] track_api_call (trace) failed: {e}")
+                        try:
+                            from app.worker import _record_cycle_error
+                            _record_cycle_error(
+                                error_type="data_layer_run_trace_collection_track_trace_failure",
+                                error_message=str(e)[:500],
+                                cycle_phase="trace_collector",
+                            )
+                        except Exception:
+                            pass
 
                 if trace_resp.status_code != 200:
                     total_errors += 1
@@ -246,8 +268,19 @@ async def run_trace_collection() -> dict:
         from app.data_layer.provenance_scaling import attest_data_batch
         if total_traces > 0:
             await asyncio.to_thread(attest_data_batch, "protocol_traces", [{"traces": total_traces}])
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"[trace_collector] attestation failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_run_trace_collection_attestation_failure",
+                error_message=str(e)[:500],
+                cycle_phase="trace_collector",
+            )
+        except Exception:
+            pass
 
     logger.error(
         f"[trace_collector] SUMMARY: protocols={protocols_processed}, "

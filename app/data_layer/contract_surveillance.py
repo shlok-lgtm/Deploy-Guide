@@ -283,8 +283,19 @@ async def run_contract_surveillance() -> dict:
                         "chain": timelock.get("chain", "ethereum"),
                         "contract_address": timelock["address"],
                     })
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"Contract registry load failed: {e}")
+        logger.warning(f"Contract registry load failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_run_contract_surveillance_registry_load_failure",
+                error_message=str(e)[:500],
+                cycle_phase="contract_surveillance",
+            )
+        except Exception:
+            pass
 
     if not contracts_to_scan:
         return {"error": "no contracts to scan"}
@@ -369,8 +380,19 @@ async def run_contract_surveillance() -> dict:
                         json.dumps(change),
                     ),
                 )
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.debug(f"Contract change signal failed: {e}")
+            logger.warning(f"Contract change signal failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="data_layer_run_contract_surveillance_signal_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="contract_surveillance",
+                )
+            except Exception:
+                pass
 
     # Provenance
     try:
@@ -378,8 +400,19 @@ async def run_contract_surveillance() -> dict:
         if total_scanned > 0:
             await asyncio.to_thread(attest_data_batch, "contract_surveillance", [{"scanned": total_scanned, "changes": len(changes_detected)}])
             await link_batch_to_proof("contract_surveillance", "contract_surveillance")
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"Contract surveillance provenance failed: {e}")
+        logger.warning(f"Contract surveillance provenance failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_run_contract_surveillance_provenance_failure",
+                error_message=str(e)[:500],
+                cycle_phase="contract_surveillance",
+            )
+        except Exception:
+            pass
 
     logger.info(
         f"Contract surveillance complete: {total_scanned} contracts scanned, "
