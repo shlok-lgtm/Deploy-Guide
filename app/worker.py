@@ -2348,17 +2348,6 @@ async def run_slow_cycle():
     except Exception as e:
         logger.warning(f"Discovery cycle failed: {e}")
 
-    # Provenance attestation (13th domain)
-    try:
-        from app.state_attestation import attest_state
-        from app.database import fetch_all
-        prov_rows = await fetch_all_async("SELECT source_domain, attestation_hash, proved_at FROM provenance_proofs WHERE proved_at > NOW() - INTERVAL '2 hours'")
-        if prov_rows:
-            _loop = asyncio.get_event_loop()
-            await _loop.run_in_executor(None, attest_state, "provenance", [dict(r) for r in prov_rows])
-    except Exception as e:
-        logger.debug(f"Provenance attestation skipped: {e}")
-
     # -------------------------------------------------------------------------
     # PSI expansion pipeline — daily gate (discover → enrich → promote)
     # -------------------------------------------------------------------------
