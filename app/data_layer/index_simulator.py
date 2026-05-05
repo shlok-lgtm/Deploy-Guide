@@ -219,8 +219,17 @@ def simulate_index(definition: dict) -> dict:
                         entity_score += weighted
                         component_scores[comp["id"]] = round(normalized, 2)
                         data_coverage += 1
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"[index_simulator] component score failed for {comp.get('id')}: {e}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="data_layer_simulate_index_component_failure",
+                            error_message=str(e)[:500],
+                            cycle_phase="index_simulator",
+                        )
+                    except Exception:
+                        pass
 
             if data_coverage > 0:
                 simulated_scores.append({

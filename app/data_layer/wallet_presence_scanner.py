@@ -158,8 +158,19 @@ async def run_wallet_presence_scan() -> dict:
         from app.data_layer.provenance_scaling import attest_data_batch
         if total_presences > 0:
             await asyncio.to_thread(attest_data_batch, "wallet_chain_presence", [{"presences": total_presences, "mode": "B"}])
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"[wallet_presence] attestation failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_run_wallet_presence_scan_attestation_failure",
+                error_message=str(e)[:500],
+                cycle_phase="wallet_presence_scanner",
+            )
+        except Exception:
+            pass
 
     # SUMMARY
     presence_parts = ", ".join(f"{c}={n}" for c, n in presences_by_chain.items())
