@@ -87,7 +87,16 @@ def _fetch_operator_effectiveness(operator_id: str) -> dict | None:
             return data.get("data", data) if "data" in data else data
         return data[0] if isinstance(data, list) and data else None
     except Exception as e:
-        logger.debug(f"Failed to fetch effectiveness for {operator_id}: {e}")
+        logger.warning(f"Failed to fetch effectiveness for {operator_id}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__fetch_operator_effectiveness_failure",
+                error_message=str(e)[:500],
+                cycle_phase="rated_validators",
+            )
+        except Exception:
+            pass
         return None
 
 
@@ -200,7 +209,16 @@ def collect_validator_performance() -> dict:
                         )
 
         except Exception as e:
-            logger.debug(f"Failed to process operator {operator.get('id')}: {e}")
+            logger.warning(f"Failed to process operator {operator.get('id')}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors_collect_validator_performance_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="rated_validators",
+                )
+            except Exception:
+                pass
 
     # Attest batch
     if snapshots_stored > 0:
@@ -210,8 +228,17 @@ def collect_validator_performance() -> dict:
                 "snapshot_date": today.isoformat(),
                 "operators_stored": snapshots_stored,
             }])
-        except Exception as ae:
-            logger.debug(f"Validator performance attestation failed: {ae}")
+        except Exception as e:
+            logger.warning(f"Validator performance attestation failed: {ae}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors_collect_validator_performance_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="rated_validators",
+                )
+            except Exception:
+                pass
 
     summary = {
         "operators_checked": operators_checked,

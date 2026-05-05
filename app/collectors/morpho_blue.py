@@ -214,7 +214,16 @@ def _parse_market(raw: dict[str, Any]) -> dict[str, Any] | None:
             "borrow_assets_usd": _f(state.get("borrowAssetsUsd")),
         }
     except Exception as e:
-        logger.debug(f"Morpho market parse error: {e}")
+        logger.warning(f"Morpho market parse error: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__parse_market_failure",
+                error_message=str(e)[:500],
+                cycle_phase="morpho_blue",
+            )
+        except Exception:
+            pass
         return None
 
 
@@ -316,7 +325,16 @@ def _write_exposure_row(
         )
         return True
     except Exception as e:
-        logger.debug(f"Failed to write morpho exposure {token_symbol}/{chain}: {e}")
+        logger.warning(f"Failed to write morpho exposure {token_symbol}/{chain}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__write_exposure_row_failure",
+                error_message=str(e)[:500],
+                cycle_phase="morpho_blue",
+            )
+        except Exception:
+            pass
         return False
 
 

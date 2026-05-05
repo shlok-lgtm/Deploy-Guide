@@ -119,8 +119,19 @@ async def _ensure_health_table():
             CREATE INDEX IF NOT EXISTS idx_exchange_health_slug_time
             ON exchange_health_checks (exchange_slug, checked_at DESC)
         """)
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"Table creation skipped (may already exist): {e}")
+        logger.warning(f"Table creation skipped (may already exist): {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__ensure_health_table_failure",
+                error_message=str(e)[:500],
+                cycle_phase="exchange_health",
+            )
+        except Exception:
+            pass
 
 
 async def store_health_checks(results: list[dict]):
@@ -294,7 +305,18 @@ async def run_exchange_health_monitoring() -> list[dict]:
                     for r in results
                 ]
             )
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"run exchange health monitoring failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_run_exchange_health_monitoring_failure",
+                error_message=str(e)[:500],
+                cycle_phase="exchange_health",
+            )
+        except Exception:
+            pass
 
     return results
