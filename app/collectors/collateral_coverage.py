@@ -306,7 +306,17 @@ def collect_coverage_and_markets():
                         desc,
                         severity,
                     ))
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"collect coverage and markets failed: {e}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="collectors_collect_coverage_and_markets_failure",
+                            error_message=str(e)[:500],
+                            cycle_phase="collateral_coverage",
+                        )
+                    except Exception:
+                        pass
                     pass  # May conflict on same-day re-run
 
             logger.info(f"  {slug}: coverage {ratio:.1f}% "
