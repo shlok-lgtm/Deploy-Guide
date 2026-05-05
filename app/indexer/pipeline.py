@@ -785,8 +785,19 @@ async def run_pipeline_batch(batch_size: int = 500) -> dict:
         from app.state_attestation import attest_state
         if indexed > 0:
             await asyncio.to_thread(attest_state, "wallets", [{"cycle": "batch_reindex", "processed": indexed, "scored": scored, "balances_updated": balances_updated}])
+    except asyncio.CancelledError:
+        raise
     except Exception as ae:
-        reindex_logger.debug(f"Wallet attestation skipped: {ae}")
+        reindex_logger.warning(f"Wallet attestation skipped: {ae}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="indexer_run_pipeline_batch_attestation_failure",
+                error_message=str(ae)[:500],
+                cycle_phase="indexer_pipeline",
+            )
+        except Exception:
+            pass
 
     return {
         "processed": indexed,
