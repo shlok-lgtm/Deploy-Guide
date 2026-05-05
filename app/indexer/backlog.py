@@ -96,7 +96,16 @@ def update_demand_signals() -> int:
                 "protocol_count": int(cr["protocol_count"]),
             }
     except Exception as e:
-        logger.debug(f"Could not fetch collateral data for demand signals: {e}")
+        logger.warning(f"Could not fetch collateral data for demand signals: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="indexer_update_demand_signals_collateral_fetch_failure",
+                error_message=str(e)[:500],
+                cycle_phase="indexer_backlog",
+            )
+        except Exception:
+            pass
 
     # Look up symbol for each token_address to match collateral data
     symbol_map = {}
@@ -109,8 +118,17 @@ def update_demand_signals() -> int:
             """)
             for sr in (sym_rows or []):
                 symbol_map[sr["token_address"]] = sr["symbol"].upper()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Could not fetch unscored asset symbol map for demand signals: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="indexer_update_demand_signals_symbol_map_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="indexer_backlog",
+                )
+            except Exception:
+                pass
 
     # Rank by combined signal: wallet holdings + collateral TVL (weighted 2x)
     for row in rows:
@@ -353,10 +371,28 @@ def promote_eligible_assets() -> int:
                 from app.services.cda_collector import discover_new_issuer
                 loop = asyncio.get_running_loop()
                 loop.create_task(discover_new_issuer(asset["symbol"], asset["coingecko_id"]))
-            except RuntimeError:
-                logger.debug(f"CDA issuer discovery deferred for {asset['symbol']} (no event loop)")
+            except RuntimeError as rte:
+                logger.warning(f"CDA issuer discovery deferred for {asset['symbol']} (no event loop): {rte}")
+                try:
+                    from app.worker import _record_cycle_error
+                    _record_cycle_error(
+                        error_type="indexer_promote_eligible_assets_cda_no_event_loop",
+                        error_message=str(rte)[:500],
+                        cycle_phase="indexer_backlog",
+                    )
+                except Exception:
+                    pass
             except Exception as cda_e:
-                logger.debug(f"CDA issuer discovery skipped for {asset['symbol']}: {cda_e}")
+                logger.warning(f"CDA issuer discovery skipped for {asset['symbol']}: {cda_e}")
+                try:
+                    from app.worker import _record_cycle_error
+                    _record_cycle_error(
+                        error_type="indexer_promote_eligible_assets_cda_discovery_failure",
+                        error_message=str(cda_e)[:500],
+                        cycle_phase="indexer_backlog",
+                    )
+                except Exception:
+                    pass
         except Exception as e:
             logger.warning(f"Failed to promote {asset['symbol']}: {e}")
 

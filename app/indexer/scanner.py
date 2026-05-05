@@ -180,8 +180,19 @@ class BlockscoutFetcher:
                         continue
                     logger.debug(f"Blockscout HTTP error for {address[:10]}…: {e}")
                     return {}
+                except asyncio.CancelledError:
+                    raise
                 except Exception as e:
-                    logger.debug(f"Blockscout fetch error for {address[:10]}…: {type(e).__name__}: {e}")
+                    logger.warning(f"Blockscout fetch error for {address[:10]}…: {type(e).__name__}: {e}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="indexer_fetch_single_blockscout_failure",
+                            error_message=str(e)[:500],
+                            cycle_phase="wallet_scanner",
+                        )
+                    except Exception:
+                        pass
                     return {}
 
         return {}
@@ -609,8 +620,19 @@ async def fetch_token_balance(
             logger.warning("Explorer rate limit hit, backing off")
             await asyncio.sleep(2.0)
         return None
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"Balance fetch error {wallet_address[:10]}…: {e}")
+        logger.warning(f"Balance fetch error {wallet_address[:10]}…: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="indexer_fetch_token_balance_explorer_failure",
+                error_message=str(e)[:500],
+                cycle_phase="wallet_scanner",
+            )
+        except Exception:
+            pass
         return None
 
 
@@ -640,8 +662,19 @@ async def fetch_token_list(
         if data.get("status") == "1" and isinstance(data.get("result"), list):
             return data["result"]
         return None
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"Token list fetch error {wallet_address[:10]}…: {e}")
+        logger.warning(f"Token list fetch error {wallet_address[:10]}…: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="indexer_fetch_token_list_explorer_failure",
+                error_message=str(e)[:500],
+                cycle_phase="wallet_scanner",
+            )
+        except Exception:
+            pass
         return None
 
 
@@ -748,8 +781,19 @@ async def fetch_top_holders(
                     addresses.append(addr.lower())
             return addresses
         return []
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"Top holders fetch error for {contract_address[:10]}…: {e}")
+        logger.warning(f"Top holders fetch error for {contract_address[:10]}…: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="indexer_fetch_top_holders_explorer_failure",
+                error_message=str(e)[:500],
+                cycle_phase="wallet_scanner",
+            )
+        except Exception:
+            pass
         return []
 
 
@@ -813,8 +857,19 @@ async def fetch_large_transfers(
                     address_stats[addr]["total_transferred"] += value
                     address_stats[addr]["transfer_count"] += 1
 
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.debug(f"Transfer fetch error page {page} for {contract_address[:10]}…: {e}")
+            logger.warning(f"Transfer fetch error page {page} for {contract_address[:10]}…: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="indexer_fetch_large_transfers_explorer_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="wallet_scanner",
+                )
+            except Exception:
+                pass
             break
 
     results = [

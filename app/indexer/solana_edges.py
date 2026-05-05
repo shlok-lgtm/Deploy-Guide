@@ -74,8 +74,19 @@ async def _fetch_solana_transfers(
             logger.warning(f"Helius transfers {resp.status_code} for {wallet_address[:12]}...")
             return []
         return resp.json()
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"Helius transfers error for {wallet_address[:12]}...: {e}")
+        logger.warning(f"Helius transfers error for {wallet_address[:12]}...: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="indexer_fetch_solana_transfers_helius_failure",
+                error_message=str(e)[:500],
+                cycle_phase="solana_edges",
+            )
+        except Exception:
+            pass
         return []
 
 
@@ -320,8 +331,19 @@ async def discover_drift_depositors(client: httpx.AsyncClient, limit: int = 50) 
                 logger.warning(f"Helius discovery {resp.status_code} for mint {mint[:8]}...")
                 continue
             txns = resp.json()
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.debug(f"Helius discovery error for mint {mint[:8]}...: {e}")
+            logger.warning(f"Helius discovery error for mint {mint[:8]}...: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="indexer_discover_drift_depositors_helius_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="solana_edges",
+                )
+            except Exception:
+                pass
             continue
 
         for tx in txns:
