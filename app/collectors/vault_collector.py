@@ -110,7 +110,16 @@ def _fetch_page_text(url: str) -> str | None:
         text = re.sub(r'\s+', ' ', text).strip()
         return text.lower()
     except Exception as e:
-        logger.debug(f"VSRI docs fetch failed for {url}: {e}")
+        logger.warning(f"VSRI docs fetch failed for {url}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__fetch_page_text_failure",
+                error_message=str(e)[:500],
+                cycle_phase="vault_collector",
+            )
+        except Exception:
+            pass
         return None
 
 
@@ -198,8 +207,19 @@ async def score_vault_docs(entity_slug: str) -> dict:
                     evidence_snippet = EXCLUDED.evidence_snippet,
                     scored_at = NOW()
             """, (entity_slug, criterion_id, score, evidence_url, snippet))
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.debug(f"VSRI docs evidence store failed: {e}")
+            logger.warning(f"VSRI docs evidence store failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors_score_vault_docs_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="vault_collector",
+                )
+            except Exception:
+                pass
 
     _vault_docs_cache[entity_slug] = (time.time(), results)
     if results:
@@ -387,7 +407,16 @@ def _automate_vault_contract_age(entity: dict, static: dict) -> dict:
                     static_age = static.get("vault_contract_age_days", 0)
                     automated["vault_contract_age_days"] = max(age_days, static_age)
     except Exception as e:
-        logger.debug(f"VSRI contract age failed for {entity['slug']}: {e}")
+        logger.warning(f"VSRI contract age failed for {entity['slug']}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__automate_vault_contract_age_failure",
+                error_message=str(e)[:500],
+                cycle_phase="vault_collector",
+            )
+        except Exception:
+            pass
 
     return automated
 
@@ -539,8 +568,19 @@ async def extract_vault_raw_values(entity: dict, all_pools: list[dict]) -> dict:
             )
             if psi_row:
                 raw["underlying_psi_score"] = float(psi_row["overall_score"])
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"CQI lookup failed for {entity['slug']}: {e}")
+        logger.warning(f"CQI lookup failed for {entity['slug']}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_extract_vault_raw_values_failure",
+                error_message=str(e)[:500],
+                cycle_phase="vault_collector",
+            )
+        except Exception:
+            pass
 
     # Static config
     static = VAULT_STATIC_CONFIG.get(entity["slug"], {})
@@ -594,8 +634,19 @@ async def score_vault(entity: dict, all_pools: list[dict], hacks_cache: list = N
             for comp_id, live_score in docs_scores.items():
                 static_score = static.get(comp_id, 0)
                 raw_values[comp_id] = max(live_score, static_score)
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"VSRI docs scoring failed for {slug}: {e}")
+        logger.warning(f"VSRI docs scoring failed for {slug}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_score_vault_failure",
+                error_message=str(e)[:500],
+                cycle_phase="vault_collector",
+            )
+        except Exception:
+            pass
 
     result = score_entity(VSRI_V01_DEFINITION, raw_values)
     result["entity_slug"] = slug
