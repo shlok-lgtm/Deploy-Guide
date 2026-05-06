@@ -451,4 +451,17 @@ def collect_contract_upgrades(entity_filter: str | None = None) -> dict:
         f"Contract upgrade tracker: checked={entities_checked} "
         f"upgrades={upgrades_detected} first_captures={first_captures} errors={errors}"
     )
+
+    # Always attest — proves liveness even when zero upgrades detected
+    try:
+        from app.state_attestation import attest_state
+        attest_state("contract_upgrades", [{
+            "entities_checked": entities_checked,
+            "upgrades_detected": upgrades_detected,
+            "first_captures": first_captures,
+            "errors": errors,
+        }])
+    except Exception as ae:
+        logger.warning(f"Contract upgrades attestation failed: {ae}")
+
     return summary
