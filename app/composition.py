@@ -5,9 +5,12 @@ Composes indices (SII, PSI) into composite risk views (CQI).
 All scores computed on-demand — no storage.
 """
 
+import logging
 import math
 
 from app.database import fetch_all, fetch_one
+
+logger = logging.getLogger(__name__)
 
 
 def compose_geometric_mean(scores):
@@ -386,8 +389,19 @@ def compute_rqs_all() -> dict:
                 {"protocol": r["protocol_slug"], "rqs_score": round(r["rqs_score"], 2)}
                 for r in results if r.get("rqs_score") is not None
             ])
-    except Exception:
-        pass
+        else:
+            attest_state("rqs_compositions", [{"status": "ran_no_results", "results_count": 0}])
+    except Exception as ae:
+        logger.error(f"rqs_compositions attestation failed: {ae}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="rqs_compositions_attestation_failure",
+                error_message=str(ae)[:500],
+                cycle_phase="rqs_compositions",
+            )
+        except Exception:
+            pass
 
     return {
         "protocols": results,
@@ -444,8 +458,19 @@ def compute_cqi_matrix():
         from app.state_attestation import attest_state
         if matrix:
             attest_state("cqi_compositions", [{"asset": r["asset"], "protocol": r["protocol_slug"], "cqi_score": round(r["cqi_score"], 2)} for r in matrix])
-    except Exception:
-        pass  # attestation is non-critical
+        else:
+            attest_state("cqi_compositions", [{"status": "ran_no_results", "results_count": 0}])
+    except Exception as ae:
+        logger.error(f"cqi_compositions attestation failed: {ae}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="cqi_compositions_attestation_failure",
+                error_message=str(ae)[:500],
+                cycle_phase="cqi_compositions",
+            )
+        except Exception:
+            pass
 
     return {"matrix": matrix, "count": len(matrix)}
 

@@ -347,6 +347,21 @@ async def run_enrichment_pipeline() -> dict:
         ),
     ))
 
+    # ---- Validator performance (Rated.network) ----
+
+    async def _run_validator_performance():
+        from app.collectors.rated_validators import collect_validator_performance
+        return await asyncio.to_thread(collect_validator_performance)
+
+    pipeline.add(EnrichmentTask(
+        name="validator_performance", func=_run_validator_performance,
+        timeout_seconds=600, group="lst_data", priority=3,
+        gate_check=_db_gate(
+            "SELECT MAX(collected_at) AS latest FROM validator_performance",
+            min_hours=20,
+        ),
+    ))
+
     # ---- RPI pipeline ----
 
     async def _run_rpi():
@@ -411,6 +426,21 @@ async def run_enrichment_pipeline() -> dict:
         ),
     ))
 
+    # ---- RPI expansion pipeline (weekly auto-discovery) ----
+
+    async def _run_rpi_expansion():
+        from app.rpi.expansion import run_expansion_pipeline
+        return await asyncio.to_thread(run_expansion_pipeline)
+
+    pipeline.add(EnrichmentTask(
+        name="rpi_expansion", func=_run_rpi_expansion,
+        timeout_seconds=900, group="rpi", priority=4,
+        gate_check=_db_gate(
+            "SELECT MAX(created_at) AS latest FROM rpi_protocol_config WHERE discovery_source != 'manual'",
+            min_hours=168,
+        ),
+    ))
+
     # ---- DEX pool collection ----
 
     async def _run_dex_pools():
@@ -423,6 +453,21 @@ async def run_enrichment_pipeline() -> dict:
         gate_check=_db_gate(
             "SELECT MAX(computed_at) AS latest FROM generic_index_scores WHERE index_id = 'dex_pool_data'",
             min_hours=3,
+        ),
+    ))
+
+    # ---- Pool wallet collection (protocol composition) ----
+
+    async def _run_pool_wallet_collection():
+        from app.collectors.pool_wallet_collector import run_pool_wallet_collection
+        return await run_pool_wallet_collection()
+
+    pipeline.add(EnrichmentTask(
+        name="pool_wallet_collection", func=_run_pool_wallet_collection,
+        timeout_seconds=900, group="composition", priority=3,
+        gate_check=_db_gate(
+            "SELECT MAX(discovered_at) AS latest FROM protocol_pool_wallets",
+            min_hours=20,
         ),
     ))
 
@@ -466,6 +511,36 @@ async def run_enrichment_pipeline() -> dict:
         gate_check=_db_gate(
             "SELECT MAX(created_at) AS latest FROM governance_events WHERE created_at > NOW() - INTERVAL '48 hours'",
             min_hours=24,
+        ),
+    ))
+
+    # ---- Governance proposal corpus ----
+
+    async def _run_governance_proposals():
+        from app.collectors.governance_proposals import collect_governance_proposals
+        return await collect_governance_proposals()
+
+    pipeline.add(EnrichmentTask(
+        name="governance_proposals", func=_run_governance_proposals,
+        timeout_seconds=900, group="governance", priority=3,
+        gate_check=_db_gate(
+            "SELECT MAX(captured_at) AS latest FROM governance_proposals",
+            min_hours=20,
+        ),
+    ))
+
+    # ---- Parameter history (protocol snapshots) ----
+
+    async def _run_parameter_history():
+        from app.collectors.parameter_history import collect_parameter_history
+        return await collect_parameter_history()
+
+    pipeline.add(EnrichmentTask(
+        name="parameter_history", func=_run_parameter_history,
+        timeout_seconds=600, group="protocol_data", priority=3,
+        gate_check=_db_gate(
+            "SELECT MAX(snapshot_date) AS latest FROM protocol_parameter_snapshots",
+            min_hours=20,
         ),
     ))
 
@@ -855,6 +930,66 @@ async def run_enrichment_pipeline() -> dict:
         ),
     ))
 
+    # ---- Contract dependency graph ----
+
+    async def _run_contract_dependencies():
+        from app.collectors.contract_dependencies import collect_contract_dependencies
+        return await collect_contract_dependencies()
+
+    pipeline.add(EnrichmentTask(
+        name="contract_dependencies", func=_run_contract_dependencies,
+        timeout_seconds=600, group="security", priority=5,
+        gate_check=_db_gate(
+            "SELECT MAX(scanned_at) AS latest FROM contract_dependency_graph",
+            min_hours=20,
+        ),
+    ))
+
+    # ---- Sanctions screening ----
+
+    async def _run_sanctions_screening():
+        from app.collectors.sanctions_screening import run_sanctions_screening
+        return await asyncio.to_thread(run_sanctions_screening)
+
+    pipeline.add(EnrichmentTask(
+        name="sanctions_screening", func=_run_sanctions_screening,
+        timeout_seconds=600, group="compliance", priority=5,
+        gate_check=_db_gate(
+            "SELECT MAX(screened_at) AS latest FROM sanctions_screening_results",
+            min_hours=20,
+        ),
+    ))
+
+    # ---- Enforcement records (weekly) ----
+
+    async def _run_enforcement_records():
+        from app.collectors.enforcement_history import collect_enforcement_records
+        return await asyncio.to_thread(collect_enforcement_records)
+
+    pipeline.add(EnrichmentTask(
+        name="enforcement_records", func=_run_enforcement_records,
+        timeout_seconds=600, group="compliance", priority=5,
+        gate_check=_db_gate(
+            "SELECT MAX(collected_at) AS latest FROM enforcement_records",
+            min_hours=168,
+        ),
+    ))
+
+    # ---- Parent company financials (weekly) ----
+
+    async def _run_parent_financials():
+        from app.collectors.parent_company_financials import collect_parent_financials
+        return await asyncio.to_thread(collect_parent_financials)
+
+    pipeline.add(EnrichmentTask(
+        name="parent_financials", func=_run_parent_financials,
+        timeout_seconds=600, group="compliance", priority=5,
+        gate_check=_db_gate(
+            "SELECT MAX(collected_at) AS latest FROM parent_company_financials",
+            min_hours=168,
+        ),
+    ))
+
     # ---- Hourly entity snapshots ----
 
     async def _run_entity_snapshots():
@@ -966,6 +1101,21 @@ async def run_enrichment_pipeline() -> dict:
     pipeline.add(EnrichmentTask(
         name="materialized_compositions", func=_run_materialized,
         timeout_seconds=120, group="computed", priority=4,
+    ))
+
+    # ---- Daily pulse generation ----
+
+    async def _run_daily_pulse():
+        from app.pulse_generator import run_daily_pulse
+        return await run_daily_pulse()
+
+    pipeline.add(EnrichmentTask(
+        name="daily_pulse", func=_run_daily_pulse,
+        timeout_seconds=300, group="pulse", priority=4,
+        gate_check=_db_gate(
+            "SELECT MAX(created_at) AS latest FROM daily_pulses",
+            min_hours=22,
+        ),
     ))
 
     # ---- Provenance linking + catalog update ----

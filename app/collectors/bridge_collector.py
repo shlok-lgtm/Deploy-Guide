@@ -592,7 +592,18 @@ def run_bri_scoring() -> list[dict]:
                 {"slug": r["entity_slug"], "score": r["overall_score"]}
                 for r in results
             ])
-    except Exception as e:
-        logger.warning(f"BRI attestation failed: {e}")
+        else:
+            attest_state("bri_components", [{"status": "ran_no_results", "results_count": 0}])
+    except Exception as ae:
+        logger.error(f"bri_components attestation failed: {ae}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="bri_components_attestation_failure",
+                error_message=str(ae)[:500],
+                cycle_phase="bri_components",
+            )
+        except Exception:
+            pass
 
     return results
