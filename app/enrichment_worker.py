@@ -104,6 +104,15 @@ class EnrichmentPipeline:
                 logger.error(
                     f"[enrichment] [{task.name}] TIMEOUT after {task.timeout_seconds}s"
                 )
+                try:
+                    from app.worker import _record_cycle_error
+                    _record_cycle_error(
+                        error_type="enrichment_task_timeout",
+                        error_message=f"task {task.name} exceeded {task.timeout_seconds}s budget",
+                        cycle_phase=f"enrichment_{task.name}",
+                    )
+                except Exception:
+                    pass
                 return TaskResult(
                     name=task.name,
                     success=False,
@@ -113,6 +122,15 @@ class EnrichmentPipeline:
             except Exception as e:
                 elapsed = time.time() - start
                 logger.error(f"Enrichment [{task.name}] failed after {elapsed:.1f}s: {e}")
+                try:
+                    from app.worker import _record_cycle_error
+                    _record_cycle_error(
+                        error_type="enrichment_task_failure",
+                        error_message=f"task {task.name}: {str(e)[:400]}",
+                        cycle_phase=f"enrichment_{task.name}",
+                    )
+                except Exception:
+                    pass
                 return TaskResult(
                     name=task.name,
                     success=False,
@@ -1151,7 +1169,7 @@ async def run_enrichment_pipeline() -> dict:
 
     pipeline.add(EnrichmentTask(
         name="provenance_update", func=_run_provenance_update,
-        timeout_seconds=60, group="housekeeping", priority=10,
+        timeout_seconds=300, group="housekeeping", priority=10,
     ))
 
     # ---- Data catalog update (end of pipeline) ----
