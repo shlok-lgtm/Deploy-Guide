@@ -7716,6 +7716,172 @@ async def acknowledge_discovery_signal(signal_id: int, key: str = Query(default=
 
 
 # =============================================================================
+# POST /api/admin/sql — Read-only SQL endpoint for Claude
+# =============================================================================
+
+_claude_ro_pool = None
+
+
+def _get_claude_ro_pool():
+    global _claude_ro_pool
+    if _claude_ro_pool is not None:
+        return _claude_ro_pool
+    url = os.environ.get("CLAUDE_RO_DATABASE_URL", "")
+    if not url:
+        return None
+    from psycopg2.pool import ThreadedConnectionPool
+    _claude_ro_pool = ThreadedConnectionPool(1, 5, url, options="-c statement_timeout=30000")
+    return _claude_ro_pool
+
+
+_SQL_BLOCKLIST = re.compile(
+    r"\b(INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER|CREATE|GRANT|REVOKE|COPY|VACUUM|REINDEX)\b",
+    re.IGNORECASE,
+)
+
+
+@app.post("/api/admin/sql")
+async def admin_sql_query(request: Request):
+    """Execute a read-only SQL query against the prod DB. Admin-key protected."""
+    _check_admin_key(request)
+
+    body = await request.json()
+    sql = (body.get("sql") or "").strip()
+    params = body.get("params") or None
+
+    if not sql:
+        raise HTTPException(status_code=400, detail="Missing 'sql' field")
+
+    if _SQL_BLOCKLIST.search(sql):
+        raise HTTPException(status_code=400, detail="Write operations not allowed (INSERT/UPDATE/DELETE/DROP/etc.)")
+
+    pool = await asyncio.to_thread(_get_claude_ro_pool)
+    if not pool:
+        raise HTTPException(status_code=503, detail="CLAUDE_RO_DATABASE_URL not configured")
+
+    import time as _t
+    start = _t.monotonic()
+    conn = None
+    try:
+        conn = pool.getconn()
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            columns = [desc[0] for desc in cur.description] if cur.description else []
+            rows = cur.fetchmany(1001) if cur.description else []
+            truncated = len(rows) > 1000
+            if truncated:
+                rows = rows[:1000]
+            row_count = len(rows)
+            elapsed_ms = int((_t.monotonic() - start) * 1000)
+
+            result_rows = [dict(zip(columns, row)) for row in rows]
+
+        conn.rollback()
+
+        try:
+            await execute_async(
+                """INSERT INTO claude_sql_log (sql_text, row_count, elapsed_ms, success)
+                   VALUES (%s, %s, %s, TRUE)""",
+                (sql[:2000], row_count, elapsed_ms),
+            )
+        except Exception:
+            pass
+
+        resp = {
+            "rows": result_rows,
+            "columns": columns,
+            "row_count": row_count,
+            "elapsed_ms": elapsed_ms,
+        }
+        if truncated:
+            resp["truncated"] = True
+            resp["note"] = "Row limit 1000 reached; results truncated"
+        return resp
+
+    except Exception as e:
+        elapsed_ms = int((_t.monotonic() - start) * 1000)
+        try:
+            await execute_async(
+                """INSERT INTO claude_sql_log (sql_text, row_count, elapsed_ms, success, error_msg)
+                   VALUES (%s, 0, %s, FALSE, %s)""",
+                (sql[:2000], elapsed_ms, str(e)[:500]),
+            )
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn:
+            try:
+                pool.putconn(conn)
+            except Exception:
+                pass
+
+
+# =============================================================================
+# GET /api/canonical/state — Public canonical state summary
+# =============================================================================
+
+@app.get("/api/canonical/state")
+async def canonical_state():
+    """Public endpoint: canonical state of the Basis Protocol system."""
+    result = {}
+
+    try:
+        row = await fetch_one_async("SELECT COUNT(*) AS cnt FROM stablecoins WHERE scoring_enabled = TRUE")
+        result["stablecoins_scored"] = row["cnt"] if row else 0
+    except Exception:
+        result["stablecoins_scored"] = None
+
+    try:
+        row = await fetch_one_async("SELECT COUNT(DISTINCT protocol_slug) AS cnt FROM psi_scores")
+        result["psi_protocols"] = row["cnt"] if row else 0
+    except Exception:
+        result["psi_protocols"] = None
+
+    try:
+        row = await fetch_one_async("SELECT COUNT(DISTINCT chain) AS cnt FROM wallet_graph.wallets WHERE chain IS NOT NULL")
+        result["chains_supported"] = row["cnt"] if row else 0
+    except Exception:
+        result["chains_supported"] = None
+
+    result["primitives_live"] = 43
+    result["mcp_tools_total"] = 21
+
+    try:
+        rows = await fetch_all_async("""
+            SELECT domain,
+                   EXTRACT(EPOCH FROM (NOW() - MAX(cycle_timestamp))) AS staleness_seconds,
+                   MAX(cycle_timestamp) AS last_attested
+            FROM state_attestations
+            GROUP BY domain
+            ORDER BY domain
+        """)
+        result["state_attestation_freshness"] = [
+            {
+                "domain": r["domain"],
+                "last_attested": r["last_attested"].isoformat() if r.get("last_attested") else None,
+                "staleness_seconds": round(float(r["staleness_seconds"]), 0) if r.get("staleness_seconds") else None,
+            }
+            for r in (rows or [])
+        ]
+    except Exception:
+        result["state_attestation_freshness"] = None
+
+    try:
+        row = await fetch_one_async("""
+            SELECT MAX(started_at) AS last_publish
+            FROM ops.keeper_cycles
+            WHERE completed_at IS NOT NULL
+        """)
+        result["last_oracle_publish"] = row["last_publish"].isoformat() if row and row.get("last_publish") else None
+    except Exception:
+        result["last_oracle_publish"] = None
+
+    result["timestamp"] = datetime.now(timezone.utc).isoformat()
+    return result
+
+
+# =============================================================================
 # Universal Data Layer API endpoints
 # =============================================================================
 
