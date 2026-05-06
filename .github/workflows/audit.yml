@@ -34,7 +34,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.11" }
       - name: Install Python deps
-        run: pip install pytest "eth-hash[pycryptodome]>=0.7.0" psycopg2-binary
+        run: pip install pytest "eth-hash[pycryptodome]>=0.7.0" psycopg2-binary requests
       - name: Python entityId golden vectors
         run: pytest tests/test_oracle_keys.py -v
       - uses: actions/setup-node@v4
