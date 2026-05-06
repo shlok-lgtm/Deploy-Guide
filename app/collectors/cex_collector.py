@@ -444,7 +444,18 @@ def run_cxri_scoring() -> list[dict]:
                 {"slug": r["entity_slug"], "score": r["overall_score"]}
                 for r in results
             ])
-    except Exception as e:
-        logger.warning(f"CXRI attestation failed: {e}")
+        else:
+            attest_state("cxri_components", [{"status": "ran_no_results", "results_count": 0}])
+    except Exception as ae:
+        logger.error(f"cxri_components attestation failed: {ae}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="cxri_components_attestation_failure",
+                error_message=str(ae)[:500],
+                cycle_phase="cxri_components",
+            )
+        except Exception:
+            pass
 
     return results

@@ -192,7 +192,18 @@ def rebuild_all_profiles(limit: int = 0) -> dict:
         from app.state_attestation import attest_state
         if built > 0:
             attest_state("wallet_profiles", [{"built": built, "total": len(addresses)}])
+        else:
+            attest_state("wallet_profiles", [{"status": "ran_no_results", "profiles_built": 0}])
     except Exception as ae:
-        logger.debug(f"Wallet profile attestation skipped: {ae}")
+        logger.error(f"wallet_profiles attestation failed: {ae}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="wallet_profiles_attestation_failure",
+                error_message=str(ae)[:500],
+                cycle_phase="wallet_profiles",
+            )
+        except Exception:
+            pass
 
     return {"total": len(addresses), "built": built, "errors": errors}

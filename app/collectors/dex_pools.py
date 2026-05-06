@@ -373,7 +373,18 @@ def run_dex_pool_collection() -> list[dict]:
                 {"slug": r.get("protocol_slug"), "component": r.get("component"), "score": r.get("score")}
                 for r in results if "score" in r
             ])
-    except Exception:
-        pass
+        else:
+            attest_state("dex_pool_data", [{"status": "ran_no_results", "results_count": 0}])
+    except Exception as ae:
+        logger.error(f"dex_pool_data attestation failed: {ae}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="dex_pool_data_attestation_failure",
+                error_message=str(ae)[:500],
+                cycle_phase="dex_pool_data",
+            )
+        except Exception:
+            pass
 
     return results

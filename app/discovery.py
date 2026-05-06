@@ -227,7 +227,18 @@ def run_discovery_cycle():
         from app.state_attestation import attest_state
         if all_signals:
             attest_state("discovery_signals", [{"type": s.get("signal_type"), "novelty": s.get("novelty_score")} for s in all_signals])
+        else:
+            attest_state("discovery_signals", [{"status": "ran_no_results", "results_count": 0}])
     except Exception as ae:
-        logger.debug(f"Discovery attestation skipped: {ae}")
+        logger.error(f"discovery_signals attestation failed: {ae}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="discovery_signals_attestation_failure",
+                error_message=str(ae)[:500],
+                cycle_phase="discovery_signals",
+            )
+        except Exception:
+            pass
 
     return all_signals

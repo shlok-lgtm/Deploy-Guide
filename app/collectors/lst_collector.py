@@ -627,7 +627,18 @@ def run_lsti_scoring() -> list[dict]:
                 {"slug": r["entity_slug"], "score": r["overall_score"]}
                 for r in results
             ])
-    except Exception as e:
-        logger.warning(f"LSTI attestation failed: {e}")
+        else:
+            attest_state("lsti_components", [{"status": "ran_no_results", "results_count": 0}])
+    except Exception as ae:
+        logger.error(f"lsti_components attestation failed: {ae}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="lsti_components_attestation_failure",
+                error_message=str(ae)[:500],
+                cycle_phase="lsti_components",
+            )
+        except Exception:
+            pass
 
     return results
