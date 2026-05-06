@@ -24,6 +24,7 @@ def upsert_unscored_asset(
     decimals: int,
     coingecko_id: Optional[str] = None,
     token_type: str = "unknown",
+    chain: str = "ethereum",
 ) -> None:
     """Insert or update an unscored asset in the backlog.
 
@@ -31,13 +32,18 @@ def upsert_unscored_asset(
       - Only 'stablecoin' rows are eligible for SII promotion.
       - On conflict, token_type is only overwritten if the incoming value is
         more specific than the stored value (unknown < stablecoin|non_stablecoin).
+
+    chain: 'ethereum' or 'solana'. Address is case-folded only for ethereum;
+    Solana base58 is case-sensitive and must be preserved exactly.
     """
+    # case-fold ONLY for EVM. Solana base58 is case-sensitive.
+    stored_address = token_address.lower() if chain == "ethereum" else token_address
     execute(
         """
         INSERT INTO wallet_graph.unscored_assets
             (token_address, symbol, name, decimals, coingecko_id,
-             token_type, first_seen_at, last_seen_at, updated_at)
-        VALUES (%s, %s, %s, %s, %s, %s, NOW(), NOW(), NOW())
+             token_type, chain, first_seen_at, last_seen_at, updated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), NOW(), NOW())
         ON CONFLICT (token_address) DO UPDATE SET
             symbol = COALESCE(EXCLUDED.symbol, wallet_graph.unscored_assets.symbol),
             name = COALESCE(EXCLUDED.name, wallet_graph.unscored_assets.name),
@@ -48,10 +54,11 @@ def upsert_unscored_asset(
                     THEN EXCLUDED.token_type
                 ELSE wallet_graph.unscored_assets.token_type
             END,
+            chain = EXCLUDED.chain,
             last_seen_at = NOW(),
             updated_at = NOW()
         """,
-        (token_address.lower(), symbol, name, decimals, coingecko_id, token_type),
+        (stored_address, symbol, name, decimals, coingecko_id, token_type, chain),
     )
 
 
@@ -209,6 +216,7 @@ def get_backlog_detail(token_address: str) -> Optional[dict]:
 
 def seed_known_unscored() -> int:
     """Seed the unscored_assets table with known unscored stablecoins from config."""
+    from app.indexer.config import UNSCORED_CONTRACTS, UNSCORED_SOLANA_MINTS
     count = 0
     for addr, info in UNSCORED_CONTRACTS.items():
         upsert_unscored_asset(
@@ -218,6 +226,18 @@ def seed_known_unscored() -> int:
             decimals=info["decimals"],
             coingecko_id=info.get("coingecko_id"),
             token_type="stablecoin",
+            chain="ethereum",
+        )
+        count += 1
+    for mint, info in UNSCORED_SOLANA_MINTS.items():
+        upsert_unscored_asset(
+            token_address=mint,
+            symbol=info["symbol"],
+            name=info["name"],
+            decimals=info["decimals"],
+            coingecko_id=info.get("coingecko_id"),
+            token_type="stablecoin",
+            chain="solana",
         )
         count += 1
     logger.info(f"Seeded {count} known unscored assets into backlog")
@@ -275,7 +295,7 @@ def promote_eligible_assets() -> int:
         collateral_threshold = float(os.environ.get("BACKLOG_COLLATERAL_THRESHOLD", "500000"))
         eligible = fetch_all(
             """
-            SELECT token_address, symbol, name, decimals, coingecko_id,
+            SELECT token_address, symbol, name, decimals, coingecko_id, chain,
                    total_value_held,
                    COALESCE(protocol_collateral_tvl, 0) AS protocol_collateral_tvl,
                    COALESCE(protocol_count, 0) AS protocol_count
@@ -291,7 +311,7 @@ def promote_eligible_assets() -> int:
     else:
         eligible = fetch_all(
             """
-            SELECT token_address, symbol, name, decimals, coingecko_id,
+            SELECT token_address, symbol, name, decimals, coingecko_id, chain,
                    total_value_held,
                    COALESCE(protocol_collateral_tvl, 0) AS protocol_collateral_tvl,
                    COALESCE(protocol_count, 0) AS protocol_count
@@ -309,13 +329,20 @@ def promote_eligible_assets() -> int:
     promoted = 0
     for asset in eligible:
         coin_id = _make_coin_id(asset["symbol"])
+        chain = asset.get("chain") or "ethereum"
+        solana_mint = asset["token_address"] if chain == "solana" else None
+        contract = asset["token_address"] if chain == "ethereum" else ""
         try:
             execute(
                 """
                 INSERT INTO stablecoins
-                    (id, name, symbol, issuer, coingecko_id, contract, decimals, scoring_enabled)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE)
-                ON CONFLICT (id) DO UPDATE SET scoring_enabled = TRUE
+                    (id, name, symbol, issuer, coingecko_id, contract, decimals,
+                     scoring_enabled, chain, solana_mint)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE, %s, %s)
+                ON CONFLICT (id) DO UPDATE SET
+                    scoring_enabled = TRUE,
+                    chain = EXCLUDED.chain,
+                    solana_mint = COALESCE(EXCLUDED.solana_mint, stablecoins.solana_mint)
                 """,
                 (
                     coin_id,
@@ -323,8 +350,10 @@ def promote_eligible_assets() -> int:
                     asset["symbol"],
                     KNOWN_ISSUERS.get(asset["symbol"].upper(), asset["name"] or "Unknown"),
                     asset["coingecko_id"],
-                    asset["token_address"],
+                    contract,
                     asset["decimals"],
+                    chain,
+                    solana_mint,
                 ),
             )
             execute(

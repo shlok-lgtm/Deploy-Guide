@@ -100,7 +100,9 @@ def get_stablecoin_config(stablecoin_id: str) -> dict:
         return cfg
     try:
         row = fetch_one(
-            "SELECT name, symbol, coingecko_id, contract, decimals FROM stablecoins WHERE id = %s",
+            "SELECT name, symbol, coingecko_id, contract, decimals, "
+            "chain, solana_mint, spl_token_program "
+            "FROM stablecoins WHERE id = %s",
             (stablecoin_id,)
         )
         if row:
@@ -110,6 +112,9 @@ def get_stablecoin_config(stablecoin_id: str) -> dict:
                 "coingecko_id": row["coingecko_id"],
                 "contract": row.get("contract"),
                 "decimals": row.get("decimals", 18),
+                "chain": row.get("chain", "ethereum"),
+                "solana_mint": row.get("solana_mint"),
+                "spl_token_program": row.get("spl_token_program"),
             }
     except Exception as e:
         logger.warning(f"Could not load config for {stablecoin_id} from DB: {e}")
