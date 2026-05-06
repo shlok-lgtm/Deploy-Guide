@@ -97,7 +97,9 @@
       "Bash(npx tsx:*)",
       "Bash(npx tsx --eval ':*)",
       "Bash(DRY_RUN=true npx tsx keeper/index.ts)",
-      "Bash(pkill -f \"tsx keeper/index.ts\")"
+      "Bash(pkill -f \"tsx keeper/index.ts\")",
+      "mcp__e8e9553d-326a-4590-9859-7f02f732ed25__list_projects",
+      "mcp__e8e9553d-326a-4590-9859-7f02f732ed25__list_shared_projects"
     ]
   }
 }
