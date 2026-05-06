@@ -855,6 +855,21 @@ async def run_enrichment_pipeline() -> dict:
         ),
     ))
 
+    # ---- Contract upgrade delta tracking (daily) ----
+
+    async def _run_contract_upgrades():
+        from app.collectors.contract_upgrades import collect_contract_upgrades
+        return await asyncio.to_thread(collect_contract_upgrades)
+
+    pipeline.add(EnrichmentTask(
+        name="contract_upgrades", func=_run_contract_upgrades,
+        timeout_seconds=600, group="data_layer", priority=5,
+        gate_check=_db_gate(
+            "SELECT MAX(captured_at) AS latest FROM contract_bytecode_snapshots",
+            min_hours=20,
+        ),
+    ))
+
     # ---- Hourly entity snapshots ----
 
     async def _run_entity_snapshots():
