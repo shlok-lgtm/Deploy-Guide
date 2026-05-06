@@ -72,6 +72,32 @@ UNSCORED_CONTRACTS = {
     },
 }
 
+# =============================================================================
+# Solana stablecoin backlog — case-preserved base58 mints
+# =============================================================================
+# Symmetric to UNSCORED_CONTRACTS but for Solana SPL Token / Token-2022 mints.
+# Empty by default; populated by Step 4 (USDPT) after external verification.
+
+UNSCORED_SOLANA_MINTS: dict = {}
+
+
+def lookup_unscored_by_symbol(symbol: str) -> tuple[str, dict, str] | None:
+    """
+    Find an unscored asset entry by symbol across all chain backlogs.
+    Returns (token_address, info_dict, chain) or None.
+    chain ∈ {"ethereum", "solana"}.
+    Symbol comparison is case-insensitive.
+    """
+    target = symbol.upper()
+    for addr, info in UNSCORED_CONTRACTS.items():
+        if info.get("symbol", "").upper() == target:
+            return addr, info, "ethereum"
+    for mint, info in UNSCORED_SOLANA_MINTS.items():
+        if info.get("symbol", "").upper() == target:
+            return mint, info, "solana"
+    return None
+
+
 # Combined lookup: all known stablecoin contracts (lowercased)
 ALL_KNOWN_CONTRACTS = {**SCORED_CONTRACTS, **UNSCORED_CONTRACTS}
 

@@ -1130,12 +1130,7 @@ def sync_collateral_to_backlog():
     Returns number of assets synced.
     """
     from app.indexer.backlog import upsert_unscored_asset
-    from app.indexer.config import UNSCORED_CONTRACTS
-
-    # Build reverse lookup: symbol -> (address, info) from UNSCORED_CONTRACTS
-    symbol_to_address = {}
-    for addr, info in UNSCORED_CONTRACTS.items():
-        symbol_to_address[info["symbol"].upper()] = (addr, info)
+    from app.indexer.config import lookup_unscored_by_symbol
 
     # Query today's unscored stablecoin collateral exposure, grouped by symbol
     rows = fetch_all("""
@@ -1159,12 +1154,12 @@ def sync_collateral_to_backlog():
         total_tvl = float(row["total_collateral_tvl"])
         num_protocols = int(row["protocol_count"])
 
-        # Look up contract address from known unscored stablecoins
-        if sym not in symbol_to_address:
+        # Look up contract address from known unscored stablecoins (any chain)
+        looked_up = lookup_unscored_by_symbol(sym)
+        if looked_up is None:
             logger.info(f"Collateral stablecoin needs manual mapping: {sym} (${total_tvl:,.0f} TVL)")
             continue
-
-        addr, info = symbol_to_address[sym]
+        addr, info, chain = looked_up
 
         # Ensure asset exists in backlog
         upsert_unscored_asset(
@@ -1174,16 +1169,18 @@ def sync_collateral_to_backlog():
             decimals=info["decimals"],
             coingecko_id=info.get("coingecko_id"),
             token_type="stablecoin",
+            chain=chain,
         )
 
-        # Update collateral demand signals
+        # Update collateral demand signals — preserve case for Solana base58
+        stored_addr = addr if chain == "solana" else addr.lower()
         execute("""
             UPDATE wallet_graph.unscored_assets SET
                 protocol_collateral_tvl = %s,
                 protocol_count = %s,
                 updated_at = NOW()
             WHERE token_address = %s
-        """, (total_tvl, num_protocols, addr.lower()))
+        """, (total_tvl, num_protocols, stored_addr))
 
         synced += 1
         logger.info(
