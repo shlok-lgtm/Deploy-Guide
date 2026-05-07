@@ -1788,6 +1788,7 @@ function normalizeScores(indexId, data) {
       name: s.name || s.symbol,
       slug: s.symbol,
       score: s.score,
+      confidence: s.confidence,
       confidence_tag: s.confidence_tag,
       components_populated: s.components_populated,
       components_total: s.components_total,
@@ -1799,6 +1800,7 @@ function normalizeScores(indexId, data) {
       name: p.protocol_name,
       slug: p.protocol_slug,
       score: p.score,
+      confidence: p.confidence,
       confidence_tag: p.confidence_tag,
       components_populated: p.components_populated,
       components_total: p.components_total,
@@ -1810,6 +1812,7 @@ function normalizeScores(indexId, data) {
       name: p.protocol_name,
       slug: p.protocol_slug,
       score: p.score,
+      confidence: p.confidence,
       confidence_tag: p.confidence_tag,
       components_populated: p.components_populated,
       components_total: p.components_total,
@@ -1821,6 +1824,7 @@ function normalizeScores(indexId, data) {
     name: s.name,
     slug: s.entity,
     score: s.score,
+    confidence: s.confidence,
     confidence_tag: s.confidence_tag,
     components_populated: s.components_populated,
     components_total: s.components_total,
@@ -1906,13 +1910,13 @@ function IndexTable({ config, data, loading, error }) {
                   {gradeFromScore(s.score)}
                 </td>
                 <td style={{ padding: "4px 6px", textAlign: "center" }}>
-                  {s.confidence_tag ? (
+                  {s.confidence ? (
                     <span style={{
                       fontSize: 9, padding: "1px 5px", borderRadius: 2,
-                      background: s.confidence_tag === "high" ? "#22c55e18" : s.confidence_tag === "standard" ? "#eab30818" : "#ef444418",
-                      color: s.confidence_tag === "high" ? "#22c55e" : s.confidence_tag === "standard" ? "#eab308" : "#ef4444",
-                      border: `1px solid ${s.confidence_tag === "high" ? "#22c55e33" : s.confidence_tag === "standard" ? "#eab30833" : "#ef444433"}`,
-                    }}>{s.confidence_tag}</span>
+                      background: s.confidence === "high" ? "#22c55e18" : s.confidence === "standard" ? "#eab30818" : "#ef444418",
+                      color: s.confidence === "high" ? "#22c55e" : s.confidence === "standard" ? "#eab308" : "#ef4444",
+                      border: `1px solid ${s.confidence === "high" ? "#22c55e33" : s.confidence === "standard" ? "#eab30833" : "#ef444433"}`,
+                    }}>{s.confidence}</span>
                   ) : <span style={{ color: T.inkFaint }}>—</span>}
                 </td>
                 <td style={{ padding: "4px 6px", textAlign: "right", color: T.inkMid }}>

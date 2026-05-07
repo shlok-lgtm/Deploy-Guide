@@ -6209,7 +6209,9 @@ async def circle7_scores(index_id: str):
             entity_slug, entity_name, overall_score,
             category_scores, component_scores, confidence, confidence_tag,
             component_coverage, components_populated, components_total,
-            missing_categories, scored_date, computed_at
+            missing_categories, scored_date, computed_at,
+            aggregation_method, aggregation_params, aggregation_formula_version,
+            effective_category_weights, coverage, withheld
         FROM generic_index_scores
         WHERE index_id = %s
         ORDER BY entity_slug, computed_at DESC
@@ -6286,6 +6288,12 @@ async def circle7_scores(index_id: str):
             "components_populated": populated,
             "components_total": total,
             "scored_date": str(r["scored_date"]),
+            "aggregation_method": r.get("aggregation_method"),
+            "aggregation_params": _parse_jsonb(r.get("aggregation_params")),
+            "aggregation_formula_version": r.get("aggregation_formula_version"),
+            "effective_category_weights": _parse_jsonb(r.get("effective_category_weights")),
+            "coverage": float(r["coverage"]) if r.get("coverage") is not None else None,
+            "withheld": bool(r.get("withheld")) if r.get("withheld") is not None else False,
         })
 
     return {
@@ -6307,7 +6315,9 @@ async def circle7_score_detail(index_id: str, entity_slug: str):
                category_scores, component_scores, raw_values,
                formula_version, inputs_hash, confidence, confidence_tag,
                component_coverage, components_populated, components_total,
-               missing_categories, scored_date, computed_at
+               missing_categories, scored_date, computed_at,
+               aggregation_method, aggregation_params, aggregation_formula_version,
+               effective_category_weights, coverage, withheld
         FROM generic_index_scores
         WHERE index_id = %s AND entity_slug = %s
         ORDER BY computed_at DESC LIMIT 1
@@ -6387,6 +6397,12 @@ async def circle7_score_detail(index_id: str, entity_slug: str):
         "components_total": total,
         "scored_date": str(row["scored_date"]),
         "computed_at": str(row["computed_at"]),
+        "aggregation_method": row.get("aggregation_method"),
+        "aggregation_params": _parse_jsonb(row.get("aggregation_params")),
+        "aggregation_formula_version": row.get("aggregation_formula_version"),
+        "effective_category_weights": _parse_jsonb(row.get("effective_category_weights")),
+        "coverage": float(row["coverage"]) if row.get("coverage") is not None else None,
+        "withheld": bool(row.get("withheld")) if row.get("withheld") is not None else False,
     }
 
 

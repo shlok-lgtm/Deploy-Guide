@@ -502,13 +502,18 @@ async def store_bridge_score(result: dict) -> None:
     raw_canonical = json.dumps(raw_for_storage, sort_keys=True, default=str)
     inputs_hash = "0x" + hashlib.sha256(raw_canonical.encode()).hexdigest()
 
+    aggregation_params = (BRI_V01_DEFINITION.get("aggregation") or {}).get("params", {}) or {}
+
     await execute_async("""
         INSERT INTO generic_index_scores
             (index_id, entity_slug, entity_name, overall_score,
              category_scores, component_scores, raw_values,
              formula_version, inputs_hash, confidence, confidence_tag,
-             component_coverage, components_populated, components_total, missing_categories)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+             component_coverage, components_populated, components_total, missing_categories,
+             aggregation_method, aggregation_params, aggregation_formula_version,
+             effective_category_weights, coverage, withheld)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s)
         ON CONFLICT (index_id, entity_slug, scored_date)
         DO UPDATE SET
             entity_name = EXCLUDED.entity_name,
@@ -523,6 +528,12 @@ async def store_bridge_score(result: dict) -> None:
             components_populated = EXCLUDED.components_populated,
             components_total = EXCLUDED.components_total,
             missing_categories = EXCLUDED.missing_categories,
+            aggregation_method = EXCLUDED.aggregation_method,
+            aggregation_params = EXCLUDED.aggregation_params,
+            aggregation_formula_version = EXCLUDED.aggregation_formula_version,
+            effective_category_weights = EXCLUDED.effective_category_weights,
+            coverage = EXCLUDED.coverage,
+            withheld = EXCLUDED.withheld,
             computed_at = NOW()
     """, (
         "bri", slug, result["entity_name"], result["overall_score"],
@@ -536,6 +547,12 @@ async def store_bridge_score(result: dict) -> None:
         result.get("components_populated"),
         result.get("components_total"),
         json.dumps(result.get("missing_categories") or []),
+        result.get("aggregation_method"),
+        json.dumps(aggregation_params),
+        result.get("aggregation_formula_version"),
+        json.dumps(result.get("effective_category_weights") or {}),
+        result.get("coverage"),
+        bool(result.get("withheld")),
     ))
 
 
