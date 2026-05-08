@@ -121,8 +121,19 @@ async def _store_extraction(entity_slug: str, entity_name: str, source_url: str,
             CREATE UNIQUE INDEX IF NOT EXISTS idx_tti_disc_entity_source
             ON tti_disclosure_extractions(entity_slug, source_url)
         """)
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"tti_disclosure_collector: _store_extraction index ensure failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="services__store_extraction_index_ensure_failure",
+                error_message=str(e)[:500],
+                cycle_phase="tti_disclosure_collector",
+            )
+        except Exception:
+            pass
 
     await execute_async("""
         INSERT INTO tti_disclosure_extractions
@@ -309,7 +320,16 @@ def _try_scrape_page(url: str, entity_slug: str = "") -> str | None:
                     logger.info(f"TTI Parallel Extract OK for {entity_slug}: {len(content)} chars")
                     return content
     except Exception as e:
-        logger.debug(f"Parallel Extract failed for {url}: {e}")
+        logger.warning(f"Parallel Extract failed for {url}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="services__try_scrape_page_parallel_extract_failure",
+                error_message=str(e)[:500],
+                cycle_phase="tti_disclosure_collector",
+            )
+        except Exception:
+            pass
 
     # Fallback to Firecrawl (JS-rendered page scraping)
     try:
@@ -320,7 +340,16 @@ def _try_scrape_page(url: str, entity_slug: str = "") -> str | None:
         if isinstance(result, dict) and result.get("markdown"):
             return result["markdown"]
     except Exception as e:
-        logger.debug(f"Firecrawl scrape failed for {url}: {e}")
+        logger.warning(f"Firecrawl scrape failed for {url}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="services__try_scrape_page_firecrawl_scrape_failure",
+                error_message=str(e)[:500],
+                cycle_phase="tti_disclosure_collector",
+            )
+        except Exception:
+            pass
 
     # Last resort: plain requests
     try:
@@ -338,13 +367,31 @@ def _try_scrape_page(url: str, entity_slug: str = "") -> str | None:
                 from urllib.parse import urlparse as _urlparse
                 _provider = _urlparse(url).netloc or "unknown"
                 track_api_call(provider=_provider, endpoint="GET", caller="services.tti_disclosure_collector", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
-            except Exception:
-                pass
+            except Exception as _track_err:
+                logger.warning(f"tti_disclosure_collector: _try_scrape_page track_api_call failed: {_track_err}")
+                try:
+                    from app.worker import _record_cycle_error
+                    _record_cycle_error(
+                        error_type="services__try_scrape_page_track_api_call_failure",
+                        error_message=str(_track_err)[:500],
+                        cycle_phase="tti_disclosure_collector",
+                    )
+                except Exception:
+                    pass
         if resp.status_code == 200:
             text = re.sub(r'<[^>]+>', ' ', resp.text)
             return re.sub(r'\s+', ' ', text).strip()
     except Exception as e:
-        logger.debug(f"Requests fallback also failed for {url}: {e}")
+        logger.warning(f"Requests fallback also failed for {url}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="services__try_scrape_page_requests_fallback_failure",
+                error_message=str(e)[:500],
+                cycle_phase="tti_disclosure_collector",
+            )
+        except Exception:
+            pass
 
     return None
 
@@ -454,8 +501,17 @@ def _try_parallel_task_research(entity_slug: str, entity_name: str, issuer: str)
                 if settle:
                     try:
                         data["settlement_time_hours"] = int(re.sub(r'[^\d]', '', str(settle)))
-                    except (ValueError, TypeError):
-                        pass
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"tti_disclosure_collector: _try_parallel_task_research settlement_time parse failed: {e}")
+                        try:
+                            from app.worker import _record_cycle_error
+                            _record_cycle_error(
+                                error_type="services__try_parallel_task_research_settlement_time_parse_failure",
+                                error_message=str(e)[:500],
+                                cycle_phase="tti_disclosure_collector",
+                            )
+                        except Exception:
+                            pass
 
                 logger.info(f"TTI Parallel Task OK for {entity_slug}: {len(data)} fields")
                 return data

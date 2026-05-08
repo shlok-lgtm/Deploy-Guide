@@ -111,8 +111,17 @@ def discover_framer_pdfs(page_url: str) -> list[str]:
             finally:
                 try:
                     track_api_call(provider="firecrawl", endpoint="framer_module", caller="services.firecrawl_client", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"firecrawl_client: discover_framer_pdfs track_api_call failed: {e}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="services_discover_framer_pdfs_track_api_call_failure",
+                            error_message=str(e)[:500],
+                            cycle_phase="firecrawl_client",
+                        )
+                    except Exception:
+                        pass
             pdf_urls = re.findall(
                 r'https://framerusercontent\.com/assets/[A-Za-z0-9_]+\.pdf',
                 resp.text,
@@ -170,8 +179,17 @@ def identify_most_recent_attestation(pdf_urls: list[str]) -> str | None:
             finally:
                 try:
                     track_api_call(provider="firecrawl", endpoint="pdf_probe", caller="services.firecrawl_client", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"firecrawl_client: identify_most_recent_attestation track_api_call failed: {e}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="services_identify_most_recent_attestation_track_api_call_failure",
+                            error_message=str(e)[:500],
+                            cycle_phase="firecrawl_client",
+                        )
+                    except Exception:
+                        pass
             if len(resp.content) < 100_000:
                 continue  # Too small for an attestation report
 
@@ -197,8 +215,17 @@ def identify_most_recent_attestation(pdf_urls: list[str]) -> str | None:
                     if best_date is None or d > best_date:
                         best_date = d
                         best_url = url
-                except ValueError:
-                    pass
+                except ValueError as e:
+                    logger.warning(f"firecrawl_client: identify_most_recent_attestation date parse failed: {e}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="services_identify_most_recent_attestation_date_parse_failure",
+                            error_message=str(e)[:500],
+                            cycle_phase="firecrawl_client",
+                        )
+                    except Exception:
+                        pass
 
         except Exception as e:
             logger.warning(f"Firecrawl: Error checking PDF {url}: {e}")
