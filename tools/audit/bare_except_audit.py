@@ -47,6 +47,7 @@ CLASSIFICATIONS = (
     "warn_log",
     "error_log",
     "cycle_errors_write",
+    "cycle_errors_protective_wrapper",  # inner `except: pass` around _record_cycle_error itself
     "reraise",
     "return_error_sentinel",
     "complex",
@@ -243,7 +244,46 @@ def _statement_kind(stmt: ast.AST) -> str:
 # Classification
 # ---------------------------------------------------------------------------
 
-def classify(handler: ast.ExceptHandler) -> str:
+def _is_protective_cycle_error_wrapper(handler: ast.ExceptHandler,
+                                       parents: dict[int, ast.AST]) -> bool:
+    """Detect the spec-mandated defensive wrapper pattern around
+    ``_record_cycle_error`` itself:
+
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(...)
+        except Exception:
+            pass
+
+    The inner ``except Exception: pass`` is intentional — error logging must
+    never break the calling function. Without this exemption, every Wave-C
+    conversion would inflate the ``debug_only`` count by one and tip over
+    the CI gate.
+
+    Match condition:
+      - except body is exactly ``pass`` (or ``...``)
+      - parent ast.Try's body contains a call to ``_record_cycle_error``
+    """
+    body = handler.body
+    if len(body) != 1:
+        return False
+    only = body[0]
+    is_pass = isinstance(only, ast.Pass)
+    is_ellipsis = (
+        isinstance(only, ast.Expr)
+        and isinstance(only.value, ast.Constant)
+        and only.value.value is Ellipsis
+    )
+    if not (is_pass or is_ellipsis):
+        return False
+    parent = parents.get(id(handler))
+    if not isinstance(parent, ast.Try):
+        return False
+    return _has_cycle_errors_write(parent.body)
+
+
+def classify(handler: ast.ExceptHandler,
+             parents: dict[int, ast.AST]) -> str:
     """Apply the rules from the audit spec to one ExceptHandler."""
     body = handler.body
 
@@ -261,6 +301,13 @@ def classify(handler: ast.ExceptHandler) -> str:
     # reraise next.
     if _has_raise(body):
         return "reraise"
+
+    # Spec-mandated protective wrapper around _record_cycle_error itself.
+    # Detected before the pass-body check so it doesn't get miscounted as
+    # debug_only — the wrapper is intentional defensive code, not a V9.12
+    # Class 2 silent absorber.
+    if _is_protective_cycle_error_wrapper(handler, parents):
+        return "cycle_errors_protective_wrapper"
 
     # Empty / pass body — debug_only (silent absorber).
     if _is_only_pass_or_comment(body):
@@ -349,7 +396,7 @@ def audit_file(path: Path) -> list[dict]:
         is_async = isinstance(fn, ast.AsyncFunctionDef)
         fn_name = fn.name if fn is not None else "<module>"
         err_var = node.name or ""
-        classification = classify(node)
+        classification = classify(node, parents)
         first_is_return = (
             bool(node.body)
             and isinstance(node.body[0], ast.Return)
