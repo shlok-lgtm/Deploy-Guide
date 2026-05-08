@@ -20,6 +20,7 @@ import httpx
 
 from app.database import fetch_all, fetch_one, execute
 from app.api_usage_tracker import track_api_call
+from app.utils.rpc_provider import call_sync as _rpc_call_sync, RPCError
 
 logger = logging.getLogger(__name__)
 
@@ -33,19 +34,22 @@ EIP1967_IMPLEMENTATION_SLOT = (
 # RPC helpers (reuse pattern from smart_contract.py)
 # ---------------------------------------------------------------------------
 
+_ROUTER_CHAINS = {"ethereum", "base", "arbitrum"}
+
+
 def _get_rpc_url(chain: str = "ethereum") -> str:
+    """Compatibility shim. Returns a non-empty marker if the provider router
+    has Alchemy or Dwellir configured for `chain`. The actual transport is
+    `app.utils.rpc_provider.call_sync()`; callers only use this to gate-skip
+    chains that have no provider available.
+    """
     alchemy_key = os.environ.get("ALCHEMY_API_KEY", "")
-    if not alchemy_key:
+    dwellir_key = os.environ.get("DWELLIR_API_KEY", "") or os.environ.get("DWELLIR_ETH_URL", "")
+    if not (alchemy_key or dwellir_key):
         return ""
-    chain_map = {
-        "ethereum": "eth-mainnet",
-        "arbitrum": "arb-mainnet",
-        "optimism": "opt-mainnet",
-        "base": "base-mainnet",
-        "polygon": "polygon-mainnet",
-    }
-    network = chain_map.get(chain, "eth-mainnet")
-    return f"https://{network}.g.alchemy.com/v2/{alchemy_key}"
+    if chain in _ROUTER_CHAINS:
+        return f"router://{chain}"
+    return ""
 
 
 def _get_etherscan_bytecode(address: str) -> str | None:
@@ -74,23 +78,19 @@ def _get_etherscan_bytecode(address: str) -> str | None:
     return None
 
 
-def _rpc_get_code(rpc_url: str, address: str) -> str | None:
-    """Fetch bytecode via eth_getCode RPC call."""
-    if not rpc_url:
+def _rpc_get_code(rpc_url: str, address: str, chain: str = "ethereum") -> str | None:
+    """Fetch bytecode via eth_getCode through the Dwellir failover router.
+
+    `rpc_url` is preserved for signature compatibility; the actual transport
+    is `app.utils.rpc_provider.call_sync()`. Returns None on any error so
+    the collector's existing skip logic continues to apply.
+    """
+    if not rpc_url or chain not in _ROUTER_CHAINS:
         return None
     try:
-        resp = httpx.post(
-            rpc_url,
-            json={
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "eth_getCode",
-                "params": [address, "latest"],
-            },
-            timeout=15,
+        result = _rpc_call_sync(
+            "eth_getCode", [address, "latest"], chain=chain, timeout=15.0,
         )
-        data = resp.json()
-        result = data.get("result", "0x")
         if result and result != "0x":
             return result
     except Exception as e:
@@ -98,26 +98,24 @@ def _rpc_get_code(rpc_url: str, address: str) -> str | None:
     return None
 
 
-def _rpc_get_storage_at(rpc_url: str, address: str, slot: str) -> str:
-    """Read a storage slot via RPC."""
-    if not rpc_url:
-        return "0x" + "00" * 32
+def _rpc_get_storage_at(rpc_url: str, address: str, slot: str,
+                        chain: str = "ethereum") -> str:
+    """Read a storage slot via the Dwellir failover router.
+
+    Returns 32 zero bytes on any error so the EIP-1967 resolver degrades
+    gracefully (proxy detection skipped rather than crashing the cycle).
+    """
+    zero = "0x" + "00" * 32
+    if not rpc_url or chain not in _ROUTER_CHAINS:
+        return zero
     try:
-        resp = httpx.post(
-            rpc_url,
-            json={
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "eth_getStorageAt",
-                "params": [address, slot, "latest"],
-            },
-            timeout=15,
+        result = _rpc_call_sync(
+            "eth_getStorageAt", [address, slot, "latest"], chain=chain, timeout=15.0,
         )
-        data = resp.json()
-        return data.get("result", "0x" + "00" * 32)
+        return result if result else zero
     except Exception as e:
         logger.debug(f"RPC eth_getStorageAt failed for {address}: {e}")
-        return "0x" + "00" * 32
+        return zero
 
 
 def _hash_bytecode(bytecode: str) -> str:
@@ -125,9 +123,10 @@ def _hash_bytecode(bytecode: str) -> str:
     return "0x" + hashlib.sha256(bytecode.encode()).hexdigest()
 
 
-def _resolve_implementation(rpc_url: str, proxy_address: str) -> str | None:
+def _resolve_implementation(rpc_url: str, proxy_address: str,
+                            chain: str = "ethereum") -> str | None:
     """Resolve EIP-1967 implementation address from storage slot."""
-    raw = _rpc_get_storage_at(rpc_url, proxy_address, EIP1967_IMPLEMENTATION_SLOT)
+    raw = _rpc_get_storage_at(rpc_url, proxy_address, EIP1967_IMPLEMENTATION_SLOT, chain=chain)
     if raw and raw != "0x" + "00" * 32 and len(raw) >= 42:
         addr = "0x" + raw[-40:]
         if addr != "0x" + "0" * 40:
@@ -360,7 +359,7 @@ def collect_contract_upgrades(entity_filter: str | None = None) -> dict:
             rpc_url = _get_rpc_url(chain)
 
             # Fetch current bytecode
-            bytecode = _rpc_get_code(rpc_url, address)
+            bytecode = _rpc_get_code(rpc_url, address, chain=chain)
             if not bytecode and chain == "ethereum":
                 bytecode = _get_etherscan_bytecode(address)
 
@@ -392,11 +391,11 @@ def collect_contract_upgrades(entity_filter: str | None = None) -> dict:
             entities_checked += 1
 
             # Check for proxy and resolve implementation
-            impl_address = _resolve_implementation(rpc_url, address)
+            impl_address = _resolve_implementation(rpc_url, address, chain=chain)
             is_proxy = impl_address is not None
             impl_bytecode_hash = None
             if impl_address:
-                impl_bytecode = _rpc_get_code(rpc_url, impl_address)
+                impl_bytecode = _rpc_get_code(rpc_url, impl_address, chain=chain)
                 if impl_bytecode:
                     impl_bytecode_hash = _hash_bytecode(impl_bytecode)
 
