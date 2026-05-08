@@ -132,8 +132,17 @@ def store_violation(violation: CoherenceViolation):
                     json.dumps(violation.to_dict()),
                 ),
             )
-        except Exception:
-            logger.debug(f"Could not store coherence violation: {e}")
+        except Exception as e2:
+            logger.warning(f"Could not store coherence violation: primary={e}, fallback={e2}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="data_layer_store_violation_failure",
+                    error_message=f"primary={str(e)[:200]}, fallback={str(e2)[:200]}"[:500],
+                    cycle_phase="coherence_guards",
+                )
+            except Exception:
+                pass
 
 
 # =============================================================================
@@ -241,8 +250,17 @@ class DataCoherenceGuard:
                             severity="warning",
                             details=f"High-volume venue went to zero ({float(prev['volume_24h']):,.0f} → 0)",
                         ))
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"[coherence_guards] liquidity venue check failed for {asset_id}:{venue}: {e}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="data_layer_validate_liquidity_check_failure",
+                            error_message=str(e)[:500],
+                            cycle_phase="coherence_guards",
+                        )
+                    except Exception:
+                        pass
 
         self._violations.extend(violations)
         return violations
@@ -287,8 +305,17 @@ class DataCoherenceGuard:
                 )
                 if v:
                     violations.append(v)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"[coherence_guards] yield TVL drop check failed for {pool_id}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="data_layer_validate_yield_check_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="coherence_guards",
+                )
+            except Exception:
+                pass
 
         self._violations.extend(violations)
         return violations
@@ -321,8 +348,17 @@ class DataCoherenceGuard:
                             severity="warning",
                             details=f"Trust score changed: {old_ts} → {new_ts}",
                         ))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"[coherence_guards] exchange trust check failed for {exchange_id}: {e}")
+                try:
+                    from app.worker import _record_cycle_error
+                    _record_cycle_error(
+                        error_type="data_layer_validate_exchange_check_failure",
+                        error_message=str(e)[:500],
+                        cycle_phase="coherence_guards",
+                    )
+                except Exception:
+                    pass
 
         self._violations.extend(violations)
         return violations

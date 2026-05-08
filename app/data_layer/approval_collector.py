@@ -111,8 +111,19 @@ async def run_approval_collection() -> dict:
                         status=_ap_status,
                         latency_ms=int((time.monotonic() - _t0) * 1000),
                     )
-                except Exception:
-                    pass
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.warning(f"[approval_collector] track_api_call failed: {e}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="data_layer_run_approval_collection_track_api_call_failure",
+                            error_message=str(e)[:500],
+                            cycle_phase="approval_collector",
+                        )
+                    except Exception:
+                        pass
             if wi < 3:
                 logger.error(f"[approval_collector] step E.{wi}: HTTP {resp.status_code}")
 
@@ -223,8 +234,19 @@ async def run_approval_collection() -> dict:
         from app.data_layer.provenance_scaling import attest_data_batch
         if total_inserted > 0:
             await asyncio.to_thread(attest_data_batch, "token_approvals", [{"inserted": total_inserted}])
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"[approval_collector] attestation failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_run_approval_collection_attestation_failure",
+                error_message=str(e)[:500],
+                cycle_phase="approval_collector",
+            )
+        except Exception:
+            pass
 
     logger.error(
         f"[approval_collector] SUMMARY: wallets_scanned={len(wallets)}, "

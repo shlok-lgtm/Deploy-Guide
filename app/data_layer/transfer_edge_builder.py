@@ -97,8 +97,19 @@ async def _fetch_tokentx(wallet: str, api_key: str) -> list[dict]:
                 status=_status,
                 latency_ms=int((time.monotonic() - _t0) * 1000),
             )
-        except Exception:
-            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"[transfer_edge_builder] track_api_call failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="data_layer__fetch_tokentx_track_api_call_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="transfer_edge_builder",
+                )
+            except Exception:
+                pass
 
 
 async def _process_wallet(wallet: str, api_key: str) -> dict:
@@ -184,8 +195,19 @@ async def _process_wallet(wallet: str, api_key: str) -> dict:
                 edges_created = wallet_graph.edge_build_status.edges_created + EXCLUDED.edges_created,
                 status = 'complete'
         """, (wallet_lower, len(txs), edges_written))
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"[transfer_edge_builder] edge_build_status upsert failed for {wallet_lower}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer__process_wallet_status_upsert_failure",
+                error_message=str(e)[:500],
+                cycle_phase="transfer_edge_builder",
+            )
+        except Exception:
+            pass
 
     return {"edges": edges_written, "txs": len(txs)}
 

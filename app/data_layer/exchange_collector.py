@@ -238,8 +238,19 @@ async def run_exchange_collection() -> dict:
                     vol_history = await _fetch_exchange_volume_history(client, exchange_id, days=30)
                     if vol_history:
                         snapshot["raw_data"]["volume_history_points"] = len(vol_history)
-                except Exception:
-                    pass
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.warning(f"[exchange_collector] volume history fetch failed for {exchange_id}: {e}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="data_layer_run_exchange_collection_volume_history_failure",
+                            error_message=str(e)[:500],
+                            cycle_phase="exchange_collector",
+                        )
+                    except Exception:
+                        pass
 
             except Exception as e:
                 logger.warning(f"Exchange collection failed for {exchange_id}: {e}")
@@ -255,8 +266,19 @@ async def run_exchange_collection() -> dict:
         if total_snapshots > 0:
             await asyncio.to_thread(attest_data_batch, "exchange_snapshots", [{"exchanges": total_snapshots}])
             await link_batch_to_proof("exchange_snapshots", "exchange_snapshots")
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"Exchange provenance failed: {e}")
+        logger.warning(f"Exchange provenance failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_run_exchange_collection_provenance_failure",
+                error_message=str(e)[:500],
+                cycle_phase="exchange_collector",
+            )
+        except Exception:
+            pass
 
     logger.info(
         f"Exchange collection complete: {total_snapshots} exchanges, "

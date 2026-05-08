@@ -237,8 +237,19 @@ async def run_ohlcv_collection() -> dict:
                         total_records += len(records)
                         pools_processed += 1
                         top_processed += 1
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
-                logger.debug(f"15min OHLCV failed for {pool_address[:10]}…: {e}")
+                logger.warning(f"15min OHLCV failed for {pool_address[:10]}…: {e}")
+                try:
+                    from app.worker import _record_cycle_error
+                    _record_cycle_error(
+                        error_type="data_layer_run_ohlcv_collection_15min_failure",
+                        error_message=str(e)[:500],
+                        cycle_phase="ohlcv_collector",
+                    )
+                except Exception:
+                    pass
 
         # Other pools: hourly resolution
         for pool in other_pools:
@@ -258,8 +269,19 @@ async def run_ohlcv_collection() -> dict:
                         await asyncio.to_thread(_store_ohlcv_records, records)
                         total_records += len(records)
                         pools_processed += 1
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
-                logger.debug(f"Hourly OHLCV failed for {pool_address[:10]}…: {e}")
+                logger.warning(f"Hourly OHLCV failed for {pool_address[:10]}…: {e}")
+                try:
+                    from app.worker import _record_cycle_error
+                    _record_cycle_error(
+                        error_type="data_layer_run_ohlcv_collection_hourly_failure",
+                        error_message=str(e)[:500],
+                        cycle_phase="ohlcv_collector",
+                    )
+                except Exception:
+                    pass
 
     # Provenance
     try:
@@ -267,8 +289,19 @@ async def run_ohlcv_collection() -> dict:
         if total_records > 0:
             await asyncio.to_thread(attest_data_batch, "dex_pool_ohlcv", [{"records": total_records, "pools": pools_processed}])
             await link_batch_to_proof("dex_pool_ohlcv", "liquidity_depth")
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"[ohlcv_collector] provenance failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_run_ohlcv_collection_provenance_failure",
+                error_message=str(e)[:500],
+                cycle_phase="ohlcv_collector",
+            )
+        except Exception:
+            pass
 
     logger.error(
         f"[dex_pool_ohlcv] SUMMARY: pools_queried={pools_processed}, bars_received={total_records}, "

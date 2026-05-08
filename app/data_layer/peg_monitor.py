@@ -137,8 +137,17 @@ def _store_peg_snapshots(stablecoin_id: str, price_points: list[tuple]):
                         row,
                     )
                 stored += 1
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"[peg_monitor] snapshot insert failed for {stablecoin_id}: {e}")
+                try:
+                    from app.worker import _record_cycle_error
+                    _record_cycle_error(
+                        error_type="data_layer__store_peg_snapshots_insert_failure",
+                        error_message=str(e)[:500],
+                        cycle_phase="peg_monitor",
+                    )
+                except Exception:
+                    pass
 
     elapsed = _t.monotonic() - _start
     logger.error(f"peg {stablecoin_id}: {stored} rows in {elapsed:.1f}s (skipped={skipped})")
@@ -342,8 +351,19 @@ async def run_peg_monitoring() -> dict:
                             await asyncio.to_thread(
                                 _store_volatility_surface_90d_sync, stablecoin_id, vol_90d
                             )
+                except asyncio.CancelledError:
+                    raise
                 except Exception as e:
-                    logger.debug(f"90d vol surface failed for {stablecoin_id}: {e}")
+                    logger.warning(f"90d vol surface failed for {stablecoin_id}: {e}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="data_layer_run_peg_monitoring_vol_90d_failure",
+                            error_message=str(e)[:500],
+                            cycle_phase="peg_monitor",
+                        )
+                    except Exception:
+                        pass
 
             except Exception as e:
                 logger.warning(f"Peg monitoring failed for {stablecoin_id}: {e}")
@@ -355,8 +375,19 @@ async def run_peg_monitoring() -> dict:
             await asyncio.to_thread(attest_data_batch, "peg_snapshots_5m", [{"snapshots": total_snapshots, "vol_surfaces": vol_surfaces}])
             await link_batch_to_proof("peg_snapshots_5m", "peg_snapshots_5m")
             await link_batch_to_proof("volatility_surfaces", "volatility_surfaces")
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"Peg provenance failed: {e}")
+        logger.warning(f"Peg provenance failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_run_peg_monitoring_provenance_failure",
+                error_message=str(e)[:500],
+                cycle_phase="peg_monitor",
+            )
+        except Exception:
+            pass
 
     logger.info(
         f"Peg monitoring complete: {total_snapshots} snapshots, "
@@ -368,8 +399,19 @@ async def run_peg_monitoring() -> dict:
     if micro_depegs:
         try:
             await asyncio.to_thread(_emit_depeg_signals_sync, micro_depegs)
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.debug(f"Micro-depeg signal emission failed: {e}")
+            logger.warning(f"Micro-depeg signal emission failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="data_layer_run_peg_monitoring_signal_emission_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="peg_monitor",
+                )
+            except Exception:
+                pass
 
     return {
         "stablecoins_monitored": len(rows),

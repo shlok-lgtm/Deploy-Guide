@@ -380,8 +380,19 @@ async def run_liquidity_collection() -> dict:
         if total_records > 0:
             await asyncio.to_thread(attest_data_batch, "liquidity_depth", [{"records": total_records, "cex": total_cex, "dex": total_dex}])
             await link_batch_to_proof("liquidity_depth", "liquidity_depth")
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"Liquidity provenance failed: {e}")
+        logger.warning(f"Liquidity provenance failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_run_liquidity_collection_provenance_failure",
+                error_message=str(e)[:500],
+                cycle_phase="liquidity_collector",
+            )
+        except Exception:
+            pass
 
     logger.error(
         f"[liquidity_depth] SUMMARY: stablecoins={stablecoins_processed}, "

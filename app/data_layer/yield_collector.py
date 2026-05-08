@@ -272,8 +272,19 @@ async def run_yield_collection() -> dict:
         if snapshots:
             await asyncio.to_thread(attest_data_batch, "yield_snapshots", [{"pools": len(snapshots)}])
             await link_batch_to_proof("yield_snapshots", "yield_snapshots")
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"Yield provenance failed: {e}")
+        logger.warning(f"Yield provenance failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_run_yield_collection_provenance_failure",
+                error_message=str(e)[:500],
+                cycle_phase="yield_collector",
+            )
+        except Exception:
+            pass
 
     logger.info(
         f"Yield collection complete: {len(snapshots)} snapshots from "

@@ -296,8 +296,19 @@ async def run_extended_5min_pulls() -> dict:
         from app.data_layer.provenance_scaling import attest_data_batch
         if total_records > 0:
             await asyncio.to_thread(attest_data_batch, "market_chart_history", [{"records": total_records, "entities": entities_processed, "type": "circle7_5min"}])
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"[markets_collector] attestation failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_run_extended_5min_pulls_attestation_failure",
+                error_message=str(e)[:500],
+                cycle_phase="markets_collector",
+            )
+        except Exception:
+            pass
 
     logger.info(
         f"Extended 5-min pulls: {total_records} records from "

@@ -214,8 +214,19 @@ async def _attest_capture_status(status: str, note: str, gap_seconds: int | None
             """,
             ("mempool_capture_status", status, content_hash, 1, "mempool-v0.1.0"),
         )
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"[mempool_watcher] capture-status attestation skipped: {e}")
+        logger.warning(f"[mempool_watcher] capture-status attestation skipped: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer__attest_capture_status_attestation_failure",
+                error_message=str(e)[:500],
+                cycle_phase="mempool_watcher",
+            )
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -270,8 +281,19 @@ def _insert_observation(tx: dict) -> bool:
             ),
         )
         return True
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"[mempool_watcher] insert failed: {type(e).__name__}: {e}")
+        logger.warning(f"[mempool_watcher] insert failed: {type(e).__name__}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer__insert_observation_insert_failure",
+                error_message=str(e)[:500],
+                cycle_phase="mempool_watcher",
+            )
+        except Exception:
+            pass
         return False
 
 
@@ -293,8 +315,19 @@ def _attest_observation(tx_hash: str, seen_at_ms: int) -> None:
             """,
             ("mempool_observations", tx_hash, content_hash, 1, "mempool-v0.1.0"),
         )
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"[mempool_watcher] observation attestation failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer__attest_observation_attestation_failure",
+                error_message=str(e)[:500],
+                cycle_phase="mempool_watcher",
+            )
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -622,8 +655,19 @@ async def emit_24h_summary() -> None:
                OR confirmed_at > NOW() - INTERVAL '24 hours'
             """
         )
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"[mempool_observations] 24h SUMMARY skipped: {e}")
+        logger.warning(f"[mempool_observations] 24h SUMMARY skipped: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_emit_24h_summary_query_failure",
+                error_message=str(e)[:500],
+                cycle_phase="mempool_watcher",
+            )
+        except Exception:
+            pass
         return
 
     if not summary or not summary.get("captured"):

@@ -264,8 +264,19 @@ async def run_holder_discovery() -> dict:
         from app.data_layer.provenance_scaling import attest_data_batch
         if total_discovered > 0:
             await asyncio.to_thread(attest_data_batch, "wallet_holdings", [{"discovered": total_discovered, "seeded": total_seeded}])
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"[holder_discovery] attestation failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_run_holder_discovery_attestation_failure",
+                error_message=str(e)[:500],
+                cycle_phase="holder_discovery",
+            )
+        except Exception:
+            pass
 
     logger.info(
         f"Holder discovery complete: {total_discovered} new addresses across "
