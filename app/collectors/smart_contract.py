@@ -135,8 +135,19 @@ async def _fetch_abi(client: httpx.AsyncClient, address: str, chain: str = "ethe
         data = resp.json()
         if data.get("status") == "1" and data.get("result", "").startswith("["):
             return json.loads(data["result"])
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"ABI fetch failed for {address}: {e}")
+        logger.warning(f"ABI fetch failed for {address}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__fetch_abi_failure",
+                error_message=str(e)[:500],
+                cycle_phase="smart_contract",
+            )
+        except Exception:
+            pass
     return []
 
 
@@ -160,8 +171,19 @@ async def read_timelock_delay(client: httpx.AsyncClient, address: str, chain: st
             delay_seconds = int(result, 16)
             delay_hours = delay_seconds / 3600
             return {"dao_timelock_hours": round(delay_hours, 2)}
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"read_timelock_delay failed for {address}: {e}")
+        logger.warning(f"read_timelock_delay failed for {address}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_read_timelock_delay_failure",
+                error_message=str(e)[:500],
+                cycle_phase="smart_contract",
+            )
+        except Exception:
+            pass
     return None
 
 
@@ -192,8 +214,19 @@ async def read_multisig_config(client: httpx.AsyncClient, address: str, chain: s
         owner_count = int(hex_data[64:128], 16)
 
         return {"signer_count": owner_count, "threshold": threshold}
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"read_multisig_config failed for {address}: {e}")
+        logger.warning(f"read_multisig_config failed for {address}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_read_multisig_config_failure",
+                error_message=str(e)[:500],
+                cycle_phase="smart_contract",
+            )
+        except Exception:
+            pass
     return None
 
 
@@ -222,8 +255,19 @@ async def detect_proxy_pattern(client: httpx.AsyncClient, address: str, chain: s
             "implementation": implementation,
             "has_admin": has_admin,
         }
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"detect_proxy_pattern failed for {address}: {e}")
+        logger.warning(f"detect_proxy_pattern failed for {address}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_detect_proxy_pattern_failure",
+                error_message=str(e)[:500],
+                cycle_phase="smart_contract",
+            )
+        except Exception:
+            pass
     return None
 
 
@@ -253,8 +297,19 @@ async def read_access_control(client: httpx.AsyncClient, address: str, chain: st
             role_count = 2
 
         return {"has_access_control": has_ac, "role_count": role_count}
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"read_access_control failed for {address}: {e}")
+        logger.warning(f"read_access_control failed for {address}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_read_access_control_failure",
+                error_message=str(e)[:500],
+                cycle_phase="smart_contract",
+            )
+        except Exception:
+            pass
     return None
 
 
@@ -282,8 +337,19 @@ async def detect_emergency_mechanism(client: httpx.AsyncClient, address: str, ch
             "has_emergency_withdraw": has_emergency,
             "has_circuit_breaker": has_circuit,
         }
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"detect_emergency_mechanism failed for {address}: {e}")
+        logger.warning(f"detect_emergency_mechanism failed for {address}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_detect_emergency_mechanism_failure",
+                error_message=str(e)[:500],
+                cycle_phase="smart_contract",
+            )
+        except Exception:
+            pass
     return None
 
 
@@ -325,8 +391,19 @@ async def read_guardian_set(client: httpx.AsyncClient, address: str, chain: str 
                     count = int(hex_data[64:128], 16)
                     if 0 < count < 200:
                         return {"guardian_count": count}
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"read_guardian_set failed for {address}: {e}")
+        logger.warning(f"read_guardian_set failed for {address}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_read_guardian_set_failure",
+                error_message=str(e)[:500],
+                cycle_phase="smart_contract",
+            )
+        except Exception:
+            pass
     return None
 
 
@@ -510,8 +587,19 @@ async def collect_governance_reads(client: httpx.AsyncClient) -> list[dict]:
                     })
 
             all_components.extend(entity_components)
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.debug(f"Governance reads failed for protocol {slug}: {e}")
+            logger.warning(f"Governance reads failed for protocol {slug}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors_collect_governance_reads_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="smart_contract",
+                )
+            except Exception:
+                pass
 
     # --- Bridge reads ---
     for slug, contracts in registry.get("bridges", {}).items():
@@ -557,8 +645,19 @@ async def collect_governance_reads(client: httpx.AsyncClient) -> list[dict]:
                 })
 
             all_components.extend(entity_components)
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.debug(f"Governance reads failed for bridge {slug}: {e}")
+            logger.warning(f"Governance reads failed for bridge {slug}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors_collect_governance_reads_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="smart_contract",
+                )
+            except Exception:
+                pass
 
     # Attest
     try:
@@ -569,8 +668,19 @@ async def collect_governance_reads(client: httpx.AsyncClient) -> list[dict]:
                 {"slug": c.get("entity_slug"), "id": c.get("component_id"), "score": c.get("normalized_score")}
                 for c in all_components
             ])
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"collect governance reads failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_collect_governance_reads_failure",
+                error_message=str(e)[:500],
+                cycle_phase="smart_contract",
+            )
+        except Exception:
+            pass
 
     return all_components
 
@@ -819,7 +929,19 @@ async def collect_smart_contract_components(
         if components:
             _loop = asyncio.get_event_loop()
             await _loop.run_in_executor(None, partial(attest_state, "smart_contracts", [{"id": c.get("component_id"), "score": c.get("normalized_score")} for c in components], entity_id=stablecoin_id))
-    except Exception as ae:
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"collect smart contract components failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_collect_smart_contract_components_failure",
+                error_message=str(e)[:500],
+                cycle_phase="smart_contract",
+            )
+        except Exception:
+            pass
         pass  # attestation is non-critical
 
     return components
@@ -887,8 +1009,19 @@ async def _check_proxy_pattern(
                     impl_verified = await _check_contract_verified(client, impl, api_key)
                     result["implementation_verified"] = impl_verified
 
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"Proxy check failed for {contract}: {e}")
+        logger.warning(f"Proxy check failed for {contract}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__check_proxy_pattern_failure",
+                error_message=str(e)[:500],
+                cycle_phase="smart_contract",
+            )
+        except Exception:
+            pass
 
     return result
 
@@ -940,8 +1073,19 @@ async def _detect_admin_functions(
                         result["has_timelock"] = True
 
                 result["admin_function_count"] = admin_count
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"ABI admin detection failed for {contract}: {e}")
+        logger.warning(f"ABI admin detection failed for {contract}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__detect_admin_functions_failure",
+                error_message=str(e)[:500],
+                cycle_phase="smart_contract",
+            )
+        except Exception:
+            pass
 
     return result
 

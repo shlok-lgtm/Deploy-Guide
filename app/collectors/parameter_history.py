@@ -61,7 +61,16 @@ def _eth_call_sync(contract: str, data: str, chain: str = "ethereum") -> str:
             if result and result != "0x":
                 return result
         except Exception as e:
-            logger.debug(f"RPC eth_call failed for {contract}: {e}")
+            logger.warning(f"RPC eth_call failed for {contract}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors__eth_call_sync_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="parameter_history",
+                )
+            except Exception:
+                pass
 
     # Etherscan fallback (ethereum only)
     if chain == "ethereum":
@@ -84,7 +93,16 @@ def _eth_call_sync(contract: str, data: str, chain: str = "ethereum") -> str:
                 if result and result != "0x":
                     return result
             except Exception as e:
-                logger.debug(f"Etherscan eth_call fallback failed: {e}")
+                logger.warning(f"Etherscan eth_call fallback failed: {e}")
+                try:
+                    from app.worker import _record_cycle_error
+                    _record_cycle_error(
+                        error_type="collectors__eth_call_sync_failure",
+                        error_message=str(e)[:500],
+                        cycle_phase="parameter_history",
+                    )
+                except Exception:
+                    pass
 
     return "0x"
 
@@ -249,8 +267,19 @@ async def _get_concurrent_scores(protocol_slug: str, asset_symbol: str | None) -
         )
         if psi_row:
             context["concurrent_psi_score"] = float(psi_row["overall_score"])
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"get concurrent scores failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__get_concurrent_scores_failure",
+                error_message=str(e)[:500],
+                cycle_phase="parameter_history",
+            )
+        except Exception:
+            pass
 
     if not asset_symbol:
         return context
@@ -265,8 +294,19 @@ async def _get_concurrent_scores(protocol_slug: str, asset_symbol: str | None) -
         )
         if sii_row:
             context["concurrent_sii_score"] = float(sii_row["overall_score"])
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"get concurrent scores failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__get_concurrent_scores_failure",
+                error_message=str(e)[:500],
+                cycle_phase="parameter_history",
+            )
+        except Exception:
+            pass
 
     # 7-day SII trend
     try:
@@ -281,8 +321,19 @@ async def _get_concurrent_scores(protocol_slug: str, asset_symbol: str | None) -
             first = float(trend_rows[0]["overall_score"])
             last = float(trend_rows[-1]["overall_score"])
             context["sii_trend_7d"] = round(last - first, 2)
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"get concurrent scores failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__get_concurrent_scores_failure",
+                error_message=str(e)[:500],
+                cycle_phase="parameter_history",
+            )
+        except Exception:
+            pass
 
     # Hours since last SII change (>1 point move)
     try:
@@ -300,8 +351,19 @@ async def _get_concurrent_scores(protocol_slug: str, asset_symbol: str | None) -
                     move_date, datetime.min.time(), tzinfo=timezone.utc
                 )
                 context["hours_since_last_sii_change"] = round(delta.total_seconds() / 3600, 2)
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"get concurrent scores failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__get_concurrent_scores_failure",
+                error_message=str(e)[:500],
+                cycle_phase="parameter_history",
+            )
+        except Exception:
+            pass
 
     # Determine change context
     trend = context.get("sii_trend_7d")
@@ -378,8 +440,19 @@ async def _handle_parameter_change(
             "change_context": score_ctx["change_context"],
             "changed_at": now.isoformat(),
         }], str(protocol_id))
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"handle parameter change failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__handle_parameter_change_failure",
+                error_message=str(e)[:500],
+                cycle_phase="parameter_history",
+            )
+        except Exception:
+            pass
 
     logger.info(
         f"PARAMETER CHANGE: {protocol_slug} {param_spec['parameter_name']} "
@@ -443,8 +516,19 @@ async def _store_daily_snapshot(protocol_slug: str, protocol_id: int, results: d
             "snapshot_date": today.isoformat(),
             "parameter_count": len(param_dict),
         }], str(protocol_id))
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"store daily snapshot failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__store_daily_snapshot_failure",
+                error_message=str(e)[:500],
+                cycle_phase="parameter_history",
+            )
+        except Exception:
+            pass
 
     results["snapshots_stored"] += 1
 
@@ -537,8 +621,19 @@ async def check_parameter_changes() -> dict:
 
                     await asyncio.sleep(0.3)  # Rate limit RPC calls
 
+                except asyncio.CancelledError:
+                    raise
                 except Exception as e:
-                    logger.debug(f"Parameter read failed: {protocol_slug}/{spec['parameter_key']}: {e}")
+                    logger.warning(f"Parameter read failed: {protocol_slug}/{spec['parameter_key']}: {e}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="collectors_check_parameter_changes_failure",
+                            error_message=str(e)[:500],
+                            cycle_phase="parameter_history",
+                        )
+                    except Exception:
+                        pass
 
             results["protocols_checked"] += 1
 
@@ -565,8 +660,19 @@ async def collect_parameter_history() -> dict:
     for protocol_slug in PROTOCOL_PARAMETER_REGISTRY:
         try:
             await _store_daily_snapshot(protocol_slug, 0, results)
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.debug(f"Parameter snapshot failed for {protocol_slug}: {e}")
+            logger.warning(f"Parameter snapshot failed for {protocol_slug}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors_collect_parameter_history_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="parameter_history",
+                )
+            except Exception:
+                pass
 
     logger.info(
         f"Parameter history: protocols={results['protocols_checked']} "

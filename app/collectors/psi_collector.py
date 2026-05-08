@@ -85,8 +85,17 @@ def get_solana_program_authority(program_id: str) -> dict | None:
                     status=_status,
                     latency_ms=int((time.monotonic() - _t0) * 1000),
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"get solana program authority failed: {e}")
+                try:
+                    from app.worker import _record_cycle_error
+                    _record_cycle_error(
+                        error_type="collectors_get_solana_program_authority_failure",
+                        error_message=str(e)[:500],
+                        cycle_phase="psi_collector",
+                    )
+                except Exception:
+                    pass
         data = resp.json()
         account = data.get("result", {}).get("value")
         if not account:
@@ -124,8 +133,17 @@ def get_solana_program_authority(program_id: str) -> dict | None:
                             status=_status2,
                             latency_ms=int((time.monotonic() - _t1) * 1000),
                         )
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"get solana program authority failed: {e}")
+                        try:
+                            from app.worker import _record_cycle_error
+                            _record_cycle_error(
+                                error_type="collectors_get_solana_program_authority_failure",
+                                error_message=str(e)[:500],
+                                cycle_phase="psi_collector",
+                            )
+                        except Exception:
+                            pass
                 pd_data = pd_resp.json()
                 pd_account = pd_data.get("result", {}).get("value")
                 if pd_account:
@@ -323,8 +341,17 @@ def fetch_protocol_data(slug):
                 status=_status,
                 latency_ms=int((time.monotonic() - _t0) * 1000),
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"fetch protocol data failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors_fetch_protocol_data_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="psi_collector",
+                )
+            except Exception:
+                pass
 
 
 def fetch_fees_data(slug):
@@ -352,8 +379,17 @@ def fetch_fees_data(slug):
                 status=_status,
                 latency_ms=int((time.monotonic() - _t0) * 1000),
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"fetch fees data failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors_fetch_fees_data_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="psi_collector",
+                )
+            except Exception:
+                pass
     return None
 
 
@@ -380,8 +416,17 @@ def fetch_treasury_data(slug):
                 status=_status,
                 latency_ms=int((time.monotonic() - _t0) * 1000),
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"fetch treasury data failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors_fetch_treasury_data_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="psi_collector",
+                )
+            except Exception:
+                pass
     return None
 
 
@@ -458,8 +503,17 @@ def fetch_coingecko_token(gecko_id):
                 status=_status,
                 latency_ms=int((time.monotonic() - _t0) * 1000),
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"fetch coingecko token failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors_fetch_coingecko_token_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="psi_collector",
+                )
+            except Exception:
+                pass
     return None
 
 
@@ -506,8 +560,17 @@ def fetch_snapshot_proposals(space_id):
                 status=_status,
                 latency_ms=int((time.monotonic() - _t0) * 1000),
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"fetch snapshot proposals failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors_fetch_snapshot_proposals_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="psi_collector",
+                )
+            except Exception:
+                pass
     return None
 
 
@@ -735,7 +798,16 @@ def score_protocol(slug):
         from app.collectors.governance_detector import compute_governance_stability
         raw_values["governance_stability"] = compute_governance_stability(slug)
     except Exception as e:
-        logger.debug(f"governance_stability unavailable for {slug}: {e}")
+        logger.warning(f"governance_stability unavailable for {slug}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_score_protocol_failure",
+                error_message=str(e)[:500],
+                cycle_phase="psi_collector",
+            )
+        except Exception:
+            pass
 
     # Collateral coverage ratio — pre-computed by collect_coverage_and_markets()
     try:
@@ -755,14 +827,32 @@ def score_protocol(slug):
                 float(coverage_row["collateral_coverage_ratio"])
             )
     except Exception as e:
-        logger.debug(f"collateral_coverage_ratio unavailable for {slug}: {e}")
+        logger.warning(f"collateral_coverage_ratio unavailable for {slug}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_score_protocol_failure",
+                error_message=str(e)[:500],
+                cycle_phase="psi_collector",
+            )
+        except Exception:
+            pass
 
     # Market listing velocity — pre-computed from market snapshots
     try:
         from app.collectors.collateral_coverage import compute_market_listing_velocity
         raw_values["market_listing_velocity"] = compute_market_listing_velocity(slug)
     except Exception as e:
-        logger.debug(f"market_listing_velocity unavailable for {slug}: {e}")
+        logger.warning(f"market_listing_velocity unavailable for {slug}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_score_protocol_failure",
+                error_message=str(e)[:500],
+                cycle_phase="psi_collector",
+            )
+        except Exception:
+            pass
 
     result = score_entity(PSI_V01_DEFINITION, raw_values)
     result["protocol_slug"] = slug
@@ -826,7 +916,16 @@ def get_scoring_protocols():
             if row["slug"] not in protocols:
                 protocols.append(row["slug"])
     except Exception as e:
-        logger.debug(f"Could not fetch promoted protocols from backlog: {e}")
+        logger.warning(f"Could not fetch promoted protocols from backlog: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_get_scoring_protocols_failure",
+                error_message=str(e)[:500],
+                cycle_phase="psi_collector",
+            )
+        except Exception:
+            pass
     return protocols
 
 
@@ -840,7 +939,16 @@ def _get_sii_score_map():
         """)
         return {row["symbol"].upper(): float(row["overall_score"]) for row in rows if row.get("overall_score")}
     except Exception as e:
-        logger.debug(f"Could not fetch SII scores: {e}")
+        logger.warning(f"Could not fetch SII scores: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__get_sii_score_map_failure",
+                error_message=str(e)[:500],
+                cycle_phase="psi_collector",
+            )
+        except Exception:
+            pass
         return {}
 
 
@@ -877,7 +985,16 @@ def store_treasury_holdings(slug, token_holdings):
                 sii_score,
             ))
         except Exception as e:
-            logger.debug(f"Failed to store holding {sym} for {slug}: {e}")
+            logger.warning(f"Failed to store holding {sym} for {slug}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors_store_treasury_holdings_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="psi_collector",
+                )
+            except Exception:
+                pass
 
 
 # =========================================================================
@@ -969,8 +1086,17 @@ def fetch_protocol_pools():
                 status=_status,
                 latency_ms=int((time.monotonic() - _t0) * 1000),
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"fetch protocol pools failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors_fetch_protocol_pools_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="psi_collector",
+                )
+            except Exception:
+                pass
     return []
 
 
@@ -1114,7 +1240,16 @@ def collect_collateral_exposure():
             ))
             stored += 1
         except Exception as e:
-            logger.debug(f"Failed to store collateral {row['token_symbol']} for {row['protocol_slug']}: {e}")
+            logger.warning(f"Failed to store collateral {row['token_symbol']} for {row['protocol_slug']}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors_collect_collateral_exposure_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="psi_collector",
+                )
+            except Exception:
+                pass
 
     logger.info(f"Collateral exposure: stored {stored} aggregated rows from {len(matched_pools)} pool matches")
     return list(agg.values())
@@ -1224,8 +1359,17 @@ def discover_protocols():
         """)
         for row in already_promoted:
             known_slugs.add(row["slug"])
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"discover protocols failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_discover_protocols_failure",
+                error_message=str(e)[:500],
+                cycle_phase="psi_collector",
+            )
+        except Exception:
+            pass
 
     # Aggregate stablecoin TVL per unknown project
     project_exposure = {}  # project_name -> {total_stable_tvl, unscored_tvl, unscored_symbols}
@@ -1306,7 +1450,16 @@ def discover_protocols():
             ))
             discovered += 1
         except Exception as e:
-            logger.debug(f"Failed to upsert protocol backlog for {slug}: {e}")
+            logger.warning(f"Failed to upsert protocol backlog for {slug}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors_discover_protocols_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="psi_collector",
+                )
+            except Exception:
+                pass
 
     if discovered:
         logger.info(f"Protocol discovery: {discovered} protocols with >${_DISCOVERY_TVL_THRESHOLD / 1e6:.0f}M stablecoin exposure")
@@ -1654,7 +1807,16 @@ def run_psi_scoring():
                         if event_id:
                             logger.info(f"PSI event: {slug} {severity} ({delta:+.1f} pts)")
             except Exception as e:
-                logger.debug(f"PSI event generation error for {slug}: {e}")
+                logger.warning(f"PSI event generation error for {slug}: {e}")
+                try:
+                    from app.worker import _record_cycle_error
+                    _record_cycle_error(
+                        error_type="collectors_run_psi_scoring_failure",
+                        error_message=str(e)[:500],
+                        cycle_phase="psi_collector",
+                    )
+                except Exception:
+                    pass
 
             # Mark promoted backlog protocols as scored after first successful score
             if slug not in TARGET_PROTOCOLS:
@@ -1665,8 +1827,17 @@ def run_psi_scoring():
                             updated_at = NOW()
                         WHERE slug = %s AND enrichment_status = 'promoted'
                     """, (slug,))
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"run psi scoring failed: {e}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="collectors_run_psi_scoring_failure",
+                            error_message=str(e)[:500],
+                            cycle_phase="psi_collector",
+                        )
+                    except Exception:
+                        pass
 
     return results
 

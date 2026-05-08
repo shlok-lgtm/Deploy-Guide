@@ -431,7 +431,19 @@ async def collect_flows_components(
         if components:
             _attest_records = [{"id": c.get("component_id"), "score": c.get("normalized_score")} for c in components]
             await _fl.run_in_executor(None, attest_state, "flows", _attest_records, stablecoin_id)
-    except Exception:
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"collect flows components failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_collect_flows_components_failure",
+                error_message=str(e)[:500],
+                cycle_phase="flows",
+            )
+        except Exception:
+            pass
         pass  # attestation is non-critical
 
     return components

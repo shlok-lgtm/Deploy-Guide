@@ -11,6 +11,8 @@ Also provides shared utility functions used by Circle 7 collectors:
 - fetch_defillama_protocol_detail(): full protocol detail
 """
 
+import asyncio
+
 import logging
 import time
 from typing import Any
@@ -68,8 +70,19 @@ async def fetch_stablecoin_data(client: httpx.AsyncClient, coingecko_id: str) ->
                 status=_status,
                 latency_ms=int((time.monotonic() - _t0) * 1000),
             )
-        except Exception:
-            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"fetch stablecoin data failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors_fetch_stablecoin_data_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="defillama",
+                )
+            except Exception:
+                pass
 
 
 async def fetch_lending_yields(client: httpx.AsyncClient, symbol: str) -> dict:
@@ -118,8 +131,19 @@ async def fetch_lending_yields(client: httpx.AsyncClient, symbol: str) -> dict:
                 status=_status,
                 latency_ms=int((time.monotonic() - _t0) * 1000),
             )
-        except Exception:
-            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"fetch lending yields failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors_fetch_lending_yields_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="defillama",
+                )
+            except Exception:
+                pass
 
 
 async def collect_defillama_components(
@@ -251,8 +275,17 @@ def fetch_defillama_hacks() -> list[dict]:
                 status=_status,
                 latency_ms=int((time.monotonic() - _t0) * 1000),
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"fetch defillama hacks failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors_fetch_defillama_hacks_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="defillama",
+                )
+            except Exception:
+                pass
 
 
 def filter_hacks_by_name(hacks: list[dict], name: str) -> list[dict]:
@@ -409,8 +442,17 @@ def fetch_defillama_treasury(protocol: str) -> dict:
                 status=_status,
                 latency_ms=int((time.monotonic() - _t0) * 1000),
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"fetch defillama treasury failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors_fetch_defillama_treasury_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="defillama",
+                )
+            except Exception:
+                pass
 
     return result
 
@@ -461,8 +503,17 @@ def fetch_defillama_fees(protocol: str) -> dict:
                 status=_status,
                 latency_ms=int((time.monotonic() - _t0) * 1000),
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"fetch defillama fees failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors_fetch_defillama_fees_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="defillama",
+                )
+            except Exception:
+                pass
 
     return result
 
@@ -506,5 +557,14 @@ def fetch_defillama_protocol_detail(protocol: str) -> dict:
                 status=_status,
                 latency_ms=int((time.monotonic() - _t0) * 1000),
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"fetch defillama protocol detail failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors_fetch_defillama_protocol_detail_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="defillama",
+                )
+            except Exception:
+                pass

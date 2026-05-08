@@ -404,8 +404,17 @@ def _upsert_proposal(proposal: dict, protocol_id: int, protocol_slug: str, resul
                 "protocol_slug": protocol_slug,
                 "body_hash": body_hash,
             }], str(protocol_id))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"upsert proposal failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors__upsert_proposal_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="governance_proposals",
+                )
+            except Exception:
+                pass
 
         results["proposals_captured"] += 1
     else:
@@ -491,8 +500,19 @@ async def collect_governance_proposals() -> dict:
                 for proposal in proposals:
                     try:
                         await asyncio.to_thread(_upsert_proposal, proposal, protocol_id, protocol_slug, results)
+                    except asyncio.CancelledError:
+                        raise
                     except Exception as e:
-                        logger.debug(f"Failed to upsert proposal: {e}")
+                        logger.warning(f"Failed to upsert proposal: {e}")
+                        try:
+                            from app.worker import _record_cycle_error
+                            _record_cycle_error(
+                                error_type="collectors_collect_governance_proposals_failure",
+                                error_message=str(e)[:500],
+                                cycle_phase="governance_proposals",
+                            )
+                        except Exception:
+                            pass
 
             except Exception as e:
                 error_msg = f"{protocol_slug}/{source_cfg.get('type')}: {e}"

@@ -193,7 +193,16 @@ def fetch_tti_market_data(coingecko_id: str) -> dict | None:
         if resp.status_code == 200:
             return resp.json()
     except Exception as e:
-        logger.debug(f"CoinGecko TTI fetch failed for {coingecko_id}: {e}")
+        logger.warning(f"CoinGecko TTI fetch failed for {coingecko_id}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_fetch_tti_market_data_failure",
+                error_message=str(e)[:500],
+                cycle_phase="tti_collector",
+            )
+        except Exception:
+            pass
     return None
 
 
@@ -324,7 +333,16 @@ def _automate_tti_bug_bounty(entity: dict, static: dict) -> dict:
         else:
             automated["tti_bug_bounty"] = static.get("tti_bug_bounty", 20)
     except Exception as e:
-        logger.debug(f"TTI Immunefi fetch failed for {slug}: {e}")
+        logger.warning(f"TTI Immunefi fetch failed for {slug}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__automate_tti_bug_bounty_failure",
+                error_message=str(e)[:500],
+                cycle_phase="tti_collector",
+            )
+        except Exception:
+            pass
 
     return automated
 
@@ -442,7 +460,16 @@ def _automate_tti_oracle_dependency(entity: dict, static: dict) -> dict:
                     else:
                         automated["oracle_dependency"] = static.get("oracle_dependency", 50)
     except Exception as e:
-        logger.debug(f"TTI oracle dependency check failed for {entity['slug']}: {e}")
+        logger.warning(f"TTI oracle dependency check failed for {entity['slug']}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__automate_tti_oracle_dependency_failure",
+                error_message=str(e)[:500],
+                cycle_phase="tti_collector",
+            )
+        except Exception:
+            pass
 
     return automated
 
@@ -494,7 +521,16 @@ def extract_tti_raw_values(entity: dict, holder_data: dict = None) -> dict:
                     if isinstance(last, dict):
                         raw["tti_tvl"] = raw.get("tti_tvl") or last.get("totalLiquidityUSD", 0)
     except Exception as e:
-        logger.debug(f"DeFiLlama TTI fetch failed for {slug}: {e}")
+        logger.warning(f"DeFiLlama TTI fetch failed for {slug}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_extract_tti_raw_values_failure",
+                error_message=str(e)[:500],
+                cycle_phase="tti_collector",
+            )
+        except Exception:
+            pass
 
     # Etherscan holder data (if contract and holder_cache provided)
     if holder_data:
@@ -536,7 +572,16 @@ def extract_tti_raw_values(entity: dict, holder_data: dict = None) -> dict:
             disclosure_components = map_disclosure_to_components(disclosure_data, static)
             raw.update(disclosure_components)
     except Exception as e:
-        logger.debug(f"TTI disclosure automation failed for {slug}: {e}")
+        logger.warning(f"TTI disclosure automation failed for {slug}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_extract_tti_raw_values_failure",
+                error_message=str(e)[:500],
+                cycle_phase="tti_collector",
+            )
+        except Exception:
+            pass
 
     return raw
 

@@ -248,7 +248,16 @@ def fetch_tally_events(org_slug: str, since_days: int = 90) -> list[dict]:
                     filtered.append(node)
             return filtered
     except Exception as e:
-        logger.debug(f"Tally fetch failed for {org_slug}: {e}")
+        logger.warning(f"Tally fetch failed for {org_slug}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_fetch_tally_events_failure",
+                error_message=str(e)[:500],
+                cycle_phase="governance_events",
+            )
+        except Exception:
+            pass
     return []
 
 

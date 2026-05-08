@@ -149,7 +149,16 @@ def fetch_snapshot_governance_data(space_id: str) -> dict:
                     raw["proposal_pass_rate"] = 75.0  # Conservative default
 
     except Exception as e:
-        logger.debug(f"Snapshot governance data failed for {space_id}: {e}")
+        logger.warning(f"Snapshot governance data failed for {space_id}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_fetch_snapshot_governance_data_failure",
+                error_message=str(e)[:500],
+                cycle_phase="dao_collector",
+            )
+        except Exception:
+            pass
 
     time.sleep(0.5)
 
@@ -206,7 +215,16 @@ def fetch_snapshot_governance_data(space_id: str) -> dict:
                     raw["delegate_count"] = len(voter_vp)
 
     except Exception as e:
-        logger.debug(f"Snapshot voter data failed for {space_id}: {e}")
+        logger.warning(f"Snapshot voter data failed for {space_id}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_fetch_snapshot_governance_data_failure",
+                error_message=str(e)[:500],
+                cycle_phase="dao_collector",
+            )
+        except Exception:
+            pass
 
     time.sleep(0.5)
     return raw
@@ -253,7 +271,16 @@ def fetch_dao_treasury(protocol_slug: str) -> dict:
                 raw["treasury_size_usd"] = total
                 raw["treasury_diversification"] = (stablecoin_total / total) * 100
     except Exception as e:
-        logger.debug(f"Treasury fetch failed for {protocol_slug}: {e}")
+        logger.warning(f"Treasury fetch failed for {protocol_slug}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_fetch_dao_treasury_failure",
+                error_message=str(e)[:500],
+                cycle_phase="dao_collector",
+            )
+        except Exception:
+            pass
     return raw
 
 
@@ -281,7 +308,16 @@ def import_psi_governance_components(protocol_slug: str) -> dict:
             if "governance_proposals_90d" in psi_raw:
                 raw["proposal_frequency_90d"] = raw.get("proposal_frequency_90d") or psi_raw["governance_proposals_90d"]
     except Exception as e:
-        logger.debug(f"PSI governance import failed for {protocol_slug}: {e}")
+        logger.warning(f"PSI governance import failed for {protocol_slug}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_import_psi_governance_components_failure",
+                error_message=str(e)[:500],
+                cycle_phase="dao_collector",
+            )
+        except Exception:
+            pass
     return raw
 
 
@@ -466,7 +502,16 @@ def _automate_dao_multisig(entity: dict, static: dict) -> dict:
                                 f"= {config_score:.0f}"
                             )
     except Exception as e:
-        logger.debug(f"DAO multisig read failed for {entity['slug']}: {e}")
+        logger.warning(f"DAO multisig read failed for {entity['slug']}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__automate_dao_multisig_failure",
+                error_message=str(e)[:500],
+                cycle_phase="dao_collector",
+            )
+        except Exception:
+            pass
 
     return automated
 
@@ -511,7 +556,16 @@ def _automate_dao_timelock(entity: dict, static: dict) -> dict:
                         break
             time.sleep(0.15)
     except Exception as e:
-        logger.debug(f"DAO timelock read failed for {entity['slug']}: {e}")
+        logger.warning(f"DAO timelock read failed for {entity['slug']}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__automate_dao_timelock_failure",
+                error_message=str(e)[:500],
+                cycle_phase="dao_collector",
+            )
+        except Exception:
+            pass
 
     return automated
 
@@ -582,7 +636,16 @@ def _automate_dao_transparency(entity: dict, static: dict) -> dict:
             static_prf = static.get("public_reporting_frequency", 20)
             automated["public_reporting_frequency"] = max(prf_score, static_prf)
     except Exception as e:
-        logger.debug(f"DAO transparency automation failed for {entity['slug']}: {e}")
+        logger.warning(f"DAO transparency automation failed for {entity['slug']}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__automate_dao_transparency_failure",
+                error_message=str(e)[:500],
+                cycle_phase="dao_collector",
+            )
+        except Exception:
+            pass
 
     return automated
 
@@ -696,7 +759,16 @@ def _automate_dao_audit_cadence(entity: dict, static: dict) -> dict:
             if found_auditors:
                 logger.info(f"DAO audit Parallel Search {slug}: found {found_auditors}")
     except Exception as e:
-        logger.debug(f"DAO audit Parallel Search failed for {slug}: {e}")
+        logger.warning(f"DAO audit Parallel Search failed for {slug}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__automate_dao_audit_cadence_failure",
+                error_message=str(e)[:500],
+                cycle_phase="dao_collector",
+            )
+        except Exception:
+            pass
 
     # Also check known audit pages directly (supplements search results)
     for url in audit_urls:
@@ -719,7 +791,16 @@ def _automate_dao_audit_cadence(entity: dict, static: dict) -> dict:
                 found_years.add(int(y))
 
         except Exception as e:
-            logger.debug(f"DAO audit page fetch failed for {url}: {e}")
+            logger.warning(f"DAO audit page fetch failed for {url}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors__automate_dao_audit_cadence_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="dao_collector",
+                )
+            except Exception:
+                pass
             continue
 
     if not found_auditors:

@@ -79,15 +79,37 @@ async def _get_known_labels() -> dict:
         from app.collectors.etherscan import KNOWN_HOLDERS
         for addr, label, cat in KNOWN_HOLDERS:
             labels[addr.lower()] = {"label": label, "type": cat}
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"get known labels failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__get_known_labels_failure",
+                error_message=str(e)[:500],
+                cycle_phase="treasury_flows",
+            )
+        except Exception:
+            pass
     # Overlay treasury registry
     try:
         treasuries = await get_registered_treasuries()
         for t in treasuries:
             labels[t["address"].lower()] = {"label": t["entity_name"], "type": t["entity_type"]}
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"get known labels failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__get_known_labels_failure",
+                error_message=str(e)[:500],
+                cycle_phase="treasury_flows",
+            )
+        except Exception:
+            pass
     return labels
 
 
@@ -105,8 +127,19 @@ async def _get_token_price_usd(contract_address: str, decimals: int = 18) -> flo
         """, (contract_address,))
         if row and row.get("current_price"):
             return float(row["current_price"])
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"get token price usd failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__get_token_price_usd_failure",
+                error_message=str(e)[:500],
+                cycle_phase="treasury_flows",
+            )
+        except Exception:
+            pass
     # Check if known stablecoin by contract
     try:
         row = await fetch_one_async(
@@ -115,8 +148,19 @@ async def _get_token_price_usd(contract_address: str, decimals: int = 18) -> flo
         )
         if row:
             return 1.0  # Stablecoin, assume ~$1
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"get token price usd failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__get_token_price_usd_failure",
+                error_message=str(e)[:500],
+                cycle_phase="treasury_flows",
+            )
+        except Exception:
+            pass
     return 0  # Unknown token, can't price
 
 
@@ -636,4 +680,13 @@ def _store_event(wallet_address: str, event: dict):
                 ))
             conn.commit()
     except Exception as e:
-        logger.debug(f"Treasury event store failed (table may not exist yet): {e}")
+        logger.warning(f"Treasury event store failed (table may not exist yet): {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__store_event_failure",
+                error_message=str(e)[:500],
+                cycle_phase="treasury_flows",
+            )
+        except Exception:
+            pass
