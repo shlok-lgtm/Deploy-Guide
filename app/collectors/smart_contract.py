@@ -32,6 +32,7 @@ import httpx
 
 from app.database import fetch_one, fetch_one_async
 from app.api_usage_tracker import track_api_call
+from app.utils.rpc_provider import call as _rpc_call, RPCError
 
 logger = logging.getLogger(__name__)
 
@@ -47,21 +48,23 @@ CHAIN_IDS = {
     "polygon": 137,
 }
 
-# Alchemy RPC URL construction
+# RPC URL compatibility shim — actual transport is the failover router.
+_ROUTER_CHAINS = {"ethereum", "base", "arbitrum"}
+
+
 def _get_rpc_url(chain: str = "ethereum") -> str:
-    """Get Alchemy RPC URL for the given chain."""
+    """Compatibility shim. Returns a non-empty marker if the provider router
+    has Alchemy or Dwellir configured for `chain`. The actual RPC URL is
+    owned by `app.utils.rpc_provider`; callers only use this to gate-skip
+    chains with no provider available.
+    """
     alchemy_key = os.environ.get("ALCHEMY_API_KEY", "")
-    if not alchemy_key:
+    dwellir_key = os.environ.get("DWELLIR_API_KEY", "") or os.environ.get("DWELLIR_ETH_URL", "")
+    if not (alchemy_key or dwellir_key):
         return ""
-    chain_map = {
-        "ethereum": "eth-mainnet",
-        "arbitrum": "arb-mainnet",
-        "optimism": "opt-mainnet",
-        "base": "base-mainnet",
-        "polygon": "polygon-mainnet",
-    }
-    network = chain_map.get(chain, "eth-mainnet")
-    return f"https://{network}.g.alchemy.com/v2/{alchemy_key}"
+    if chain in _ROUTER_CHAINS:
+        return f"router://{chain}"
+    return ""
 
 
 def _load_contract_registry() -> dict:
@@ -86,36 +89,46 @@ EIP1967_ADMIN_SLOT = "0x7050c9e0f4ca769c69bd3a8ef740bc37934f8e2c036e5a723fd8ee04
 # On-chain reader functions
 # ============================================================================
 
-async def _eth_call(client: httpx.AsyncClient, rpc_url: str, to: str, data: str) -> str:
-    """Execute a raw eth_call via Alchemy RPC. Returns hex result or empty string."""
+async def _eth_call(client: httpx.AsyncClient, rpc_url: str, to: str, data: str,
+                    chain: str = "ethereum") -> str:
+    """Execute eth_call through the Dwellir failover router. Returns hex result
+    or '0x' on any error.
+
+    Routes via `app.utils.rpc_provider.call()` (Alchemy primary, Dwellir
+    failover on 429/5xx). The `rpc_url` arg is preserved for signature
+    compatibility but is no longer the transport — the router owns URL
+    resolution. Returns '0x' on error so callers' existing skip logic applies.
+    """
+    if chain not in _ROUTER_CHAINS:
+        return "0x"
     try:
-        resp = await client.post(rpc_url, json={
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "eth_call",
-            "params": [{"to": to, "data": data}, "latest"],
-        }, timeout=15)
-        result = resp.json()
-        return result.get("result", "0x")
+        result = await _rpc_call(
+            "eth_call", [{"to": to, "data": data}, "latest"],
+            chain=chain, client=client, timeout=15.0,
+        )
+        return result if result else "0x"
     except Exception as e:
         logger.debug(f"eth_call failed for {to}: {e}")
         return "0x"
 
 
-async def _get_storage_at(client: httpx.AsyncClient, rpc_url: str, address: str, slot: str) -> str:
-    """Read storage slot via eth_getStorageAt."""
+async def _get_storage_at(client: httpx.AsyncClient, rpc_url: str, address: str,
+                          slot: str, chain: str = "ethereum") -> str:
+    """Read storage slot via the Dwellir failover router. Returns 32 zero bytes
+    on any error so EIP-1967 detection degrades gracefully.
+    """
+    zero = "0x" + "00" * 32
+    if chain not in _ROUTER_CHAINS:
+        return zero
     try:
-        resp = await client.post(rpc_url, json={
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "eth_getStorageAt",
-            "params": [address, slot, "latest"],
-        }, timeout=15)
-        result = resp.json()
-        return result.get("result", "0x" + "00" * 32)
+        result = await _rpc_call(
+            "eth_getStorageAt", [address, slot, "latest"],
+            chain=chain, client=client, timeout=15.0,
+        )
+        return result if result else zero
     except Exception as e:
         logger.debug(f"eth_getStorageAt failed for {address} slot {slot}: {e}")
-        return "0x" + "00" * 32
+        return zero
 
 
 async def _fetch_abi(client: httpx.AsyncClient, address: str, chain: str = "ethereum") -> list:
@@ -151,10 +164,10 @@ async def read_timelock_delay(client: httpx.AsyncClient, address: str, chain: st
         return None
     try:
         # delay() selector: 0x6a42b8f8
-        result = await _eth_call(client, rpc_url, address, "0x6a42b8f8")
+        result = await _eth_call(client, rpc_url, address, "0x6a42b8f8", chain=chain)
         if result == "0x" or result == "0x" + "00" * 32:
             # getDelay() selector: 0xcebc9a82
-            result = await _eth_call(client, rpc_url, address, "0xcebc9a82")
+            result = await _eth_call(client, rpc_url, address, "0xcebc9a82", chain=chain)
 
         if result and result != "0x" and result != "0x" + "00" * 32:
             delay_seconds = int(result, 16)
@@ -175,13 +188,13 @@ async def read_multisig_config(client: httpx.AsyncClient, address: str, chain: s
         return None
     try:
         # getThreshold() selector: 0xe75235b8
-        threshold_result = await _eth_call(client, rpc_url, address, "0xe75235b8")
+        threshold_result = await _eth_call(client, rpc_url, address, "0xe75235b8", chain=chain)
         if not threshold_result or threshold_result == "0x" or threshold_result == "0x" + "00" * 32:
             return None
         threshold = int(threshold_result, 16)
 
         # getOwners() selector: 0xa0e67e2b
-        owners_result = await _eth_call(client, rpc_url, address, "0xa0e67e2b")
+        owners_result = await _eth_call(client, rpc_url, address, "0xa0e67e2b", chain=chain)
         if not owners_result or owners_result == "0x":
             return None
 
@@ -206,8 +219,8 @@ async def detect_proxy_pattern(client: httpx.AsyncClient, address: str, chain: s
     if not rpc_url or not address:
         return None
     try:
-        impl_slot = await _get_storage_at(client, rpc_url, address, EIP1967_IMPLEMENTATION_SLOT)
-        admin_slot = await _get_storage_at(client, rpc_url, address, EIP1967_ADMIN_SLOT)
+        impl_slot = await _get_storage_at(client, rpc_url, address, EIP1967_IMPLEMENTATION_SLOT, chain=chain)
+        admin_slot = await _get_storage_at(client, rpc_url, address, EIP1967_ADMIN_SLOT, chain=chain)
 
         zero = "0x" + "00" * 32
         is_proxy = impl_slot != zero and impl_slot != "0x"
@@ -300,13 +313,13 @@ async def read_guardian_set(client: httpx.AsyncClient, address: str, chain: str 
     try:
         if bridge_type == "wormhole":
             # getCurrentGuardianSetIndex() selector: 0x1cfe7951
-            idx_result = await _eth_call(client, rpc_url, address, "0x1cfe7951")
+            idx_result = await _eth_call(client, rpc_url, address, "0x1cfe7951", chain=chain)
             if idx_result and idx_result != "0x":
                 set_index = int(idx_result, 16)
                 # getCurrentGuardianSet() doesn't exist as a simple call,
                 # use getGuardianSet(uint32) selector: 0xf951975a + index
                 data = "0xf951975a" + hex(set_index)[2:].zfill(64)
-                gs_result = await _eth_call(client, rpc_url, address, data)
+                gs_result = await _eth_call(client, rpc_url, address, data, chain=chain)
                 if gs_result and len(gs_result) > 130:
                     # Dynamic array: parse length from the returned tuple
                     hex_data = gs_result[2:]
@@ -318,7 +331,7 @@ async def read_guardian_set(client: httpx.AsyncClient, address: str, chain: str 
                             return {"guardian_count": guardian_count}
         else:
             # Generic: try getGuardians() = 0x9a8a0592
-            result = await _eth_call(client, rpc_url, address, "0x9a8a0592")
+            result = await _eth_call(client, rpc_url, address, "0x9a8a0592", chain=chain)
             if result and result != "0x" and len(result) > 130:
                 hex_data = result[2:]
                 if len(hex_data) >= 128:
