@@ -5,6 +5,7 @@ Monitors on-chain parameter changes for DeFi protocols via Etherscan.
 Tracks admin/governance contract interactions that modify risk parameters.
 """
 
+import asyncio
 import logging
 import os
 import time
@@ -202,8 +203,19 @@ def collect_parameter_changes():
                         input_data[:10], address.lower(), detected_at,
                     ))
                     total_stored += 1
+                except asyncio.CancelledError:
+                    raise
                 except Exception as e:
-                    logger.debug(f"Failed to store param change {tx_hash}: {e}")
+                    logger.warning(f"Failed to store param change {tx_hash}: {e}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="rpi_collect_parameter_changes_store_failure",
+                            error_message=str(e)[:500],
+                            cycle_phase="rpi_parameter_collector",
+                        )
+                    except Exception:
+                        pass
 
     logger.info(f"RPI parameter collector: {total_stored} changes stored")
     return total_stored

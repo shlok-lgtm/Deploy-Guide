@@ -14,6 +14,7 @@ Data sources:
 - documentation_depth: manual assessment of public risk docs
 """
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -352,8 +353,19 @@ def seed_rpi_data():
                 incident["source_url"],
             ))
             seeded += 1
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.debug(f"Failed to seed incident: {e}")
+            logger.warning(f"Failed to seed incident: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="rpi_seed_rpi_data_incident_insert_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="rpi_seed_data",
+                )
+            except Exception:
+                pass
 
     # Seed lens components
     for slug in RPI_TARGET_PROTOCOLS:

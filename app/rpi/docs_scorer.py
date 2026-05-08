@@ -10,6 +10,7 @@ to score documentation depth. Stores evidence (URL + snippet) for each criterion
 Automates the documentation_depth lens component (risk_transparency lens).
 """
 
+import asyncio
 import logging
 import re
 import time
@@ -90,8 +91,19 @@ def _fetch_page(url: str) -> str | None:
             # Strip HTML tags for keyword matching
             text = re.sub(r'<[^>]+>', ' ', resp.text)
             return re.sub(r'\s+', ' ', text).strip()
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"Failed to fetch {url}: {e}")
+        logger.warning(f"Failed to fetch {url}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="rpi_fetch_page_request_failure",
+                error_message=str(e)[:500],
+                cycle_phase="rpi_docs_scorer",
+            )
+        except Exception:
+            pass
     return None
 
 
@@ -149,8 +161,19 @@ def score_protocol_docs(protocol_slug: str, docs_url: str = None) -> dict:
                 )
                 if row and row.get("docs_url"):
                     docs_url = row["docs_url"]
-            except Exception:
-                pass
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(f"score_protocol_docs config lookup failed for {protocol_slug}: {e}")
+                try:
+                    from app.worker import _record_cycle_error
+                    _record_cycle_error(
+                        error_type="rpi_score_protocol_docs_config_lookup_failure",
+                        error_message=str(e)[:500],
+                        cycle_phase="rpi_docs_scorer",
+                    )
+                except Exception:
+                    pass
 
     if not docs_url:
         logger.debug(f"No docs URL for {protocol_slug}")
@@ -183,8 +206,19 @@ def score_protocol_docs(protocol_slug: str, docs_url: str = None) -> dict:
                     scored_at = NOW()
             """, (protocol_slug, criterion_id, score, evidence_url,
                   snippet[:200] if snippet else None))
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.debug(f"Failed to store doc score for {protocol_slug}/{criterion_id}: {e}")
+            logger.warning(f"Failed to store doc score for {protocol_slug}/{criterion_id}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="rpi_score_protocol_docs_store_score_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="rpi_docs_scorer",
+                )
+            except Exception:
+                pass
 
     return {
         "protocol_slug": protocol_slug,
