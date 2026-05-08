@@ -18,6 +18,7 @@ import httpx
 
 from app.database import fetch_all, fetch_all_async, fetch_one, get_cursor
 from app.api_usage_tracker import track_api_call
+from app.utils.rpc_provider import call as _rpc_call, RPCError
 
 logger = logging.getLogger(__name__)
 
@@ -37,36 +38,32 @@ def _content_hash(oracle_id: str, round_id: int, updated_at_block: int) -> str:
 
 
 def _get_rpc_url(chain: str) -> str:
+    """Compatibility shim: returns a non-empty marker if Alchemy or Dwellir is
+    configured for `chain`. The actual RPC URL is owned by the rpc_provider
+    router; callers only use this to gate-skip oracles whose chain has no
+    provider configured.
+    """
     alchemy_key = os.environ.get("ALCHEMY_API_KEY", "")
-    if alchemy_key:
-        chain_map = {"ethereum": "eth-mainnet", "base": "base-mainnet", "arbitrum": "arb-mainnet"}
-        network = chain_map.get(chain)
-        if network:
-            return f"https://{network}.g.alchemy.com/v2/{alchemy_key}"
+    dwellir_key = os.environ.get("DWELLIR_API_KEY", "") or os.environ.get("DWELLIR_ETH_URL", "")
+    if alchemy_key or dwellir_key:
+        if chain in ("ethereum", "base", "arbitrum"):
+            return f"router://{chain}"
     return ""
 
 
-async def _eth_call(client: httpx.AsyncClient, rpc_url: str, to: str, data: str) -> str:
-    _t0 = time.monotonic()
-    _status = None
-    try:
-        resp = await client.post(rpc_url, json={
-            "jsonrpc": "2.0", "id": 1, "method": "eth_call",
-            "params": [{"to": to, "data": data}, "latest"],
-        })
-        _status = resp.status_code
-    except Exception:
-        _status = 0
-        raise
-    finally:
-        try:
-            track_api_call(provider="alchemy", endpoint="eth_call", caller="data_layer.oracle_cadence_collector", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
-        except Exception:
-            pass
-    result = resp.json()
-    if "error" in result:
-        raise Exception(result["error"].get("message", str(result["error"])))
-    return result.get("result", "0x")
+async def _eth_call(client: httpx.AsyncClient, rpc_url: str, to: str, data: str,
+                    chain: str = "ethereum") -> str:
+    """eth_call routed through the Dwellir failover router. The `rpc_url`
+    arg is preserved for signature compatibility but is no longer the
+    transport — the router owns URL resolution and provider failover.
+    Raises on RPC error so the caller's existing try/except (which counts
+    the failure and continues) preserves its semantics.
+    """
+    result = await _rpc_call(
+        "eth_call", [{"to": to, "data": data}, "latest"],
+        chain=chain, client=client, timeout=15.0,
+    )
+    return result if result else "0x"
 
 
 def _parse_round_data(hex_result: str) -> tuple[int, int, int, int, int]:
@@ -130,7 +127,7 @@ async def _sample_oracles(client: httpx.AsyncClient) -> dict:
             from app.shared_rate_limiter import rate_limiter
             await rate_limiter.acquire("alchemy")
 
-            raw = await _eth_call(client, rpc_url, oracle_addr, LATESTROUNDDATA_SELECTOR)
+            raw = await _eth_call(client, rpc_url, oracle_addr, LATESTROUNDDATA_SELECTOR, chain=chain)
             round_id, answer, _, updated_at, _ = _parse_round_data(raw)
 
             if round_id == 0:
