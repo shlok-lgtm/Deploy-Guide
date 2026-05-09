@@ -319,8 +319,17 @@ def _flush_loop() -> None:
             try:
                 from app.rate_limiter import rate_limiter
                 rate_limiter.cleanup()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"usage_tracker: rate_limiter cleanup failed: {e}")
+                try:
+                    from app.worker import _record_cycle_error
+                    _record_cycle_error(
+                        error_type="usage_tracker_rate_limiter_cleanup_failure",
+                        error_message=str(e)[:500],
+                        cycle_phase="usage_tracker_flush_loop",
+                    )
+                except Exception:
+                    pass
 
 
 def _start_flush_thread() -> None:

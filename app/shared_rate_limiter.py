@@ -179,8 +179,17 @@ class SharedRateLimiter:
                 try:
                     from app.api_usage_tracker import track_api_call
                     track_api_call(provider, "_rate_limited", caller="rate_limiter")
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"shared_rate_limiter: track_api_call failed: {e}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="shared_rate_limiter_track_api_call_failure",
+                            error_message=str(e)[:500],
+                            cycle_phase="shared_rate_limiter_acquire_sync",
+                        )
+                    except Exception:
+                        pass
                 return True
 
             sleep_time = min(wait, deadline - time.monotonic(), 0.5)

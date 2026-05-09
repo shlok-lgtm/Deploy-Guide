@@ -122,8 +122,17 @@ def _get_state_root() -> str:
             if isinstance(summary, str):
                 summary = json.loads(summary)
             return summary.get("state_root", "")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"track_record: _get_state_root query failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="track_record_get_state_root_failure",
+                error_message=str(e)[:500],
+                cycle_phase="track_record_get_state_root",
+            )
+        except Exception:
+            pass
     return ""
 
 
@@ -139,8 +148,17 @@ def _is_domain_stale(domain: str) -> bool:
                 for d in details:
                     if isinstance(d, dict) and d.get("domain") == domain and d.get("status") in ("stale", "error"):
                         return True
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"track_record: _is_domain_stale query failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="track_record_is_domain_stale_failure",
+                error_message=str(e)[:500],
+                cycle_phase="track_record_is_domain_stale",
+            )
+        except Exception:
+            pass
     return False
 
 

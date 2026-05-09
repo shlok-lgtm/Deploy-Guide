@@ -208,7 +208,16 @@ def _check_sii_psi_alignment() -> list[dict]:
                 "detail": f"SII score for {row['stablecoin_id']} is stale",
             })
     except Exception as e:
-        logger.debug(f"SII staleness check skipped: {e}")
+        logger.warning(f"SII staleness check skipped: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="coherence_sii_staleness_check_failure",
+                error_message=str(e)[:500],
+                cycle_phase="coherence_sii_psi_alignment",
+            )
+        except Exception:
+            pass
 
     # PSI protocols that reference stablecoins not in the SII registry
     try:
@@ -239,7 +248,16 @@ def _check_sii_psi_alignment() -> list[dict]:
                     "detail": f"PSI-referenced stablecoin '{sid}' has no SII score",
                 })
     except Exception as e:
-        logger.debug(f"SII/PSI alignment check skipped: {e}")
+        logger.warning(f"SII/PSI alignment check skipped: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="coherence_sii_psi_alignment_check_failure",
+                error_message=str(e)[:500],
+                cycle_phase="coherence_sii_psi_alignment",
+            )
+        except Exception:
+            pass
 
     return issues
 
@@ -281,7 +299,16 @@ def _check_state_root_coverage() -> list[dict]:
                     "detail": f"Domain '{domain}' missing from latest pulse state root",
                 })
     except Exception as e:
-        logger.debug(f"State root coverage check skipped: {e}")
+        logger.warning(f"State root coverage check skipped: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="coherence_state_root_coverage_check_failure",
+                error_message=str(e)[:500],
+                cycle_phase="coherence_state_root_coverage",
+            )
+        except Exception:
+            pass
 
     return issues
 

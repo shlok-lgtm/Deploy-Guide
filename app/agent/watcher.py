@@ -397,8 +397,19 @@ async def run_agent_cycle():
                 "trigger_detail": {"cycle_assessments": 0},
             }
             await store_assessment(heartbeat)
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.debug(f"Heartbeat store failed: {e}")
+            logger.warning(f"Heartbeat store failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="agent_watcher_heartbeat_store_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="agent_run_agent_cycle",
+                )
+            except Exception:
+                pass
 
     # Summary
     severities = {}

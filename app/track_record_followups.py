@@ -170,8 +170,17 @@ def _classify_outcome(entry: dict, baseline: dict, current: dict) -> tuple[str, 
                     return "validated", {**detail, "reason": "coherence issues resolved"}
                 else:
                     return "mixed", {**detail, "reason": "coherence issues persist"}
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"track_record_followups: _classify_outcome coherence query failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="track_record_followups_classify_outcome_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="track_record_followups_classify_outcome",
+                )
+            except Exception:
+                pass
         return "insufficient_data", {**detail, "reason": "cannot determine coherence resolution"}
 
     return "mixed", {**detail, "reason": "unhandled trigger_kind"}
