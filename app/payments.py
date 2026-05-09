@@ -44,8 +44,17 @@ def _log_payment(request, endpoint: str, price_usd: float = 0.001):
             "INSERT INTO payment_log (endpoint, price_usd, protocol, ip_address) VALUES (%s, %s, 'x402', %s)",
             (endpoint, price_usd, request.client.host if request.client else "unknown"),
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"payments: _log_payment insert failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="payments_log_payment_insert_failure",
+                error_message=str(e)[:500],
+                cycle_phase="payments_log_payment",
+            )
+        except Exception:
+            pass
 
 # --- Configuration ---
 BASIS_WALLET = os.environ.get("BASIS_PAYMENT_WALLET", "")

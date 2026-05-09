@@ -54,7 +54,16 @@ def _flush_mcp_log():
                     )
             conn.commit()
     except Exception as e:
-        logger.debug(f"MCP tool log flush failed (table may not exist yet): {e}")
+        logger.warning(f"MCP tool log flush failed (table may not exist yet): {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="mcp_server_flush_log_failure",
+                error_message=str(e)[:500],
+                cycle_phase="mcp_server_flush_mcp_log",
+            )
+        except Exception:
+            pass
 
 mcp = FastMCP(
     name="basis-protocol",

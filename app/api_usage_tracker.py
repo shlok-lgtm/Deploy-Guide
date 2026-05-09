@@ -212,13 +212,31 @@ def _flush_buffer():
                     ),
                 )
     except Exception as e:
-        logger.debug(f"API usage flush failed (table may not exist): {e}")
+        logger.warning(f"API usage flush failed (table may not exist): {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="api_usage_tracker_flush_buffer_insert_failure",
+                error_message=str(e)[:500],
+                cycle_phase="api_usage_tracker_flush_buffer",
+            )
+        except Exception:
+            pass
 
     # Update hourly rollup
     try:
         _update_hourly_rollup(batch)
     except Exception as e:
-        logger.debug(f"Hourly rollup update failed: {e}")
+        logger.warning(f"Hourly rollup update failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="api_usage_tracker_hourly_rollup_failure",
+                error_message=str(e)[:500],
+                cycle_phase="api_usage_tracker_flush_buffer",
+            )
+        except Exception:
+            pass
 
 
 def _update_hourly_rollup(batch: list[dict]):
@@ -478,8 +496,17 @@ def _bg_flusher_loop():
             logger.warning(f"[api_usage_bg_flusher] iteration failed: {_e}")
             try:
                 time.sleep(_BG_FLUSH_INTERVAL_SEC)
-            except Exception:
-                pass
+            except Exception as _se:
+                logger.warning(f"[api_usage_bg_flusher] retry sleep failed: {_se}")
+                try:
+                    from app.worker import _record_cycle_error
+                    _record_cycle_error(
+                        error_type="api_usage_tracker_bg_flusher_retry_sleep_failure",
+                        error_message=str(_se)[:500],
+                        cycle_phase="api_usage_tracker_bg_flusher_loop",
+                    )
+                except Exception:
+                    pass
 
 
 def start_background_flusher() -> None:

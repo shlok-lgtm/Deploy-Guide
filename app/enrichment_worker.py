@@ -1192,7 +1192,18 @@ async def run_enrichment_pipeline() -> dict:
     try:
         from app.api_usage_tracker import flush
         await asyncio.to_thread(flush)
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"enrichment_worker: api_usage_tracker flush failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="enrichment_worker_api_usage_flush_failure",
+                error_message=str(e)[:500],
+                cycle_phase="enrichment_worker_run_pipeline",
+            )
+        except Exception:
+            pass
 
     return pipeline.get_results_summary()

@@ -134,8 +134,19 @@ async def run_daily_pulse():
             cnt = e.get("count", 0)
             event_counts[sev] = cnt
             event_counts["total"] += cnt
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"pulse_generator: assessment events count failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="pulse_generator_event_counts_failure",
+                error_message=str(e)[:500],
+                cycle_phase="pulse_generator_run_daily_pulse",
+            )
+        except Exception:
+            pass
 
     # 6. Notable events (top 5)
     notable_events = []
@@ -158,8 +169,19 @@ async def run_daily_pulse():
             }
             for n in notables
         ]
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"pulse_generator: notable events query failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="pulse_generator_notable_events_failure",
+                error_message=str(e)[:500],
+                cycle_phase="pulse_generator_run_daily_pulse",
+            )
+        except Exception:
+            pass
 
     # 7. PSI scores summary (if available)
     psi_summary = []
@@ -177,8 +199,19 @@ async def run_daily_pulse():
             }
             for r in psi_rows
         ]
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"pulse_generator: PSI scores summary failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="pulse_generator_psi_summary_failure",
+                error_message=str(e)[:500],
+                cycle_phase="pulse_generator_run_daily_pulse",
+            )
+        except Exception:
+            pass
 
     # 8. Assemble summary
     summary = {

@@ -9,6 +9,7 @@ Three signal types:
   C. Quality-Flow    — stablecoin score declining with net inflows from wallet graph
 """
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -503,8 +504,19 @@ async def _store_divergence_signals(signals: list) -> int:
                 now,
             ))
             stored += 1
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.debug(f"Failed to store divergence signal: {e}")
+            logger.warning(f"Failed to store divergence signal: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="divergence_store_signal_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="divergence_store_divergence_signals",
+                )
+            except Exception:
+                pass
     return stored
 
 

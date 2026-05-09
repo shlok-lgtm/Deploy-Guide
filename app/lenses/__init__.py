@@ -55,7 +55,16 @@ def load_lens(lens_id: str) -> dict | None:
             _LENS_CACHE[lens_id] = config
             return config
     except Exception as e:
-        logger.debug(f"lens_configs table lookup failed: {e}")
+        logger.warning(f"lens_configs table lookup failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="lenses_load_lens_db_lookup_failure",
+                error_message=str(e)[:500],
+                cycle_phase="lenses_load_lens",
+            )
+        except Exception:
+            pass
 
     # Fallback to JSON file
     path = os.path.join(_LENS_DIR, f"{lens_id}.json")
@@ -79,7 +88,16 @@ def load_lens_from_db(lens_id: str) -> dict | None:
         if row:
             return _db_row_to_lens_config(row)
     except Exception as e:
-        logger.debug(f"lens_configs table lookup failed: {e}")
+        logger.warning(f"lens_configs table lookup failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="lenses_load_lens_from_db_failure",
+                error_message=str(e)[:500],
+                cycle_phase="lenses_load_lens_from_db",
+            )
+        except Exception:
+            pass
     return None
 
 
@@ -107,7 +125,16 @@ def list_lenses() -> list[dict]:
                 "source": "database",
             })
     except Exception as e:
-        logger.debug(f"lens_configs table listing failed: {e}")
+        logger.warning(f"lens_configs table listing failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="lenses_list_lenses_db_listing_failure",
+                error_message=str(e)[:500],
+                cycle_phase="lenses_list_lenses",
+            )
+        except Exception:
+            pass
 
     # JSON file lenses (only if not already in DB)
     for fname in sorted(os.listdir(_LENS_DIR)):

@@ -990,8 +990,17 @@ def _get_issuer_activity(symbol: str) -> dict:
         """, (symbol,))
         result["screening_targets"] = len(screening) if screening else 0
         result["last_screening"] = None
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"report: _get_issuer_activity screening query failed for {symbol}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="report_get_issuer_activity_screening_failure",
+                error_message=str(e)[:500],
+                cycle_phase="report_get_issuer_activity",
+            )
+        except Exception:
+            pass
     return result if result else {"note": "Issuer activity data not yet captured"}
 
 

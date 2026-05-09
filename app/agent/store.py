@@ -5,6 +5,7 @@ Writes assessment events to the canonical database.
 Every event is persisted, even silent ones.
 """
 
+import asyncio
 import json
 import logging
 
@@ -138,7 +139,18 @@ async def store_assessment(assessment: dict) -> str | None:
                 formula_ver,
                 inputs_hash,
             ))
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.debug(f"Could not store input vector: {e}")
+            logger.warning(f"Could not store input vector: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="agent_store_assessment_input_vector_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="agent_store_assessment",
+                )
+            except Exception:
+                pass
 
     return event_id

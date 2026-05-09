@@ -359,8 +359,18 @@ def compute_rqs_for_protocol(protocol_slug: str, coverage_threshold: float = 0.0
         attest_state("rqs_composition", [
             {"protocol": protocol_slug, "rqs_score": result.get("rqs_score")},
         ], entity_id=protocol_slug)
-    except Exception:
-        pass  # attestation is non-critical
+    except Exception as e:
+        # attestation is non-critical
+        logger.warning(f"composition: rqs attestation skipped for {protocol_slug}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="composition_compute_rqs_attestation_failure",
+                error_message=str(e)[:500],
+                cycle_phase="composition_compute_rqs_for_protocol",
+            )
+        except Exception:
+            pass
 
     return result
 

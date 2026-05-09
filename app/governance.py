@@ -329,8 +329,17 @@ def crawl_forum(forum_key: str, since_days: int = 30) -> Generator[ForumPost, No
                         if lp < since_date:
                             old_count += 1
                             continue
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"governance: crawl_forum date parse failed: {e}")
+                        try:
+                            from app.worker import _record_cycle_error
+                            _record_cycle_error(
+                                error_type="governance_crawl_forum_date_parse_failure",
+                                error_message=str(e)[:500],
+                                cycle_phase="governance_crawl_forum",
+                            )
+                        except Exception:
+                            pass
 
                 # Fetch full topic
                 try:
@@ -730,8 +739,17 @@ def run_crawl(forums: list[str] = None, since_days: int = 30):
                         VALUES (%s, NOW(), %s, %s, %s)
                     """, (forum_key, new_count, error_count,
                           'completed' if error_count == 0 else 'completed_with_errors'))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"governance: crawl log insert failed for {forum_key}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="governance_run_crawl_log_insert_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="governance_run_crawl",
+                )
+            except Exception:
+                pass
 
         total_new += new_count
         logger.info(f"Completed {forum_key}: {new_count} new documents")

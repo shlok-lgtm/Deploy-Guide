@@ -10,11 +10,15 @@ declaration, not a code path.
 Pattern: raw values -> normalize per component -> aggregate() -> score.
 """
 
+import logging
+
 from app.composition import aggregate
 from app.scoring import (
     normalize_inverse_linear, normalize_linear, normalize_log,
     normalize_centered, normalize_exponential_penalty, normalize_direct,
 )
+
+logger = logging.getLogger(__name__)
 
 NORMALIZATION_FUNCTIONS = {
     "inverse_linear": normalize_inverse_linear,
@@ -51,8 +55,17 @@ def score_entity(definition, raw_values):
                 params = comp_def["normalization"]["params"]
                 try:
                     component_scores[comp_id] = round(fn(raw_values[comp_id], **params), 2)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"scoring_engine: normalization failed for {comp_id}: {e}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="scoring_engine_normalization_failure",
+                            error_message=str(e)[:500],
+                            cycle_phase="scoring_engine_score_entity",
+                        )
+                    except Exception:
+                        pass
 
     # Step 2+3: Aggregate via the named formula. Default path is
     # legacy_renormalize which is byte-for-byte identical to the previous

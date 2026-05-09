@@ -63,8 +63,19 @@ async def run_daily_cycle():
     try:
         from app.mcp_server import _flush_mcp_log
         await asyncio.to_thread(_flush_mcp_log)
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"budget daily_cycle: MCP log flush failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="budget_daily_cycle_mcp_flush_failure",
+                error_message=str(e)[:500],
+                cycle_phase="budget_run_daily_cycle",
+            )
+        except Exception:
+            pass
 
     # 5. Oracle monitor (keeper events + external interactions)
     logger.info("--- Phase 5: Oracle monitor ---")
