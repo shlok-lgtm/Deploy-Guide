@@ -16,6 +16,7 @@ import logging
 from datetime import datetime, timezone
 
 from app.database import fetch_one, fetch_all, execute, get_cursor
+from app.integrity_heuristics import classify_freshness, has_heuristic
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +109,16 @@ DOMAIN_FREQUENCIES = {
 # ---------------------------------------------------------------------------
 
 def _check_freshness() -> list[dict]:
-    """Flag domains whose latest attestation is older than their expected cadence."""
+    """Flag domains whose latest attestation is older than their expected cadence.
+
+    Uses ``app.integrity_heuristics.classify_freshness`` to distinguish:
+      * ``broken`` — work should have happened but didn't (alert)
+      * ``quiet``  — gate-blocked or genuinely no upstream work due (log only)
+      * ``ok``     — fresh
+
+    Domains without a registered heuristic preserve the legacy "stale = broken"
+    behaviour so we never silently suppress an alert we cannot justify.
+    """
     issues = []
     # Single query instead of N+1: get latest timestamp per domain in one pass
     rows = fetch_all(
@@ -125,7 +135,18 @@ def _check_freshness() -> list[dict]:
     for domain in ALL_DOMAINS:
         expected_hours = DOMAIN_FREQUENCIES.get(domain, 24)
         ts = latest_by_domain.get(domain)
+
         if not ts:
+            # No attestation row. Apply the heuristic if available — a domain
+            # that has never attested but whose upstream work is currently
+            # gated should be quiet, not noisy.
+            if has_heuristic(domain):
+                state = classify_freshness(domain, age_hours=None, expected_hours=expected_hours)
+                if state == "quiet":
+                    logger.info(
+                        f"[coherence] {domain}: no attestation but no upstream work due — quiet"
+                    )
+                    continue
             issues.append({
                 "check": "freshness",
                 "domain": domain,
@@ -133,16 +154,28 @@ def _check_freshness() -> list[dict]:
                 "detail": "No attestation found",
             })
             continue
+
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
         age_hours = (now - ts).total_seconds() / 3600
-        if age_hours > expected_hours * 2:
-            issues.append({
-                "check": "freshness",
-                "domain": domain,
-                "severity": "alert" if age_hours > expected_hours * 4 else "warning",
-                "detail": f"Last attested {age_hours:.1f}h ago (expected every {expected_hours}h)",
-            })
+        if age_hours <= expected_hours * 2:
+            continue
+
+        state = classify_freshness(domain, age_hours=age_hours, expected_hours=expected_hours)
+        if state == "quiet":
+            logger.info(
+                f"[coherence] {domain}: stale ({age_hours:.1f}h > {expected_hours * 2}h) "
+                f"but no upstream work due — quiet"
+            )
+            continue
+
+        # state == "broken" (or "ok" — but we already filtered fresh above)
+        issues.append({
+            "check": "freshness",
+            "domain": domain,
+            "severity": "alert" if age_hours > expected_hours * 4 else "warning",
+            "detail": f"Last attested {age_hours:.1f}h ago (expected every {expected_hours}h)",
+        })
     return issues
 
 
