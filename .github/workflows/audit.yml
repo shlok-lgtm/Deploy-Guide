@@ -23,6 +23,20 @@ jobs:
       - name: Audit sync-DB-in-async (advisory)
         run: python3 scripts/audit_sync_db_in_async.py || true
 
+  bare-except-gate:
+    # Blocks merges that increase bare `except:` count above the threshold,
+    # and fails on any regression vs. the prior committed count.
+    # Threshold (150) is set just above the current ~145 debug_only remnants
+    # in dirs not yet cleaned up by PRs #103-#107. Lower as cleanup continues.
+    needs: [audit-async, audit-sync-db-advisory]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - name: Audit bare-except (gate)
+        run: python tools/audit/bare_except_audit.py app/ --max-debug-only 150 --fail-on-regression
+
   oracle-keys-parity:
     # Asserts both Python (app/oracle_keys.py) and TypeScript
     # (keeper/optionC_keys.ts) implementations of the entityId scheme
