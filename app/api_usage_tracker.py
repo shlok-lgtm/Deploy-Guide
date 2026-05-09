@@ -17,6 +17,8 @@ Usage:
 """
 
 import logging
+import os
+import sys
 import threading
 import time
 from collections import defaultdict
@@ -24,6 +26,42 @@ from datetime import datetime, timezone
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_caller() -> str:
+    """Resolve caller name from the calling frame's __name__.
+
+    Walks two frames up (this helper -> track_api_call -> caller),
+    reads the calling module's __name__ from f_globals, and strips the
+    leading "app." prefix so callers render as "data_layer.peg_monitor"
+    instead of "app.data_layer.peg_monitor".
+
+    Falls back to the basename of the source file (without .py), and
+    finally to "unknown". The whole helper is wrapped in try/except —
+    a tracking failure can never break an API call.
+    """
+    try:
+        # sys._getframe(2) — skip _resolve_caller and track_api_call frames
+        frame = sys._getframe(2)
+        try:
+            name = frame.f_globals.get("__name__")
+            if isinstance(name, str) and name:
+                if name.startswith("app."):
+                    return name[len("app."):]
+                return name
+            # Fallback: filename basename without .py
+            filename = frame.f_globals.get("__file__")
+            if isinstance(filename, str) and filename:
+                base = os.path.basename(filename)
+                if base.endswith(".py"):
+                    base = base[:-3]
+                if base:
+                    return base
+        finally:
+            del frame  # avoid reference cycle
+    except Exception:
+        pass
+    return "unknown"
 
 # Buffer for batched writes
 _buffer: list[dict] = []
@@ -49,7 +87,7 @@ _counters_lock = threading.Lock()
 def track_api_call(
     provider: str,
     endpoint: str,
-    caller: str = "unknown",
+    caller: Optional[str] = None,
     status: Optional[int] = None,
     latency_ms: Optional[int] = None,
     count: int = 1,
@@ -60,11 +98,16 @@ def track_api_call(
     Args:
         provider: API provider name (coingecko, etherscan, defillama, etc.)
         endpoint: API endpoint path
-        caller: Module/collector that made the call
+        caller: Module/collector that made the call. If None (default), the
+            calling module is auto-detected via stack frame inspection (the
+            "app." prefix is stripped). Pass an explicit string to override.
         status: HTTP response status code
         latency_ms: Response time in milliseconds
         count: Number of calls (for batch tracking)
     """
+    if caller is None:
+        caller = _resolve_caller()
+
     now = time.time()
     now_dt = datetime.now(timezone.utc)
     current_hour = now_dt.replace(minute=0, second=0, microsecond=0)
