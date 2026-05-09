@@ -19,6 +19,7 @@ Key historical moments for Aave:
 - April 2026: Chaos Labs departs → spend_ratio collapses
 """
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -204,8 +205,19 @@ def backfill_snapshot_proposals(slug: str, space_id: str,
                     datetime.fromtimestamp(end_ts, tz=timezone.utc) if end_ts else None,
                 ))
                 total_stored += 1
-            except Exception:
-                pass
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(f"Failed to store snapshot proposal {prop.get('id', '?')} for {slug}: {e}")
+                try:
+                    from app.worker import _record_cycle_error
+                    _record_cycle_error(
+                        error_type="rpi_backfill_snapshot_proposals_store_failure",
+                        error_message=str(e)[:500],
+                        cycle_phase="rpi_historical",
+                    )
+                except Exception:
+                    pass
 
         skip += batch_size
         if len(proposals) < batch_size:
@@ -235,8 +247,19 @@ def backfill_incidents():
                 incident["funds_recovered_usd"],
             ))
             stored += 1
-        except Exception:
-            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"Failed to backfill incident {incident.get('title', '?')}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="rpi_backfill_incidents_store_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="rpi_historical",
+                )
+            except Exception:
+                pass
     logger.info(f"RPI backfill: {stored} historical incidents")
     return stored
 
@@ -413,8 +436,19 @@ def reconstruct_rpi_range(slug: str, start: date, end: date,
         try:
             result = reconstruct_rpi_score(slug, current)
             scores.append(result)
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.debug(f"Reconstruction failed for {slug} @ {current}: {e}")
+            logger.warning(f"Reconstruction failed for {slug} @ {current}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="rpi_reconstruct_rpi_range_step_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="rpi_historical",
+                )
+            except Exception:
+                pass
         current += timedelta(days=interval_days)
     return scores
 
@@ -466,8 +500,19 @@ def store_historical_scores(slug: str, scores: list[dict]):
                 score.get("confidence", "standard"),
             ))
             stored += 1
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.debug(f"Failed to store historical score for {slug} @ {target_date}: {e}")
+            logger.warning(f"Failed to store historical score for {slug} @ {target_date}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="rpi_store_historical_scores_upsert_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="rpi_historical",
+                )
+            except Exception:
+                pass
 
     return stored
 

@@ -396,8 +396,19 @@ async def run_governance_collection() -> dict:
                             ]
                             await asyncio.to_thread(_store_voters, voter_records)
                             total_voters += len(voter_records)
+                    except asyncio.CancelledError:
+                        raise
                     except Exception as e:
-                        logger.debug(f"Voter collection failed for {prop['id']}: {e}")
+                        logger.warning(f"Voter collection failed for {prop['id']}: {e}")
+                        try:
+                            from app.worker import _record_cycle_error
+                            _record_cycle_error(
+                                error_type="data_layer_run_governance_collection_voter_failure",
+                                error_message=str(e)[:500],
+                                cycle_phase="governance_collector",
+                            )
+                        except Exception:
+                            pass
 
                 spaces_processed += 1
 
@@ -462,8 +473,19 @@ async def run_governance_collection() -> dict:
             await asyncio.to_thread(attest_data_batch, "governance_proposals", [{"proposals": total_proposals, "voters": total_voters}])
             await link_batch_to_proof("governance_proposals", "governance_proposals")
             await link_batch_to_proof("governance_voters", "governance_voters")
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"Governance provenance failed: {e}")
+        logger.warning(f"Governance provenance failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_run_governance_collection_provenance_failure",
+                error_message=str(e)[:500],
+                cycle_phase="governance_collector",
+            )
+        except Exception:
+            pass
 
     logger.info(
         f"Governance collection complete: {total_proposals} proposals, "

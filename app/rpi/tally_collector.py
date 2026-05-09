@@ -5,6 +5,7 @@ Scrapes on-chain governance proposals from Tally GraphQL API.
 Covers protocols with on-chain governance (Compound, Uniswap, Aave).
 """
 
+import asyncio
 import logging
 import time
 from datetime import datetime, timezone
@@ -143,13 +144,35 @@ def collect_tally_proposals():
             if block_ts:
                 try:
                     created_at = datetime.fromisoformat(str(block_ts).replace("Z", "+00:00"))
-                except (ValueError, TypeError):
-                    pass
+                except asyncio.CancelledError:
+                    raise
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"Tally block timestamp parse failed: {e}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="rpi_collect_tally_proposals_block_ts_parse_failure",
+                            error_message=str(e)[:500],
+                            cycle_phase="rpi_tally_collector",
+                        )
+                    except Exception:
+                        pass
             if not created_at and prop.get("createdAt"):
                 try:
                     created_at = datetime.fromisoformat(str(prop["createdAt"]).replace("Z", "+00:00"))
-                except (ValueError, TypeError):
-                    pass
+                except asyncio.CancelledError:
+                    raise
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"Tally createdAt parse failed: {e}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="rpi_collect_tally_proposals_created_at_parse_failure",
+                            error_message=str(e)[:500],
+                            cycle_phase="rpi_tally_collector",
+                        )
+                    except Exception:
+                        pass
 
             proposal_id = str(prop.get("id", ""))
 

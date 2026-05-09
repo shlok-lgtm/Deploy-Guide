@@ -5,6 +5,7 @@ Fetches protocol revenue from DeFiLlama for the spend_ratio component.
 Reuses the same DeFiLlama client pattern from psi_collector.
 """
 
+import asyncio
 import logging
 import time
 
@@ -24,8 +25,19 @@ def fetch_fees_data(slug: str) -> dict | None:
         resp = requests.get(f"{DEFILLAMA_BASE}/summary/fees/{slug}", timeout=45)
         if resp.status_code == 200:
             return resp.json()
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"DeFiLlama fees fetch failed for {slug}: {e}")
+        logger.warning(f"DeFiLlama fees fetch failed for {slug}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="rpi_fetch_fees_data_request_failure",
+                error_message=str(e)[:500],
+                cycle_phase="rpi_revenue_collector",
+            )
+        except Exception:
+            pass
     return None
 
 

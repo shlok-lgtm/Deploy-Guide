@@ -342,8 +342,19 @@ async def collect_clustered_concentration() -> dict:
                     "clustered_gini": metrics["clustered_gini"],
                     "divergence_score": metrics["divergence_score"],
                 }], str(coin_id))
-            except Exception:
-                pass
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(f"collect clustered concentration failed: {e}")
+                try:
+                    from app.worker import _record_cycle_error
+                    _record_cycle_error(
+                        error_type="collectors_collect_clustered_concentration_failure",
+                        error_message=str(e)[:500],
+                        cycle_phase="clustered_concentration",
+                    )
+                except Exception:
+                    pass
 
             elapsed = time.time() - t0
             logger.info(

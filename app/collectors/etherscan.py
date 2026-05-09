@@ -162,8 +162,19 @@ async def fetch_token_balance(
                 status=_status,
                 latency_ms=int((_time.monotonic() - _t0) * 1000),
             )
-        except Exception:
-            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"fetch token balance failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors_fetch_token_balance_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="etherscan",
+                )
+            except Exception:
+                pass
 
 
 # =============================================================================
@@ -210,8 +221,19 @@ async def fetch_token_holder_count(
                 status=_status,
                 latency_ms=int((_time.monotonic() - _t0) * 1000),
             )
-        except Exception:
-            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"fetch token holder count failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors_fetch_token_holder_count_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="etherscan",
+                )
+            except Exception:
+                pass
 
 
 async def collect_holder_distribution(
@@ -393,8 +415,19 @@ async def _estimate_total_supply(stablecoin_id: str, holder_balances: list[dict]
         )
         if row and row.get("market_cap"):
             return float(row["market_cap"])
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"estimate total supply failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__estimate_total_supply_failure",
+                error_message=str(e)[:500],
+                cycle_phase="etherscan",
+            )
+        except Exception:
+            pass
 
     SUPPLY_ESTIMATES = {
         "usdc": 45_000_000_000,

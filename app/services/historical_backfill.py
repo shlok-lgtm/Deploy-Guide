@@ -152,8 +152,17 @@ def backfill_coin_sync(
                     finally:
                         try:
                             track_api_call(provider="coingecko", endpoint=f"/coins/{coingecko_id}/market_chart/range", caller="services.historical_backfill", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.warning(f"historical_backfill: backfill_coin_sync track_api_call failed: {e}")
+                            try:
+                                from app.worker import _record_cycle_error
+                                _record_cycle_error(
+                                    error_type="services_backfill_coin_sync_track_api_call_failure",
+                                    error_message=str(e)[:500],
+                                    cycle_phase="historical_backfill",
+                                )
+                            except Exception:
+                                pass
                     resp.raise_for_status()
                     data = resp.json()
                     break
@@ -197,8 +206,17 @@ def backfill_all_sync(from_date: str = "2020-01-01", to_date: str = None) -> dic
             "INSERT INTO backfill_status (coins_total, status) VALUES (%s, 'running')",
             (len(STABLECOIN_REGISTRY),)
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"historical_backfill: backfill_all_sync status row insert failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="services_backfill_all_sync_status_insert_failure",
+                error_message=str(e)[:500],
+                cycle_phase="historical_backfill",
+            )
+        except Exception:
+            pass
 
     results = {}
     total = 0
@@ -216,8 +234,17 @@ def backfill_all_sync(from_date: str = "2020-01-01", to_date: str = None) -> dic
                    WHERE id = (SELECT MAX(id) FROM backfill_status)""",
                 (gecko_id, completed, total)
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"historical_backfill: backfill_all_sync status update failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="services_backfill_all_sync_status_update_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="historical_backfill",
+                )
+            except Exception:
+                pass
 
         logger.info(f"Backfilling {cfg['symbol']} ({gecko_id})...")
         count = backfill_coin_sync(gecko_id, from_date, to_date)
@@ -239,15 +266,33 @@ def backfill_all_sync(from_date: str = "2020-01-01", to_date: str = None) -> dic
                            WHERE id = (SELECT MAX(id) FROM backfill_status)""",
                         (gecko_id,)
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"historical_backfill: backfill_all_sync promoted coin status update failed: {e}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="services_backfill_all_sync_promoted_status_update_failure",
+                            error_message=str(e)[:500],
+                            cycle_phase="historical_backfill",
+                        )
+                    except Exception:
+                        pass
                 logger.info(f"Backfilling promoted coin {gecko_id}...")
                 count = backfill_coin_sync(gecko_id, from_date, to_date)
                 results[gecko_id] = count
                 total += count
                 completed += 1
     except Exception as e:
-        logger.debug(f"Could not fetch promoted stablecoins: {e}")
+        logger.warning(f"Could not fetch promoted stablecoins: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="services_backfill_all_sync_promoted_fetch_failure",
+                error_message=str(e)[:500],
+                cycle_phase="historical_backfill",
+            )
+        except Exception:
+            pass
 
     # Mark complete
     try:
@@ -257,8 +302,17 @@ def backfill_all_sync(from_date: str = "2020-01-01", to_date: str = None) -> dic
                WHERE id = (SELECT MAX(id) FROM backfill_status)""",
             (completed, total, _json.dumps(results))
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"historical_backfill: backfill_all_sync mark complete failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="services_backfill_all_sync_mark_complete_failure",
+                error_message=str(e)[:500],
+                cycle_phase="historical_backfill",
+            )
+        except Exception:
+            pass
 
     logger.info(f"Backfill complete: {len(results)} coins, {total} total records")
     return {"coins": results, "total": total}

@@ -144,8 +144,17 @@ def _store_market_chart_records(records: list[dict]):
                         row,
                     )
                 stored += 1
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"[market_chart_backfill] per-row insert failed: {e}")
+                try:
+                    from app.worker import _record_cycle_error
+                    _record_cycle_error(
+                        error_type="data_layer__store_market_chart_records_insert_failure",
+                        error_message=str(e)[:500],
+                        cycle_phase="market_chart_backfill",
+                    )
+                except Exception:
+                    pass
 
     elapsed = _t.monotonic() - _start
     logger.error(f"market_chart_history: {stored}/{len(rows)} stored in {elapsed:.1f}s")
@@ -348,8 +357,19 @@ async def run_market_chart_backfill(backfill_days: int = 90) -> dict:
         from app.data_layer.provenance_scaling import attest_data_batch, link_batch_to_proof
         if total_records > 0:
             await asyncio.to_thread(attest_data_batch, "market_chart_history", [{"records": total_records, "coins": coins_processed}])
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"[market_chart_backfill] attestation failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_run_market_chart_backfill_attestation_failure",
+                error_message=str(e)[:500],
+                cycle_phase="market_chart_backfill",
+            )
+        except Exception:
+            pass
 
     logger.info(
         f"Market chart backfill complete: {total_records} records from "

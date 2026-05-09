@@ -22,6 +22,7 @@ Strategy — SAMPLE PROVENANCE:
 - Every data table has provenance_proof_id linking to nearest proof
 """
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -179,7 +180,16 @@ def attest_data_batch(
         domain = f"data_layer:{data_type}"
         return attest_state(domain, records, entity_id=entity_id)
     except Exception as e:
-        logger.debug(f"State attestation failed for {data_type}: {e}")
+        logger.warning(f"State attestation failed for {data_type}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_attest_data_batch_failure",
+                error_message=str(e)[:500],
+                cycle_phase="provenance_scaling",
+            )
+        except Exception:
+            pass
         return ""
 
 
@@ -257,8 +267,19 @@ async def link_batch_to_proof(table_name: str, data_type: str, batch_timestamp: 
             (proof_id,),
         )
         return proof_id
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"Proof linking failed for {table_name}: {e}")
+        logger.warning(f"Proof linking failed for {table_name}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_link_batch_to_proof_failure",
+                error_message=str(e)[:500],
+                cycle_phase="provenance_scaling",
+            )
+        except Exception:
+            pass
         return 0
 
 
@@ -286,8 +307,19 @@ async def get_provenance_registry() -> dict:
                     "proved_at": row["proved_at"].isoformat() if row.get("proved_at") else None,
                     "hash": row.get("attestation_hash"),
                 }
-        except Exception:
-            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"[provenance_scaling] proof lookup failed for {source_id}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="data_layer_get_provenance_registry_proof_lookup_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="provenance_scaling",
+                )
+            except Exception:
+                pass
 
         # Check state attestation too
         latest_attestation = None
@@ -306,8 +338,19 @@ async def get_provenance_registry() -> dict:
                         "timestamp": att["cycle_timestamp"].isoformat() if att.get("cycle_timestamp") else None,
                     }
                     break
-            except Exception:
-                pass
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(f"[provenance_scaling] attestation lookup failed for {dt}: {e}")
+                try:
+                    from app.worker import _record_cycle_error
+                    _record_cycle_error(
+                        error_type="data_layer_get_provenance_registry_attestation_lookup_failure",
+                        error_message=str(e)[:500],
+                        cycle_phase="provenance_scaling",
+                    )
+                except Exception:
+                    pass
 
         registry[source_id] = {
             **source,
@@ -346,8 +389,19 @@ async def get_data_type_provenance(data_type: str) -> dict:
             )
             if rows:
                 proofs.extend([dict(r) for r in rows])
-        except Exception:
-            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"[provenance_scaling] proof query failed for {source_id}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="data_layer_get_data_type_provenance_proof_query_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="provenance_scaling",
+                )
+            except Exception:
+                pass
 
     # Also check state attestations
     attestations = []
@@ -361,8 +415,19 @@ async def get_data_type_provenance(data_type: str) -> dict:
         )
         if att_rows:
             attestations = [dict(r) for r in att_rows]
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"[provenance_scaling] attestation query failed for {data_type}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_get_data_type_provenance_attestation_query_failure",
+                error_message=str(e)[:500],
+                cycle_phase="provenance_scaling",
+            )
+        except Exception:
+            pass
 
     return {
         "data_type": data_type,
@@ -425,8 +490,19 @@ async def update_catalog_provenance():
                 ),
             )
             updated += 1
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.debug(f"Catalog provenance update failed for {data_type}: {e}")
+            logger.warning(f"Catalog provenance update failed for {data_type}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="data_layer_update_catalog_provenance_update_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="provenance_scaling",
+                )
+            except Exception:
+                pass
 
     logger.info(f"Data catalog provenance updated: {updated} data types")
 
@@ -457,8 +533,19 @@ async def run_provenance_linking():
             result = await link_batch_to_proof(table_name, data_type)
             if result:
                 linked += 1
-        except Exception:
-            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"[provenance_scaling] proof linking failed for {table_name}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="data_layer_run_provenance_linking_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="provenance_scaling",
+                )
+            except Exception:
+                pass
 
     logger.info(f"Provenance linking complete: {linked}/{len(tables)} tables linked")
     return linked

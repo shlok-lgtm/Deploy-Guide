@@ -17,7 +17,6 @@ from datetime import datetime, timezone
 import httpx
 
 from app.database import fetch_all, fetch_all_async, fetch_one, get_cursor
-from app.api_usage_tracker import track_api_call
 from app.utils.rpc_provider import call as _rpc_call, RPCError
 
 logger = logging.getLogger(__name__)
@@ -55,7 +54,8 @@ async def _eth_call(client: httpx.AsyncClient, rpc_url: str, to: str, data: str,
                     chain: str = "ethereum") -> str:
     """eth_call routed through the Dwellir failover router. The `rpc_url`
     arg is preserved for signature compatibility but is no longer the
-    transport — the router owns URL resolution and provider failover.
+    transport — the router owns URL resolution, provider failover, and
+    api_usage tracking (see app/utils/rpc_provider._call_provider).
     Raises on RPC error so the caller's existing try/except (which counts
     the failure and continues) preserves its semantics.
     """
@@ -174,8 +174,19 @@ async def _sample_oracles(client: httpx.AsyncClient) -> dict:
         try:
             from app.data_layer.provenance_scaling import attest_data_batch
             await asyncio.to_thread(attest_data_batch, "oracle_cadence", [{"new_rounds": new_rounds}])
-        except Exception:
-            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"[oracle_cadence] attestation failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="data_layer__sample_oracles_attestation_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="oracle_cadence_collector",
+                )
+            except Exception:
+                pass
 
     return {
         "oracles": len(oracles),

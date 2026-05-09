@@ -3,6 +3,7 @@ Data Catalog — keeps the data_catalog table in sync.
 Auto-updates freshness, row counts, and history depth for all data types.
 """
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -245,8 +246,19 @@ async def update_catalog():
                     dt.get("staleness_threshold_hours"),
                 ),
             )
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             # Table may not exist yet — skip
-            logger.debug(f"Catalog update skipped for {dt['data_type']}: {e}")
+            logger.warning(f"Catalog update skipped for {dt['data_type']}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="data_layer_update_catalog_update_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="catalog",
+                )
+            except Exception:
+                pass
 
     logger.info(f"Data catalog updated: {len(DATA_TYPES)} data types")

@@ -220,7 +220,16 @@ def get_replay_candidates() -> list[dict]:
                     "description": check["description"],
                     "data_points_30d": data_points,
                 })
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"[component_replay] check failed for {check.get('name')}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="data_layer_get_replay_candidates_check_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="component_replay",
+                )
+            except Exception:
+                pass
 
     return candidates

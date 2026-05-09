@@ -10,6 +10,7 @@ Uses the generic scoring engine (score_entity) for the base calculation,
 then applies lens blending on top.
 """
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -557,8 +558,19 @@ def _sync_lens_vendor_diversity(slug: str) -> float | None:
 
             logger.info(f"RPI lens vendor_diversity {slug}: {count} vendors → {normalized}")
             return normalized
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"RPI vendor_diversity sync failed for {slug}: {e}")
+        logger.warning(f"RPI vendor_diversity sync failed for {slug}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="rpi_sync_lens_vendor_diversity_failure",
+                error_message=str(e)[:500],
+                cycle_phase="rpi_scorer",
+            )
+        except Exception:
+            pass
     return None
 
 
@@ -592,8 +604,19 @@ def _sync_lens_documentation_depth(slug: str) -> float | None:
 
             logger.info(f"RPI lens documentation_depth {slug}: {total_score} → {normalized}")
             return normalized
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"RPI documentation_depth sync failed for {slug}: {e}")
+        logger.warning(f"RPI documentation_depth sync failed for {slug}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="rpi_sync_lens_documentation_depth_failure",
+                error_message=str(e)[:500],
+                cycle_phase="rpi_scorer",
+            )
+        except Exception:
+            pass
     return None
 
 

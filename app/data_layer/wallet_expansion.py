@@ -143,8 +143,19 @@ async def run_wallet_graph_expansion(
         finally:
             try:
                 track_api_call(provider="etherscan", endpoint="account/tokentx", caller="data_layer.wallet_expansion", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
-            except Exception:
-                pass
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(f"[wallet_expansion] track_api_call failed: {e}")
+                try:
+                    from app.worker import _record_cycle_error
+                    _record_cycle_error(
+                        error_type="data_layer_fetch_tokentx_track_api_call_failure",
+                        error_message=str(e)[:500],
+                        cycle_phase="wallet_expansion",
+                    )
+                except Exception:
+                    pass
         if resp.status_code == 429 or "Max rate limit" in resp.text:
             _api_errors += 1
             raise httpx.HTTPStatusError(
@@ -410,8 +421,19 @@ async def run_multi_source_seeding() -> dict:
                         finally:
                             try:
                                 track_api_call(provider="etherscan", endpoint="token/tokenholderlist", caller="data_layer.wallet_expansion", status=_status, latency_ms=int((time.monotonic() - _t0) * 1000))
-                            except Exception:
-                                pass
+                            except asyncio.CancelledError:
+                                raise
+                            except Exception as e:
+                                logger.warning(f"[wallet_expansion] track_api_call failed: {e}")
+                                try:
+                                    from app.worker import _record_cycle_error
+                                    _record_cycle_error(
+                                        error_type="data_layer_run_multi_source_seeding_track_api_call_failure",
+                                        error_message=str(e)[:500],
+                                        cycle_phase="wallet_expansion",
+                                    )
+                                except Exception:
+                                    pass
                         if resp.status_code != 200:
                             continue
                         data = resp.json()
@@ -430,11 +452,33 @@ async def run_multi_source_seeding() -> dict:
                                     _rowcount = await asyncio.to_thread(_inner_th)
                                     if _rowcount > 0:
                                         holder_count += 1
-                                except Exception:
-                                    pass
+                                except asyncio.CancelledError:
+                                    raise
+                                except Exception as e:
+                                    logger.warning(f"[wallet_expansion] top_holder insert failed: {e}")
+                                    try:
+                                        from app.worker import _record_cycle_error
+                                        _record_cycle_error(
+                                            error_type="data_layer_run_multi_source_seeding_top_holder_insert_failure",
+                                            error_message=str(e)[:500],
+                                            cycle_phase="wallet_expansion",
+                                        )
+                                    except Exception:
+                                        pass
                         await asyncio.sleep(0.2)
-                    except Exception:
-                        pass
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        logger.warning(f"[wallet_expansion] top_holders contract loop failed: {e}")
+                        try:
+                            from app.worker import _record_cycle_error
+                            _record_cycle_error(
+                                error_type="data_layer_run_multi_source_seeding_top_holders_loop_failure",
+                                error_message=str(e)[:500],
+                                cycle_phase="wallet_expansion",
+                            )
+                        except Exception:
+                            pass
             results["sources"]["top_holders"] = holder_count
             results["total_new"] += holder_count
             logger.error(f"[wallet_seeding] top_holders: inserted={holder_count}")

@@ -7,6 +7,7 @@ Follows the same pattern as PSI auto-expansion (discover → enrich → enable).
 Uses rpi_protocol_config as the central registry, replacing hardcoded dicts.
 """
 
+import asyncio
 import logging
 import time
 
@@ -70,8 +71,19 @@ def seed_initial_config():
                     updated_at = NOW()
             """, (slug, name, snapshot_space, tally_org, forum_url, docs_url, admin_contracts))
             seeded += 1
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.debug(f"Failed to seed config for {slug}: {e}")
+            logger.warning(f"Failed to seed config for {slug}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="rpi_seed_initial_config_upsert_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="rpi_expansion",
+                )
+            except Exception:
+                pass
 
     logger.info(f"RPI config: seeded {seeded} protocols")
     return seeded
@@ -98,8 +110,19 @@ def _search_snapshot_space(protocol_name: str) -> str | None:
                 # Return the space with most members
                 spaces.sort(key=lambda s: s.get("members", 0), reverse=True)
                 return spaces[0].get("id")
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"Snapshot search failed for {protocol_name}: {e}")
+        logger.warning(f"Snapshot search failed for {protocol_name}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="rpi_search_snapshot_space_request_failure",
+                error_message=str(e)[:500],
+                cycle_phase="rpi_expansion",
+            )
+        except Exception:
+            pass
     return None
 
 
@@ -154,8 +177,19 @@ def discover_new_protocols() -> int:
             """, (slug, name, snapshot_space))
             discovered += 1
             logger.info(f"RPI expansion: discovered {slug} (snapshot={snapshot_space})")
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.debug(f"Failed to add {slug} to RPI config: {e}")
+            logger.warning(f"Failed to add {slug} to RPI config: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="rpi_discover_new_protocols_backlog_insert_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="rpi_expansion",
+                )
+            except Exception:
+                pass
 
     # Also try direct DeFiLlama top protocols
     try:
@@ -202,8 +236,19 @@ def discover_new_protocols() -> int:
                     discovered += 1
                     existing.add(slug)
                     logger.info(f"RPI expansion: discovered {slug} from DeFiLlama (TVL=${tvl:,.0f})")
+                except asyncio.CancelledError:
+                    raise
                 except Exception as e:
-                    logger.debug(f"Failed to add DeFiLlama protocol {slug}: {e}")
+                    logger.warning(f"Failed to add DeFiLlama protocol {slug}: {e}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="rpi_discover_new_protocols_defillama_insert_failure",
+                            error_message=str(e)[:500],
+                            cycle_phase="rpi_expansion",
+                        )
+                    except Exception:
+                        pass
 
     except Exception as e:
         logger.warning(f"DeFiLlama protocols fetch failed: {e}")

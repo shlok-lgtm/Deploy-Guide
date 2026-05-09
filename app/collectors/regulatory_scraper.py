@@ -105,7 +105,16 @@ def _check_sec_edgar(exchange_names: list[str]) -> dict:
                         for h in hits[:5]
                     ]
         except Exception as e:
-            logger.debug(f"SEC EDGAR search failed for {name}: {e}")
+            logger.warning(f"SEC EDGAR search failed for {name}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors__check_sec_edgar_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="regulatory_scraper",
+                )
+            except Exception:
+                pass
             continue
 
         # Check enforcement actions separately
@@ -121,8 +130,17 @@ def _check_sec_edgar(exchange_names: list[str]) -> dict:
                 data = resp.json()
                 enforcement_hits = data.get("hits", {}).get("total", {}).get("value", 0)
                 result["enforcement_count"] = max(result["enforcement_count"], enforcement_hits)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"check sec edgar failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors__check_sec_edgar_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="regulatory_scraper",
+                )
+            except Exception:
+                pass
 
     return result
 
@@ -165,7 +183,16 @@ def _fetch_page_content(url: str) -> str | None:
                 if content and len(content) > 50:
                     return content.lower()
     except Exception as e:
-        logger.debug(f"Parallel Extract failed for {url}: {e}")
+        logger.warning(f"Parallel Extract failed for {url}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__fetch_page_content_failure",
+                error_message=str(e)[:500],
+                cycle_phase="regulatory_scraper",
+            )
+        except Exception:
+            pass
 
     # Fallback to requests
     try:
@@ -173,8 +200,17 @@ def _fetch_page_content(url: str) -> str | None:
         resp = requests.get(url, timeout=15, allow_redirects=True)
         if resp.status_code == 200:
             return resp.text.lower()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"fetch page content failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__fetch_page_content_failure",
+                error_message=str(e)[:500],
+                cycle_phase="regulatory_scraper",
+            )
+        except Exception:
+            pass
 
     return None
 
@@ -242,7 +278,16 @@ def _check_corporate_disclosure(about_url: str, legal_url: str) -> dict:
                     total += 20
 
         except Exception as e:
-            logger.debug(f"Corporate disclosure fetch failed for {url}: {e}")
+            logger.warning(f"Corporate disclosure fetch failed for {url}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors__check_corporate_disclosure_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="regulatory_scraper",
+                )
+            except Exception:
+                pass
 
     result["score"] = min(100, total)
     return result
@@ -383,8 +428,19 @@ async def check_exchange_regulatory(entity_slug: str, exchange_names: list[str] 
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_reg_check_entity_registry_simple
                 ON regulatory_registry_checks(entity_slug, registry_name)
             """)
-        except Exception:
-            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"check exchange regulatory failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors_check_exchange_regulatory_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="regulatory_scraper",
+                )
+            except Exception:
+                pass
 
         await execute_async("""
             INSERT INTO regulatory_registry_checks

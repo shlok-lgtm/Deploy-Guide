@@ -79,16 +79,38 @@ async def _get_existing_entities() -> set:
         )
         if rows:
             existing.update(r["entity_id"] for r in rows)
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"[entity_discovery] generic_index_scores query failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer__get_existing_entities_index_scores_failure",
+                error_message=str(e)[:500],
+                cycle_phase="entity_discovery",
+            )
+        except Exception:
+            pass
 
     # Also check manually configured entities
     try:
         rows = await fetch_all_async("SELECT DISTINCT protocol_slug FROM rpi_protocol_config WHERE enabled = TRUE")
         if rows:
             existing.update(r["protocol_slug"] for r in rows)
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"[entity_discovery] rpi_protocol_config query failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer__get_existing_entities_rpi_config_failure",
+                error_message=str(e)[:500],
+                cycle_phase="entity_discovery",
+            )
+        except Exception:
+            pass
 
     return existing
 

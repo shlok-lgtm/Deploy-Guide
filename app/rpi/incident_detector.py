@@ -13,6 +13,7 @@ The recovery_ratio lens component CAN use unreviewed incidents
 with a lower confidence tag.
 """
 
+import asyncio
 import logging
 import time
 from datetime import datetime, timezone, timedelta
@@ -49,8 +50,19 @@ def detect_tvl_drops() -> int:
             if resp.status_code != 200:
                 continue
             data = resp.json()
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.debug(f"DeFiLlama fetch failed for {slug}: {e}")
+            logger.warning(f"DeFiLlama fetch failed for {slug}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="rpi_detect_tvl_drops_defillama_fetch_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="rpi_incident_detector",
+                )
+            except Exception:
+                pass
             continue
 
         tvl_history = data.get("tvl", [])
@@ -112,8 +124,19 @@ def detect_tvl_drops() -> int:
             ))
             detected += 1
             logger.info(f"RPI incident: {slug} TVL drop {drop_pct * 100:.1f}% ({severity})")
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.debug(f"Failed to store TVL drop incident for {slug}: {e}")
+            logger.warning(f"Failed to store TVL drop incident for {slug}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="rpi_detect_tvl_drops_store_incident_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="rpi_incident_detector",
+                )
+            except Exception:
+                pass
 
     return detected
 
@@ -163,8 +186,19 @@ def detect_forum_incidents() -> int:
             ))
             detected += 1
             logger.info(f"RPI incident from forum: {slug} — {title[:80]}")
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.debug(f"Failed to store forum incident for {slug}: {e}")
+            logger.warning(f"Failed to store forum incident for {slug}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="rpi_detect_forum_incidents_store_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="rpi_incident_detector",
+                )
+            except Exception:
+                pass
 
     return detected
 
@@ -216,8 +250,19 @@ def detect_emergency_actions() -> int:
             ))
             detected += 1
             logger.info(f"RPI emergency action: {slug} — tx {tx_hash[:16]}...")
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.debug(f"Failed to store emergency incident for {slug}: {e}")
+            logger.warning(f"Failed to store emergency incident for {slug}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="rpi_detect_emergency_actions_store_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="rpi_incident_detector",
+                )
+            except Exception:
+                pass
 
     return detected
 
@@ -268,8 +313,19 @@ def update_recovery_ratio_lens():
                         %s, %s, 'automated', 'risk_incidents', NOW())
             """, (slug, raw_val, score))
             updated += 1
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.debug(f"Failed to update recovery_ratio for {slug}: {e}")
+            logger.warning(f"Failed to update recovery_ratio for {slug}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="rpi_update_recovery_ratio_lens_store_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="rpi_incident_detector",
+                )
+            except Exception:
+                pass
 
     return updated
 

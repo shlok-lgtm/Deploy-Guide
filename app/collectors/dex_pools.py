@@ -95,7 +95,16 @@ def get_protocol_pools(protocol_slug: str, network: str = "eth") -> list:
             })
         return pools
     except Exception as e:
-        logger.debug(f"get_protocol_pools failed for {protocol_slug}: {e}")
+        logger.warning(f"get_protocol_pools failed for {protocol_slug}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_get_protocol_pools_failure",
+                error_message=str(e)[:500],
+                cycle_phase="dex_pools",
+            )
+        except Exception:
+            pass
         return []
 
 
@@ -120,7 +129,16 @@ def get_pool_ohlcv(network: str, pool_address: str, timeframe: str = "day", days
         data = resp.json()
         return data.get("data", {}).get("attributes", {}).get("ohlcv_list", [])
     except Exception as e:
-        logger.debug(f"get_pool_ohlcv failed for {pool_address}: {e}")
+        logger.warning(f"get_pool_ohlcv failed for {pool_address}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_get_pool_ohlcv_failure",
+                error_message=str(e)[:500],
+                cycle_phase="dex_pools",
+            )
+        except Exception:
+            pass
         return []
 
 
@@ -150,7 +168,16 @@ def get_pool_tokens(network: str, pool_address: str) -> dict:
             "reserve_in_usd": float(attrs.get("reserve_in_usd", 0) or 0),
         }
     except Exception as e:
-        logger.debug(f"get_pool_tokens failed for {pool_address}: {e}")
+        logger.warning(f"get_pool_tokens failed for {pool_address}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_get_pool_tokens_failure",
+                error_message=str(e)[:500],
+                cycle_phase="dex_pools",
+            )
+        except Exception:
+            pass
         return {}
 
 
@@ -216,7 +243,16 @@ def compute_position_liquidity(protocol_slug: str) -> dict:
             "score": round(score, 2),
         }
     except Exception as e:
-        logger.debug(f"compute_position_liquidity failed for {protocol_slug}: {e}")
+        logger.warning(f"compute_position_liquidity failed for {protocol_slug}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_compute_position_liquidity_failure",
+                error_message=str(e)[:500],
+                cycle_phase="dex_pools",
+            )
+        except Exception:
+            pass
         return {}
 
 
@@ -264,8 +300,17 @@ def compute_collateral_diversity(protocol_slug: str) -> dict:
                 (protocol_slug,),
             )
             has_stablecoin = row and row.get("cnt", 0) > 0
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"compute collateral diversity failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors_compute_collateral_diversity_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="dex_pools",
+                )
+            except Exception:
+                pass
 
         # Normalize: more diverse + lower concentration = higher score
         diversity_score = min(100, unique_count * 15)  # 7+ tokens = 100
@@ -279,7 +324,16 @@ def compute_collateral_diversity(protocol_slug: str) -> dict:
             "score": round(score, 2),
         }
     except Exception as e:
-        logger.debug(f"compute_collateral_diversity failed for {protocol_slug}: {e}")
+        logger.warning(f"compute_collateral_diversity failed for {protocol_slug}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_compute_collateral_diversity_failure",
+                error_message=str(e)[:500],
+                cycle_phase="dex_pools",
+            )
+        except Exception:
+            pass
         return {}
 
 

@@ -203,8 +203,17 @@ def _classify_wallet(metrics: dict) -> list[dict]:
                         if k != "address" and isinstance(v, (int, float))
                     },
                 })
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"[wallet_behavior] rule check failed for {rule.get('type')}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="data_layer__classify_wallet_rule_check_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="wallet_behavior",
+                )
+            except Exception:
+                pass
     return tags
 
 
@@ -297,7 +306,16 @@ def run_behavioral_classification(batch_size: int = 2000) -> dict:
 
             classified += 1
         except Exception as e:
-            logger.debug(f"Behavioral classification failed for {address}: {e}")
+            logger.warning(f"Behavioral classification failed for {address}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="data_layer_run_behavioral_classification_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="wallet_behavior",
+                )
+            except Exception:
+                pass
 
     logger.info(
         f"Behavioral classification complete: {classified} wallets, "

@@ -5,6 +5,8 @@ Collects price, volume, market cap, and ticker data.
 Produces peg_stability, liquidity, and market_activity components.
 """
 
+import asyncio
+
 import os
 import statistics
 import logging
@@ -77,8 +79,19 @@ async def fetch_current(client: httpx.AsyncClient, coingecko_id: str) -> dict:
                 status=_status,
                 latency_ms=int((_time.monotonic() - _t0) * 1000),
             )
-        except Exception:
-            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"fetch current failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors_fetch_current_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="coingecko",
+                )
+            except Exception:
+                pass
 
 
 async def fetch_price_history(client: httpx.AsyncClient, coingecko_id: str, days: int = 7) -> list[float]:
@@ -107,8 +120,19 @@ async def fetch_price_history(client: httpx.AsyncClient, coingecko_id: str, days
                 status=_status,
                 latency_ms=int((_time.monotonic() - _t0) * 1000),
             )
-        except Exception:
-            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"fetch price history failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors_fetch_price_history_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="coingecko",
+                )
+            except Exception:
+                pass
 
 
 # =============================================================================

@@ -69,7 +69,16 @@ def _wormhole_message_stats(hours: int = 24) -> dict:
             "success_rate": round(success_rate, 2),
         }
     except Exception as e:
-        logger.debug(f"Wormhole adapter failed: {e}")
+        logger.warning(f"Wormhole adapter failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__wormhole_message_stats_failure",
+                error_message=str(e)[:500],
+                cycle_phase="bridge_monitors",
+            )
+        except Exception:
+            pass
         return {}
 
 
@@ -109,7 +118,16 @@ def _axelar_message_stats(hours: int = 24) -> dict:
             "success_rate": round(success_rate, 2),
         }
     except Exception as e:
-        logger.debug(f"Axelar adapter failed: {e}")
+        logger.warning(f"Axelar adapter failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__axelar_message_stats_failure",
+                error_message=str(e)[:500],
+                cycle_phase="bridge_monitors",
+            )
+        except Exception:
+            pass
         return {}
 
 
@@ -177,7 +195,16 @@ def _defillama_bridge_uptime(bridge_slug: str) -> dict:
 
         return {}
     except Exception as e:
-        logger.debug(f"DeFiLlama bridge volume check failed for {bridge_slug}: {e}")
+        logger.warning(f"DeFiLlama bridge volume check failed for {bridge_slug}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__defillama_bridge_uptime_failure",
+                error_message=str(e)[:500],
+                cycle_phase="bridge_monitors",
+            )
+        except Exception:
+            pass
         return {}
 
 
@@ -311,7 +338,18 @@ async def run_bridge_monitoring() -> list[dict]:
                 {"slug": r["bridge_slug"], "rate": r["success_rate"]}
                 for r in scored
             ])
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"run bridge monitoring failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_run_bridge_monitoring_failure",
+                error_message=str(e)[:500],
+                cycle_phase="bridge_monitors",
+            )
+        except Exception:
+            pass
 
     return results

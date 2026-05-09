@@ -108,7 +108,16 @@ def _get_attestation_freshness(stablecoin_id: str, expected_freq_days: int) -> d
                 score = normalize_inverse_linear(days_since, 0, expected_freq_days * 2)
                 return {"days_since": days_since, "score": score, "source": "scraped"}
         except Exception as e:
-            logger.debug(f"Could not parse scraped data for {stablecoin_id}: {e}")
+            logger.warning(f"Could not parse scraped data for {stablecoin_id}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors__get_attestation_freshness_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="offline",
+                )
+            except Exception:
+                pass
     
     # Fallback: use expected frequency as estimate
     return {

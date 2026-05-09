@@ -11,6 +11,7 @@ Automates:
 - spend_ratio refinement (base component) — extract budget amounts
 """
 
+import asyncio
 import re
 import logging
 import time
@@ -164,8 +165,19 @@ def _fetch_discourse_topics(base_url: str, category_id: int,
                     topics.append(t)
                 elif created:
                     return topics  # past our window, stop
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.debug(f"Discourse fetch failed {url}: {e}")
+            logger.warning(f"Discourse fetch failed {url}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="rpi_fetch_discourse_topics_request_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="rpi_forum_scraper",
+                )
+            except Exception:
+                pass
             break
 
     return topics
@@ -180,8 +192,19 @@ def _fetch_topic_posts(base_url: str, topic_id: int) -> list[dict]:
             data = resp.json()
             posts = data.get("post_stream", {}).get("posts", [])
             return posts[:1]  # just the OP
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"Topic fetch failed {base_url}/t/{topic_id}: {e}")
+        logger.warning(f"Topic fetch failed {base_url}/t/{topic_id}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="rpi_fetch_topic_posts_request_failure",
+                error_message=str(e)[:500],
+                cycle_phase="rpi_forum_scraper",
+            )
+        except Exception:
+            pass
     return []
 
 
@@ -250,8 +273,19 @@ def scrape_forum(protocol_slug: str, config: dict = None,
                     budget_amount, posted_at,
                 ))
                 stored += 1
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
-                logger.debug(f"Failed to store forum post {post_id}: {e}")
+                logger.warning(f"Failed to store forum post {post_id}: {e}")
+                try:
+                    from app.worker import _record_cycle_error
+                    _record_cycle_error(
+                        error_type="rpi_scrape_forum_store_post_failure",
+                        error_message=str(e)[:500],
+                        cycle_phase="rpi_forum_scraper",
+                    )
+                except Exception:
+                    pass
 
     return stored
 
@@ -272,8 +306,19 @@ def scrape_all_forums(since_days: int = 90) -> dict[str, int]:
                     "base_url": r["governance_forum_url"],
                     "categories": [4, 5, 6],  # sensible defaults
                 }
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"scrape_all_forums db config load failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="rpi_scrape_all_forums_load_db_configs_failure",
+                error_message=str(e)[:500],
+                cycle_phase="rpi_forum_scraper",
+            )
+        except Exception:
+            pass
 
     all_configs = {**RPI_FORUMS, **db_configs}
     results = {}

@@ -152,8 +152,17 @@ def reconstruct_psi_score(slug: str, target_date: date) -> dict:
             if len(daily_returns) > 1:
                 raw_values["token_price_volatility_30d"] = statistics.stdev(daily_returns) * 100
                 sources["token_price_volatility_30d"] = "calculated_from_historical"
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"psi_temporal_engine: reconstruct_psi_score volatility calc failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="services_reconstruct_psi_score_volatility_calc_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="psi_temporal_engine",
+                )
+            except Exception:
+                pass
 
     # 4. Carry-forward from latest live scoring (fees, utilization, audits)
     latest_raw = _get_latest_psi_raw(slug)

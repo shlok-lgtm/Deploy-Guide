@@ -115,6 +115,8 @@ async def _fetch_tokentx_page(
         logger.warning(detail)
         await asyncio.to_thread(_record_explorer_error, "explorer_network_error", detail)
         return _FetchResult(error_type="explorer_network_error", error_detail=detail)
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
         detail = f"Unexpected error fetching tokentx for {wallet_address[:10]}…: {type(e).__name__}: {e}"
         logger.error(detail)
@@ -447,8 +449,19 @@ async def run_edge_builder(
         from app.state_attestation import attest_state
         if total_edges > 0:
             await asyncio.to_thread(attest_state, "edges", [{"chain": chain, "wallets": wallets_processed, "edges": total_edges}], chain)
+    except asyncio.CancelledError:
+        raise
     except Exception as ae:
-        logger.debug(f"Edge attestation skipped for {chain}: {ae}")
+        logger.warning(f"Edge attestation skipped for {chain}: {ae}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="indexer_run_edge_builder_attestation_failure",
+                error_message=str(ae)[:500],
+                cycle_phase="wallet_edges",
+            )
+        except Exception:
+            pass
 
     return {
         "chain": chain,

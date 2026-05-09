@@ -221,11 +221,29 @@ def _check_for_upgrade(slug: str, info: dict) -> bool:
                        VALUES ('protocol', 0, %s, %s, 'solana', %s, %s, NOW())""",
                     (slug, info["program_id"], prev_slot, curr_slot),
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"check for upgrade failed: {e}")
+                try:
+                    from app.worker import _record_cycle_error
+                    _record_cycle_error(
+                        error_type="collectors__check_for_upgrade_failure",
+                        error_message=str(e)[:500],
+                        cycle_phase="solana_program_monitor",
+                    )
+                except Exception:
+                    pass
             return True
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"check for upgrade failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__check_for_upgrade_failure",
+                error_message=str(e)[:500],
+                cycle_phase="solana_program_monitor",
+            )
+        except Exception:
+            pass
     return False
 
 

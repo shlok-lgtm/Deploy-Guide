@@ -157,7 +157,16 @@ def _store_on_chain_reading(reading: dict):
                 ),
             )
     except Exception as e:
-        logger.debug(f"On-chain CDA store failed for {reading.get('asset_symbol')}: {e}")
+        logger.warning(f"On-chain CDA store failed for {reading.get('asset_symbol')}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__store_on_chain_reading_failure",
+                error_message=str(e)[:500],
+                cycle_phase="on_chain_cda",
+            )
+        except Exception:
+            pass
 
 
 async def run_on_chain_cda_verification() -> dict:

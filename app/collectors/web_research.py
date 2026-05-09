@@ -549,7 +549,18 @@ async def run_web_research_collection() -> list[dict]:
                  "component": r["component"], "score": r["score"]}
                 for r in scored
             ])
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"run web research collection failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_run_web_research_collection_failure",
+                error_message=str(e)[:500],
+                cycle_phase="web_research",
+            )
+        except Exception:
+            pass
 
     return results

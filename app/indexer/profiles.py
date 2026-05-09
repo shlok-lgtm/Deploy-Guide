@@ -8,6 +8,7 @@ The wallet_profiles table provides a merged view without replacing
 per-chain data in wallets/holdings/risk_scores.
 """
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -194,6 +195,8 @@ def rebuild_all_profiles(limit: int = 0) -> dict:
             attest_state("wallet_profiles", [{"built": built, "total": len(addresses)}])
         else:
             attest_state("wallet_profiles", [{"status": "ran_no_results", "profiles_built": 0}])
+    except asyncio.CancelledError:
+        raise
     except Exception as ae:
         logger.error(f"wallet_profiles attestation failed: {ae}")
         try:

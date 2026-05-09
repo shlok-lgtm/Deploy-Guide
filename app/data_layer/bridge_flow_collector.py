@@ -235,8 +235,19 @@ async def run_bridge_flow_collection() -> dict:
         if total_flows > 0:
             await asyncio.to_thread(attest_data_batch, "bridge_flows", [{"flows": total_flows, "bridges": bridges_processed}])
             await link_batch_to_proof("bridge_flows", "bridge_flows")
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"Bridge flow provenance failed: {e}")
+        logger.warning(f"Bridge flow provenance failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer_run_bridge_flow_collection_provenance_failure",
+                error_message=str(e)[:500],
+                cycle_phase="bridge_flow_collector",
+            )
+        except Exception:
+            pass
 
     logger.info(
         f"Bridge flow collection complete: {total_flows} flow records "

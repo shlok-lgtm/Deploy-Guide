@@ -48,8 +48,17 @@ def fetch_coins_list() -> list[dict]:
                 data = json.loads(CACHE_PATH.read_text())
                 logger.info(f"CoinGecko coins list loaded from cache ({len(data)} coins, {age/3600:.1f}h old)")
                 return data
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"fetch coins list failed: {e}")
+                try:
+                    from app.worker import _record_cycle_error
+                    _record_cycle_error(
+                        error_type="collectors_fetch_coins_list_failure",
+                        error_message=str(e)[:500],
+                        cycle_phase="coingecko_resolver",
+                    )
+                except Exception:
+                    pass
 
     # Fetch from API
     logger.info("Fetching CoinGecko coins list (include_platform=true)...")

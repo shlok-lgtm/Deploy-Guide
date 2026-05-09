@@ -69,7 +69,16 @@ def _fetch_company_facts(cik: str) -> dict | None:
             return None
         return resp.json()
     except Exception as e:
-        logger.debug(f"SEC EDGAR fetch failed for CIK {cik}: {e}")
+        logger.warning(f"SEC EDGAR fetch failed for CIK {cik}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors__fetch_company_facts_failure",
+                error_message=str(e)[:500],
+                cycle_phase="parent_company_financials",
+            )
+        except Exception:
+            pass
         return None
 
 
@@ -258,7 +267,16 @@ def collect_parent_financials() -> dict:
                 quarters_stored += 1
 
         except Exception as e:
-            logger.debug(f"Parent company financials failed for {company.get('company_name')}: {e}")
+            logger.warning(f"Parent company financials failed for {company.get('company_name')}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors_collect_parent_financials_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="parent_company_financials",
+                )
+            except Exception:
+                pass
 
     # Attest batch
     if quarters_stored > 0:
@@ -269,8 +287,17 @@ def collect_parent_financials() -> dict:
                 "quarters_stored": quarters_stored,
                 "date": date.today().isoformat(),
             }])
-        except Exception as ae:
-            logger.debug(f"Parent company financials attestation failed: {ae}")
+        except Exception as e:
+            logger.warning(f"Parent company financials attestation failed: {ae}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="collectors_collect_parent_financials_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="parent_company_financials",
+                )
+            except Exception:
+                pass
 
     summary = {
         "companies_checked": companies_checked,
