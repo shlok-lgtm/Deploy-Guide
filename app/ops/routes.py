@@ -511,8 +511,17 @@ def _compute_milestones():
             "met": False,
             "auto": True,
         })
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"compute_milestones renderer placeholder failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="ops_compute_milestones_renderer_failure",
+                error_message=str(e)[:500],
+                cycle_phase="ops_routes_compute_milestones",
+            )
+        except Exception:
+            pass
 
     # 2. API external requests/day
     try:
@@ -1230,8 +1239,19 @@ async def scan_governance(request: Request, background_tasks: BackgroundTasks, t
         body = {}
         try:
             body = await request.json()
-        except Exception:
-            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"scan_governance request body parse failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="ops_scan_governance_body_parse_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="ops_routes_scan_governance",
+                )
+            except Exception:
+                pass
         days_back = body.get("days_back", 14) if body else 14
         tid = body.get("target_id", target_id) if body else target_id
 
@@ -1299,8 +1319,19 @@ async def scan_investor_content_endpoint(request: Request, background_tasks: Bac
         body = {}
         try:
             body = await request.json()
-        except Exception:
-            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"scan_investor_content_endpoint request body parse failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="ops_scan_investor_content_body_parse_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="ops_routes_scan_investor_content",
+                )
+            except Exception:
+                pass
         investor_id = body.get("investor_id") if body else None
 
         async def _run_investor_scan():
@@ -1622,7 +1653,16 @@ async def state_growth(request: Request, days: int = Query(default=14, ge=1, le=
                 else:
                     logger.info("Dashboard reconciliation: pulse and pg_stat agree within 5%")
         except Exception as reconcile_err:
-            logger.debug(f"Dashboard reconciliation skipped: {reconcile_err}")
+            logger.warning(f"Dashboard reconciliation skipped: {reconcile_err}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="ops_state_growth_reconciliation_failure",
+                    error_message=str(reconcile_err)[:500],
+                    cycle_phase="ops_routes_state_growth",
+                )
+            except Exception:
+                pass
 
         return {
             "days": day_entries,
@@ -1721,8 +1761,19 @@ async def coverage_report(request: Request):
             """) or []
             # Invert: find which v1 categories are missing for each stablecoin
             # This is approximate — just report totals
-        except Exception:
-            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"coverage_report SII gap query failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="ops_coverage_report_sii_gap_query_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="ops_routes_coverage_report",
+                )
+            except Exception:
+                pass
 
         # PSI coverage
         psi_discovered = await fetch_one_async(
@@ -1874,8 +1925,19 @@ async def protocol_deep_dive(slug: str, request: Request):
                 WHERE protocol_slug = %s
                 ORDER BY usd_value DESC
             """, (slug,)) or []
-        except Exception:
-            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"protocol_deep_dive treasury query failed for {slug}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="ops_protocol_deep_dive_treasury_query_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="ops_routes_protocol_deep_dive",
+                )
+            except Exception:
+                pass
 
         collateral = []
         try:
@@ -1885,8 +1947,19 @@ async def protocol_deep_dive(slug: str, request: Request):
                 WHERE protocol_slug = %s
                 ORDER BY tvl_usd DESC
             """, (slug,)) or []
-        except Exception:
-            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"protocol_deep_dive collateral query failed for {slug}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="ops_protocol_deep_dive_collateral_query_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="ops_routes_protocol_deep_dive",
+                )
+            except Exception:
+                pass
 
         # CQI matrix row for this protocol
         cqi_row = []
@@ -1915,8 +1988,19 @@ async def protocol_deep_dive(slug: str, request: Request):
                         "cqi_confidence": cqi_c["confidence"],
                     })
             cqi_row.sort(key=lambda x: x.get("cqi_score", 0), reverse=True)
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.debug(f"CQI matrix row failed for {slug}: {e}")
+            logger.warning(f"CQI matrix row failed for {slug}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="ops_protocol_deep_dive_cqi_matrix_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="ops_routes_protocol_deep_dive",
+                )
+            except Exception:
+                pass
 
         # Discovery signals
         discovery_signals = []
@@ -1927,8 +2011,19 @@ async def protocol_deep_dive(slug: str, request: Request):
                 WHERE entity_type = 'protocol' AND entity_id = %s
                 ORDER BY discovered_at DESC LIMIT 10
             """, (slug,)) or []
-        except Exception:
-            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"protocol_deep_dive discovery_signals query failed for {slug}: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="ops_protocol_deep_dive_discovery_signals_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="ops_routes_protocol_deep_dive",
+                )
+            except Exception:
+                pass
 
         # score_to_grade removed — numerical scores only
 
@@ -2535,8 +2630,19 @@ async def abm_generate_guide(campaign_id: int, request: Request):
                     rj = json.dumps(data, sort_keys=True, default=str)
                     rh = hashlib.sha256(rj.encode()).hexdigest()[:16]
                     report_hashes.append({"coin": coin, "hash": rh})
-            except Exception:
-                pass
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(f"abm_generate_guide report hash failed for {coin}: {e}")
+                try:
+                    from app.worker import _record_cycle_error
+                    _record_cycle_error(
+                        error_type="ops_abm_generate_guide_report_hash_failure",
+                        error_message=str(e)[:500],
+                        cycle_phase="ops_routes_abm_generate_guide",
+                    )
+                except Exception:
+                    pass
 
         # Build the guide markdown
         lines = []
@@ -2993,8 +3099,19 @@ async def playground_compute(request: Request):
         )
         if recent and recent["cnt"] >= 10:
             return JSONResponse({"error": "Rate limit exceeded (10 submissions per hour)"}, status_code=429)
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"playground_compute rate-limit query failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="ops_playground_compute_rate_limit_failure",
+                error_message=str(e)[:500],
+                cycle_phase="ops_routes_playground_compute",
+            )
+        except Exception:
+            pass
 
     cqi = await asyncio.to_thread(compute_aggregate_cqi, portfolio)
     stress = await asyncio.to_thread(compute_stress_scenarios, portfolio)

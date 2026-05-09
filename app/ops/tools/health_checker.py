@@ -583,8 +583,19 @@ async def run_all_checks():
     # Prune records older than 7 days
     try:
         await execute_async("DELETE FROM ops_health_checks WHERE checked_at < NOW() - INTERVAL '7 days'")
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"health_checker: prune old records failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="ops_health_checker_prune_failure",
+                error_message=str(e)[:500],
+                cycle_phase="ops_health_checker",
+            )
+        except Exception:
+            pass
 
     return results
 

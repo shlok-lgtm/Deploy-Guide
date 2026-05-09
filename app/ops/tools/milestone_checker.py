@@ -35,7 +35,17 @@ def _check_seed_triggers() -> dict:
             "SELECT COUNT(DISTINCT description) as cnt FROM api_keys WHERE description ILIKE '%renderer%'"
         )
         renderer_count = row["cnt"] if row else 0
-    except Exception:
+    except Exception as e:
+        logger.warning(f"milestone_checker: renderer count query failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="ops_milestone_seed_renderer_count_failure",
+                error_message=str(e)[:500],
+                cycle_phase="ops_milestone_checker",
+            )
+        except Exception:
+            pass
         renderer_count = None
     milestones.append({
         "name": "8+ renderers live",
@@ -55,8 +65,17 @@ def _check_seed_triggers() -> dict:
                AND api_key_id IS NOT NULL"""
         )
         api_daily = row["cnt"] if row else 0
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"milestone_checker: api_daily query failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="ops_milestone_seed_api_daily_failure",
+                error_message=str(e)[:500],
+                cycle_phase="ops_milestone_checker",
+            )
+        except Exception:
+            pass
     milestones.append({
         "name": "API >500 external requests/day",
         "target": 500,
@@ -75,8 +94,17 @@ def _check_seed_triggers() -> dict:
                AND response IS NOT NULL AND response != ''"""
         )
         citations = row["cnt"] if row else 0
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"milestone_checker: citations query failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="ops_milestone_seed_citations_failure",
+                error_message=str(e)[:500],
+                cycle_phase="ops_milestone_checker",
+            )
+        except Exception:
+            pass
     milestones.append({
         "name": "Protocol teams citing scores",
         "target": 1,
@@ -105,8 +133,17 @@ def _check_seed_triggers() -> dict:
                AND pipeline_stage IN ('evaluating', 'trying', 'binding')"""
         )
         pilots = row["cnt"] if row else 0
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"milestone_checker: pilots query failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="ops_milestone_seed_pilots_failure",
+                error_message=str(e)[:500],
+                cycle_phase="ops_milestone_checker",
+            )
+        except Exception:
+            pass
     milestones.append({
         "name": "DAO pilot in conversation",
         "target": 1,
@@ -142,8 +179,17 @@ def _check_kill_signals() -> dict:
                AND api_key_id IS NOT NULL"""
         )
         api_daily = row["cnt"] if row else 0
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"milestone_checker: kill_signal api_daily query failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="ops_milestone_kill_api_daily_failure",
+                error_message=str(e)[:500],
+                cycle_phase="ops_milestone_checker",
+            )
+        except Exception:
+            pass
 
     protocol_refs = 0
     try:
@@ -152,8 +198,17 @@ def _check_kill_signals() -> dict:
                WHERE response IS NOT NULL AND response != ''"""
         )
         protocol_refs = row["cnt"] if row else 0
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"milestone_checker: kill_signal protocol_refs query failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="ops_milestone_kill_protocol_refs_failure",
+                error_message=str(e)[:500],
+                cycle_phase="ops_milestone_checker",
+            )
+        except Exception:
+            pass
 
     signals.append({
         "name": "M6: <100 API calls/day + no protocol references",
@@ -178,8 +233,17 @@ def _check_kill_signals() -> dict:
                AND api_key_id IS NOT NULL"""
         )
         cda_consumers = row["cnt"] if row else 0
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"milestone_checker: cda_consumers query failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="ops_milestone_kill_cda_consumers_failure",
+                error_message=str(e)[:500],
+                cycle_phase="ops_milestone_checker",
+            )
+        except Exception:
+            pass
 
     signals.append({
         "name": "M9: CDA zero external consumers + no AI citations",
@@ -231,8 +295,17 @@ def _check_adoption_metrics() -> dict:
                AND api_key_id IS NOT NULL"""
         )
         api_daily = row["cnt"] if row else 0
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"milestone_checker: adoption api_daily query failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="ops_milestone_adoption_api_daily_failure",
+                error_message=str(e)[:500],
+                cycle_phase="ops_milestone_checker",
+            )
+        except Exception:
+            pass
     metrics.append({
         "name": "External API lookups/day",
         "current": api_daily,
@@ -255,8 +328,17 @@ def _check_adoption_metrics() -> dict:
                AND api_key_id IS NOT NULL"""
         )
         repeat_consumers = row["cnt"] if row else 0
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"milestone_checker: repeat_consumers query failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="ops_milestone_adoption_repeat_consumers_failure",
+                error_message=str(e)[:500],
+                cycle_phase="ops_milestone_checker",
+            )
+        except Exception:
+            pass
     metrics.append({
         "name": "Repeat consumers (>30 days)",
         "current": repeat_consumers,
@@ -301,8 +383,17 @@ def _check_adoption_metrics() -> dict:
                AND channel IN ('aave_forum', 'morpho_forum', 'cow_forum', 'ens_forum')"""
         )
         pulse_citations = row["cnt"] if row else 0
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"milestone_checker: pulse_citations query failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="ops_milestone_adoption_pulse_citations_failure",
+                error_message=str(e)[:500],
+                cycle_phase="ops_milestone_checker",
+            )
+        except Exception:
+            pass
     metrics.append({
         "name": "Pulse cited in governance",
         "current": pulse_citations,
