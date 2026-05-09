@@ -165,8 +165,19 @@ async def _get_cached_head_block(chain: str, client: httpx.AsyncClient) -> int |
         block_num = int(hex_block, 16)
         _HEAD_BLOCK_CACHE[chain] = (now, block_num)
         return block_num
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"[rpc] head-block fetch failed for {chain}: {e}")
+        logger.warning(f"[rpc] head-block fetch failed for {chain}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="utils_rpc_head_block_fetch_failure",
+                error_message=str(e)[:500],
+                cycle_phase="utils_rpc_provider",
+            )
+        except Exception:
+            pass
         return None
 
 
@@ -229,7 +240,16 @@ def _track(provider: str, method: str, chain: str, status: str,
             (provider, method, chain, status, fallback_reason),
         )
     except Exception as e:
-        logger.debug(f"[rpc] usage tracking skipped: {e}")
+        logger.warning(f"[rpc] usage tracking skipped: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="utils_rpc_track_usage_failure",
+                error_message=str(e)[:500],
+                cycle_phase="utils_rpc_provider",
+            )
+        except Exception:
+            pass
 
 
 def _track_success(provider: str, method: str, chain: str) -> None:
@@ -325,8 +345,17 @@ async def _call_provider(provider: str, method: str, params: list, chain: str,
                 status=_http_status,
                 latency_ms=int((time.monotonic() - _t0) * 1000),
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"rpc_provider: _call_provider track_api_call failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="utils_rpc_call_provider_track_api_call_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="utils_rpc_provider",
+                )
+            except Exception:
+                pass
 
 
 def _should_fallback(err: RPCError) -> bool:
@@ -437,8 +466,19 @@ async def _fetch_probe_tx_hash(client: httpx.AsyncClient, chain: str) -> str | N
         block = block_resp.json().get("result") or {}
         txs = block.get("transactions") or []
         return txs[0] if txs else None
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"[rpc_probe] failed to fetch sample tx hash: {e}")
+        logger.warning(f"[rpc_probe] failed to fetch sample tx hash: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="utils_rpc_probe_fetch_tx_hash_failure",
+                error_message=str(e)[:500],
+                cycle_phase="utils_rpc_provider",
+            )
+        except Exception:
+            pass
         return None
 
 
@@ -470,8 +510,19 @@ async def _record_capability(provider: str, chain: str, method: str, status: str
                 json.dumps(sample_params) if sample_params is not None else None,
             ),
         )
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"[rpc_probe] capability row skipped: {e}")
+        logger.warning(f"[rpc_probe] capability row skipped: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="utils_rpc_probe_capability_row_failure",
+                error_message=str(e)[:500],
+                cycle_phase="utils_rpc_provider",
+            )
+        except Exception:
+            pass
 
 
 # A known USDC mainnet address — totalSupply() is a cheap, deterministic

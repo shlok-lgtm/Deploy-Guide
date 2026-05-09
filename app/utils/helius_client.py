@@ -76,8 +76,17 @@ async def _rpc_call(
                         status=_status,
                         latency_ms=int((_time.monotonic() - _t0) * 1000),
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"helius_client: track_api_call failed: {e}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="utils_helius_client_track_api_call_failure",
+                            error_message=str(e)[:500],
+                            cycle_phase="utils_helius_client",
+                        )
+                    except Exception:
+                        pass
     return None
 
 

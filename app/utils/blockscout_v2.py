@@ -89,8 +89,17 @@ async def _request(
                         status=_status,
                         latency_ms=int((time.monotonic() - _t0) * 1000),
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"blockscout_v2: track_api_call failed: {e}")
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type="utils_blockscout_v2_track_api_call_failure",
+                            error_message=str(e)[:500],
+                            cycle_phase="utils_blockscout_v2",
+                        )
+                    except Exception:
+                        pass
     return None
 
 

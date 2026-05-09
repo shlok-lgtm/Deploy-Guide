@@ -10,6 +10,7 @@ Etherscan remains the source of truth for all scoring data.
 Comparison runs are time-bounded: only active during the evaluation period.
 """
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -95,8 +96,17 @@ def _close_match(etherscan_data: dict, blockscout_data: dict) -> bool:
                     return True
             except ValueError:
                 pass
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"data_source_comparator: _close_match comparison failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="utils_data_source_comparator_close_match_failure",
+                error_message=str(e)[:500],
+                cycle_phase="utils_data_source_comparator",
+            )
+        except Exception:
+            pass
     return False
 
 
@@ -128,8 +138,19 @@ async def _store_comparison(
                 blockscout_ms,
             ),
         )
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"Failed to store comparison: {e}")
+        logger.warning(f"Failed to store comparison: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="utils_data_source_comparator_store_comparison_failure",
+                error_message=str(e)[:500],
+                cycle_phase="utils_data_source_comparator",
+            )
+        except Exception:
+            pass
 
 
 # =============================================================================
@@ -168,8 +189,17 @@ async def compare_contract_abi(
     finally:
         try:
             track_api_call(provider="etherscan", endpoint="contract/getabi", caller="utils.data_source_comparator", status=_es_status, latency_ms=int((time.monotonic() - es_start) * 1000))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"data_source_comparator: compare_contract_abi track_api_call failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="utils_compare_contract_abi_track_api_call_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="utils_data_source_comparator",
+                )
+            except Exception:
+                pass
 
     # Blockscout call
     try:
@@ -233,8 +263,17 @@ async def compare_token_transfers(
     finally:
         try:
             track_api_call(provider="etherscan", endpoint="account/tokentx", caller="utils.data_source_comparator", status=_es_status, latency_ms=int((time.monotonic() - es_start) * 1000))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"data_source_comparator: compare_token_transfers track_api_call failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="utils_compare_token_transfers_track_api_call_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="utils_data_source_comparator",
+                )
+            except Exception:
+                pass
 
     try:
         bs_data = await bs_get_transfers(client, address, contract_address, chain_id)
@@ -289,8 +328,17 @@ async def compare_token_holder_count(
     finally:
         try:
             track_api_call(provider="etherscan", endpoint="token/tokenholdercount", caller="utils.data_source_comparator", status=_es_status, latency_ms=int((time.monotonic() - es_start) * 1000))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"data_source_comparator: compare_token_holder_count track_api_call failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="utils_compare_token_holder_count_track_api_call_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="utils_data_source_comparator",
+                )
+            except Exception:
+                pass
 
     try:
         bs_data = await bs_get_holder_count(client, contract_address, chain_id)

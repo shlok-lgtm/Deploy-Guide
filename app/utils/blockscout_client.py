@@ -120,8 +120,17 @@ async def blockscout_call(
                 status=_status,
                 latency_ms=int((time.monotonic() - start) * 1000),
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"blockscout_client: blockscout_call track_api_call failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="utils_blockscout_call_track_api_call_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="utils_blockscout_client",
+                )
+            except Exception:
+                pass
 
 
 # =============================================================================
@@ -252,8 +261,17 @@ async def get_token_holder_count(
                 status=_status,
                 latency_ms=int((time.monotonic() - start) * 1000),
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"blockscout_client: get_token_holder_count track_api_call failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="utils_blockscout_get_token_holder_count_track_api_call_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="utils_blockscout_client",
+                )
+            except Exception:
+                pass
 
 
 async def get_token_holder_list(
