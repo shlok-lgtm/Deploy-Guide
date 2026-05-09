@@ -1,0 +1,46 @@
+domain,call_sites,reachable_from_active_orchestrator,status
+actors,"app/actor_classification.py:391 (app.actor_classification.classify_all_active, reachable=1); app/actor_classification.py:393 (app.actor_classification.classify_all_active, reachable=1)",1,unknown
+bri_components,"app/collectors/bridge_collector.py:635 (app.collectors.bridge_collector.run_bri_scoring, reachable=1); app/collectors/bridge_collector.py:640 (app.collectors.bridge_collector.run_bri_scoring, reachable=1)",1,unknown
+bridge_monitoring,"app/collectors/bridge_monitors.py:337 (app.collectors.bridge_monitors.run_bridge_monitoring, reachable=0)",0,unknown
+cda_extractions,"app/services/cda_collector.py:1296 (app.services.cda_collector.run_collection, reachable=1)",1,unknown
+clustered_concentration,"app/collectors/clustered_concentration.py:339 (app.collectors.clustered_concentration.collect_clustered_concentration, reachable=1)",1,unknown
+contagion_events,"app/services/contagion_archive.py:280 (app.services.contagion_archive.archive_contagion_event, reachable=1)",1,unknown
+contract_dependencies,"app/collectors/contract_dependencies.py:375 (app.collectors.contract_dependencies._reconcile_dependencies, reachable=1)",1,unknown
+contract_dependencies_snapshot,"app/collectors/contract_dependencies.py:460 (app.collectors.contract_dependencies._store_daily_snapshot, reachable=1)",1,unknown
+contract_upgrades,"app/collectors/contract_upgrades.py:332 (app.collectors.contract_upgrades._record_upgrade, reachable=1)",1,unknown
+cqi_compositions,"app/composition.py:460 (app.composition.compute_cqi_matrix, reachable=0); app/composition.py:462 (app.composition.compute_cqi_matrix, reachable=0)",0,unknown
+cxri_components,"app/collectors/cex_collector.py:469 (app.collectors.cex_collector.run_cxri_scoring, reachable=1); app/collectors/cex_collector.py:474 (app.collectors.cex_collector.run_cxri_scoring, reachable=1)",1,unknown
+dex_pool_data,"app/collectors/dex_pools.py:426 (app.collectors.dex_pools.run_dex_pool_collection, reachable=1); app/collectors/dex_pools.py:431 (app.collectors.dex_pools.run_dex_pool_collection, reachable=1)",1,unknown
+discovery_signals,"app/discovery.py:229 (app.discovery.run_discovery_cycle, reachable=1); app/discovery.py:231 (app.discovery.run_discovery_cycle, reachable=1)",1,unknown
+divergence_signals,"app/enrichment_worker.py:729 (app.enrichment_worker._run_divergence, reachable=1)",1,unknown
+dohi_components,"app/collectors/dao_collector.py:986 (app.collectors.dao_collector.run_dohi_scoring, reachable=1); app/collectors/dao_collector.py:991 (app.collectors.dao_collector.run_dohi_scoring, reachable=1)",1,unknown
+edges,"app/indexer/edges.py:451 (app.indexer.edges.run_edge_builder, reachable=1)",1,unknown
+enforcement_records,"app/collectors/enforcement_history.py:273 (app.collectors.enforcement_history.collect_enforcement_records, reachable=1)",1,unknown
+exchange_health,"app/collectors/exchange_health.py:302 (app.collectors.exchange_health.run_exchange_health_monitoring, reachable=0)",0,unknown
+flows,"app/collectors/flows.py:433 (app.collectors.flows.collect_flows_components, reachable=0)",0,unknown
+governance_events,"app/collectors/governance_events.py:437 (app.collectors.governance_events.run_governance_event_collection, reachable=1)",1,unknown
+governance_proposals,"app/collectors/governance_proposals.py:401 (app.collectors.governance_proposals._upsert_proposal, reachable=1)",1,unknown
+governance_reads,"app/collectors/smart_contract.py:667 (app.collectors.smart_contract.collect_governance_reads, reachable=1)",1,unknown
+lsti_components,"app/collectors/lst_collector.py:671 (app.collectors.lst_collector.run_lsti_scoring, reachable=1); app/collectors/lst_collector.py:676 (app.collectors.lst_collector.run_lsti_scoring, reachable=1)",1,unknown
+oracle_readings,"app/collectors/oracle_behavior.py:670 (app.collectors.oracle_behavior._process_oracle, reachable=0)",0,unknown
+oracle_stress_events,"app/collectors/oracle_behavior.py:512 (app.collectors.oracle_behavior._handle_stress_event, reachable=0)",0,unknown
+parent_company_financials,"app/collectors/parent_company_financials.py:285 (app.collectors.parent_company_financials.collect_parent_financials, reachable=1)",1,unknown
+pool_wallet_discovery,"app/collectors/pool_wallet_collector.py:302 (app.collectors.pool_wallet_collector.run_pool_wallet_collection, reachable=1)",1,unknown
+protocol_parameter_changes,"app/collectors/parameter_history.py:436 (app.collectors.parameter_history._handle_parameter_change, reachable=1)",1,unknown
+protocol_parameter_snapshots,"app/collectors/parameter_history.py:514 (app.collectors.parameter_history._store_daily_snapshot, reachable=1)",1,unknown
+provenance,"app/enrichment_worker.py:1155 (app.enrichment_worker._run_provenance_update, reachable=1)",1,unknown
+psi_components,"app/worker.py:1088 (app.worker.run_fast_cycle, reachable=0)",0,unknown
+psi_discoveries,"app/enrichment_worker.py:285 (app.enrichment_worker._run_psi_expansion, reachable=1)",1,unknown
+rpi_components,"app/enrichment_worker.py:423 (app.enrichment_worker._run_rpi, reachable=1)",1,unknown
+rqs_composition,"app/composition.py:359 (app.composition.compute_rqs_for_protocol, reachable=0)",0,unknown
+rqs_compositions,"app/composition.py:388 (app.composition.compute_rqs_all, reachable=0); app/composition.py:393 (app.composition.compute_rqs_all, reachable=0)",0,unknown
+sanctions_screening,"app/collectors/sanctions_screening.py:198 (app.collectors.sanctions_screening.run_sanctions_screening, reachable=1)",1,unknown
+sii_components,"app/worker.py:652 (app.worker.score_stablecoin, reachable=0)",0,unknown
+smart_contracts,"app/collectors/smart_contract.py:931 (app.collectors.smart_contract.collect_smart_contract_components, reachable=0)",0,unknown
+tti_components,"app/collectors/tti_collector.py:698 (app.collectors.tti_collector.run_tti_scoring, reachable=1); app/collectors/tti_collector.py:703 (app.collectors.tti_collector.run_tti_scoring, reachable=1)",1,unknown
+validator_performance,"app/collectors/rated_validators.py:227 (app.collectors.rated_validators.collect_validator_performance, reachable=1)",1,unknown
+vsri_components,"app/collectors/vault_collector.py:734 (app.collectors.vault_collector.run_vsri_scoring, reachable=1)",1,unknown
+wallet_profiles,"app/indexer/profiles.py:195 (app.indexer.profiles.rebuild_all_profiles, reachable=1); app/indexer/profiles.py:197 (app.indexer.profiles.rebuild_all_profiles, reachable=1)",1,unknown
+wallets,"app/indexer/pipeline.py:787 (app.indexer.pipeline.run_pipeline_batch, reachable=1)",1,unknown
+web_research,"app/collectors/web_research.py:547 (app.collectors.web_research.run_web_research_collection, reachable=1)",1,unknown
+<non-literal>,"app/data_layer/provenance_scaling.py:181 (app.data_layer.provenance_scaling.attest_data_batch, reachable=1)",1,unknown
