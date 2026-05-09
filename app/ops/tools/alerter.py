@@ -44,6 +44,7 @@ async def _get_daily_count() -> int:
 
 
 async def _increment_daily_count():
+    import asyncio
     try:
         await execute_async("""
             INSERT INTO alert_rate_limit (day, count, last_sent_at)
@@ -52,8 +53,19 @@ async def _increment_daily_count():
                 count = alert_rate_limit.count + 1,
                 last_sent_at = NOW()
         """)
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"alerter: _increment_daily_count failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="ops_alerter_increment_daily_count_failure",
+                error_message=str(e)[:500],
+                cycle_phase="ops_alerter",
+            )
+        except Exception:
+            pass
 
 
 async def _claim_daily_slot(cap: int) -> bool:
@@ -128,13 +140,25 @@ async def send_alert(alert_type: str, message: str, context: dict = None, severi
             logger.error(f"Alert send failed ({ch['channel']}): {e}")
 
     # Always log the alert
+    import asyncio
     try:
         await execute_async(
             "INSERT INTO ops_alert_log (alert_type, channel, message, context) VALUES (%s, %s, %s, %s)",
             (alert_type, "telegram" if sent_any else "log_only", message, json.dumps(context or {}, default=str)),
         )
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"alerter: send_alert log insert failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="ops_alerter_send_alert_log_insert_failure",
+                error_message=str(e)[:500],
+                cycle_phase="ops_alerter",
+            )
+        except Exception:
+            pass
 
     return sent_any
 

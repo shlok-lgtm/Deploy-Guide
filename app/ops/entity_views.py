@@ -410,7 +410,16 @@ def _protocol_scores(psi: dict) -> dict:
         confidence = conf.get("confidence")
         confidence_tag = conf.get("tag")
     except Exception as e:
-        logger.debug(f"PSI confidence computation failed: {e}")
+        logger.warning(f"PSI confidence computation failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="ops_protocol_scores_psi_confidence_failure",
+                error_message=str(e)[:500],
+                cycle_phase="ops_entity_views",
+            )
+        except Exception:
+            pass
 
     return {
         "overall_score": _f(psi.get("overall_score")),
