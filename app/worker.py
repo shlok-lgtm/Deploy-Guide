@@ -175,8 +175,19 @@ async def collect_all_components(
             if contract:
                 await safe_collect("blockscout_abi_compare", compare_contract_abi(client, contract))
                 await safe_collect("blockscout_holder_compare", compare_token_holder_count(client, contract))
-    except Exception:
-        pass  # Shadow comparison is non-critical
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        # Shadow comparison is non-critical
+        logger.warning(f"shadow data-source comparison skipped for {stablecoin_id}: {e}")
+        try:
+            _record_cycle_error(
+                error_type="worker_collect_shadow_comparison_failure",
+                error_message=str(e)[:500],
+                cycle_phase="worker_collect_all_components",
+            )
+        except Exception:
+            pass
 
     # CDA vendor data (overlays/improves offline transparency + reserve components)
     try:
@@ -184,8 +195,18 @@ async def collect_all_components(
         cda_components = await get_cda_components(stablecoin_id)
         if cda_components:
             all_components.extend(cda_components)
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"CDA collector skipped for {stablecoin_id}: {e}")
+        logger.warning(f"CDA collector skipped for {stablecoin_id}: {e}")
+        try:
+            _record_cycle_error(
+                error_type="worker_collect_cda_components_failure",
+                error_message=str(e)[:500],
+                cycle_phase="worker_collect_all_components",
+            )
+        except Exception:
+            pass
     
     # Tag all components with stablecoin_id
     for comp in all_components:
@@ -652,8 +673,18 @@ async def score_stablecoin(client: httpx.AsyncClient, stablecoin_id: str) -> dic
         await _loop.run_in_executor(
             None, attest_state, "sii_components", _attest_records, stablecoin_id
         )
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"SII attestation skipped for {stablecoin_id}: {e}")
+        logger.warning(f"SII attestation skipped for {stablecoin_id}: {e}")
+        try:
+            _record_cycle_error(
+                error_type="worker_score_stablecoin_sii_attestation_failure",
+                error_message=str(e)[:500],
+                cycle_phase="worker_score_stablecoin",
+            )
+        except Exception:
+            pass
 
     elapsed = time.time() - start
     logger.info(
@@ -752,8 +783,16 @@ async def run_cycle_diagnostics():
                     _parts.append(f"{_p}={_today:,}/{_lim:,} ({round(_today/_lim*100)}%)")
                 else:
                     _parts.append(f"{_p}={_today:,}")
-        except Exception:
-            pass
+        except Exception as _ie:
+            logger.warning(f"[api_budget] in-memory tracker read failed: {_ie}")
+            try:
+                _record_cycle_error(
+                    error_type="worker_diagnostics_api_budget_tracker_failure",
+                    error_message=str(_ie)[:500],
+                    cycle_phase="worker_run_cycle_diagnostics",
+                )
+            except Exception:
+                pass
         # Fallback to DB
         if not _parts:
             try:
@@ -770,8 +809,18 @@ async def run_cycle_diagnostics():
                         _parts.append(f"{_p}={_today:,}/{_lim:,} ({round(_today/_lim*100)}%)")
                     else:
                         _parts.append(f"{_p}={_today:,}")
-            except Exception:
-                pass
+            except asyncio.CancelledError:
+                raise
+            except Exception as _ie:
+                logger.warning(f"[api_budget] DB fallback read failed: {_ie}")
+                try:
+                    _record_cycle_error(
+                        error_type="worker_diagnostics_api_budget_db_fallback_failure",
+                        error_message=str(_ie)[:500],
+                        cycle_phase="worker_run_cycle_diagnostics",
+                    )
+                except Exception:
+                    pass
         logger.error(f"[api_budget] {', '.join(_parts) if _parts else 'no calls tracked yet'}")
     except Exception as _e:
         logger.error(f"[api_budget] failed: {_e}")
@@ -916,8 +965,18 @@ async def run_cycle_diagnostics():
                     + (f" ({(_r['error_message'] or '')[:60]})" if _r['status'] != 'ok' else "")
                 )
             logger.error("[rpc_capabilities]\n  " + "\n  ".join(_cap_lines))
+    except asyncio.CancelledError:
+        raise
     except Exception as _e:
-        logger.debug(f"[rpc_capabilities] diagnostic skipped: {_e}")
+        logger.warning(f"[rpc_capabilities] diagnostic skipped: {_e}")
+        try:
+            _record_cycle_error(
+                error_type="worker_diagnostics_rpc_capabilities_failure",
+                error_message=str(_e)[:500],
+                cycle_phase="worker_run_cycle_diagnostics",
+            )
+        except Exception:
+            pass
 
     # 3e. Mempool observations — 24h SUMMARY line expected by the
     # mempool-watcher acceptance checklist. Silently skips if migration 091
@@ -925,8 +984,18 @@ async def run_cycle_diagnostics():
     try:
         from app.data_layer.mempool_watcher import emit_24h_summary as _mp_summary
         await _mp_summary()
+    except asyncio.CancelledError:
+        raise
     except Exception as _e:
-        logger.debug(f"[mempool_observations] diagnostic skipped: {_e}")
+        logger.warning(f"[mempool_observations] diagnostic skipped: {_e}")
+        try:
+            _record_cycle_error(
+                error_type="worker_diagnostics_mempool_observations_failure",
+                error_message=str(_e)[:500],
+                cycle_phase="worker_run_cycle_diagnostics",
+            )
+        except Exception:
+            pass
 
     # 4. API usage table verification
     try:
@@ -1000,8 +1069,18 @@ async def run_fast_cycle():
         logger.error("[prelude-phase] seed_from_local_config start")
         await seed_from_local_config()
         logger.error("[prelude-phase] seed_from_local_config end")
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"Provenance seed from local config skipped: {e}")
+        logger.warning(f"Provenance seed from local config skipped: {e}")
+        try:
+            _record_cycle_error(
+                error_type="worker_run_fast_cycle_provenance_seed_failure",
+                error_message=str(e)[:500],
+                cycle_phase="worker_run_fast_cycle",
+            )
+        except Exception:
+            pass
 
     # -------------------------------------------------------------------------
     # SII scoring — score all stablecoins
@@ -1086,8 +1165,18 @@ async def run_fast_cycle():
             if psi_results:
                 _psi_attest = [{"slug": r.get("protocol_slug", ""), "score": r.get("overall_score")} for r in psi_results if isinstance(r, dict)]
                 await _fc_loop.run_in_executor(None, attest_state, "psi_components", _psi_attest)
+        except asyncio.CancelledError:
+            raise
         except Exception as ae:
-            logger.debug(f"PSI attestation skipped: {ae}")
+            logger.warning(f"PSI attestation skipped: {ae}")
+            try:
+                _record_cycle_error(
+                    error_type="worker_run_fast_cycle_psi_attestation_failure",
+                    error_message=str(ae)[:500],
+                    cycle_phase="worker_run_fast_cycle",
+                )
+            except Exception:
+                pass
     except Exception as e:
         logger.warning(f"PSI scoring failed: {e}")
 
@@ -1258,8 +1347,18 @@ async def run_fast_cycle():
                             _yr,
                         )
                     _ys_ok += 1
-                except Exception:
-                    pass
+                except asyncio.CancelledError:
+                    raise
+                except Exception as _ye:
+                    logger.warning(f"yield per-row insert failed: {_ye}")
+                    try:
+                        _record_cycle_error(
+                            error_type="worker_run_fast_cycle_yield_per_row_insert_failure",
+                            error_message=str(_ye)[:500],
+                            cycle_phase="worker_run_fast_cycle",
+                        )
+                    except Exception:
+                        pass
         logger.error(f"=== YIELDS: {_ys_ok}/{len(_ys_rows)} in {time.time()-_ys_start:.1f}s ===")
     except Exception as _e3: logger.error(f"=== YIELDS FAILED: {_e3} ===")
 
@@ -1328,7 +1427,18 @@ async def run_fast_cycle():
                             _liq_ok += 1
                         except Exception as _e:
                             _liq_err += 1
-                except Exception: pass
+                except asyncio.CancelledError:
+                    raise
+                except Exception as _le:
+                    logger.warning(f"liquidity tickers fetch failed for {_sc.get('id')}: {_le}")
+                    try:
+                        _record_cycle_error(
+                            error_type="worker_run_fast_cycle_liquidity_tickers_failure",
+                            error_message=str(_le)[:500],
+                            cycle_phase="worker_run_fast_cycle",
+                        )
+                    except Exception:
+                        pass
                 await asyncio.sleep(0.15)
         _liq_total = await fetch_one_async("SELECT COUNT(*) as c FROM liquidity_depth")
         logger.error(f"=== LIQUIDITY: {_liq_ok} ok, {_liq_err} err, total={_liq_total} ===")
@@ -1619,22 +1729,52 @@ async def run_fast_cycle():
     try:
         from app.api_usage_tracker import flush as _fast_flush
         await asyncio.to_thread(_fast_flush)
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as _fle:
+        logger.warning(f"api_usage_tracker flush failed: {_fle}")
+        try:
+            _record_cycle_error(
+                error_type="worker_run_fast_cycle_api_usage_tracker_flush_failure",
+                error_message=str(_fle)[:500],
+                cycle_phase="worker_run_fast_cycle",
+            )
+        except Exception:
+            pass
     try:
         from app.utils.api_tracker import tracker as _cycle_tracker
         _flushed = await asyncio.to_thread(_cycle_tracker.flush)
         if _flushed:
             logger.error(f"[api_tracker] flushed {_flushed} rows to api_usage_hourly")
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as _fle:
+        logger.warning(f"api_tracker cycle flush failed: {_fle}")
+        try:
+            _record_cycle_error(
+                error_type="worker_run_fast_cycle_api_tracker_cycle_flush_failure",
+                error_message=str(_fle)[:500],
+                cycle_phase="worker_run_fast_cycle",
+            )
+        except Exception:
+            pass
 
     # Snapshot row counts for dashboard delta computation (pg_stat, instant)
     try:
         from app.data_layer.state_growth import snapshot_row_counts
         await snapshot_row_counts()
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as _sre:
+        logger.warning(f"snapshot_row_counts failed: {_sre}")
+        try:
+            _record_cycle_error(
+                error_type="worker_run_fast_cycle_snapshot_row_counts_failure",
+                error_message=str(_sre)[:500],
+                cycle_phase="worker_run_fast_cycle",
+            )
+        except Exception:
+            pass
 
     # Gate status diagnostic — log whether expansion and edge gates are open
     try:
@@ -2294,8 +2434,18 @@ async def run_slow_cycle():
                     if cfg:
                         await asyncio.to_thread(assemble_report_data, "stablecoin", cfg["symbol"])
                         report_count += 1
-                except Exception:
-                    pass
+                except asyncio.CancelledError:
+                    raise
+                except Exception as _re:
+                    logger.warning(f"daily report assembly failed for stablecoin {sid}: {_re}")
+                    try:
+                        _record_cycle_error(
+                            error_type="worker_run_slow_cycle_report_stablecoin_failure",
+                            error_message=str(_re)[:500],
+                            cycle_phase="worker_run_slow_cycle",
+                        )
+                    except Exception:
+                        pass
 
             # Protocol reports
             try:
@@ -2304,10 +2454,30 @@ async def run_slow_cycle():
                     try:
                         await asyncio.to_thread(assemble_report_data, "protocol", slug)
                         report_count += 1
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as _re:
+                        logger.warning(f"daily report assembly failed for protocol {slug}: {_re}")
+                        try:
+                            _record_cycle_error(
+                                error_type="worker_run_slow_cycle_report_protocol_failure",
+                                error_message=str(_re)[:500],
+                                cycle_phase="worker_run_slow_cycle",
+                            )
+                        except Exception:
+                            pass
+            except asyncio.CancelledError:
+                raise
+            except Exception as _re:
+                logger.warning(f"protocol reports loop failed: {_re}")
+                try:
+                    _record_cycle_error(
+                        error_type="worker_run_slow_cycle_report_protocol_loop_failure",
+                        error_message=str(_re)[:500],
+                        cycle_phase="worker_run_slow_cycle",
+                    )
+                except Exception:
+                    pass
 
             logger.info(f"Report attestations: {report_count} reports generated")
         else:
@@ -2708,8 +2878,18 @@ async def run_slow_cycle_parallel():
     # Mark non-attesting CDA issuers so they don't show as stale
     try:
         await asyncio.to_thread(_update_cda_issuers_sync)
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.debug(f"CDA issuer method update skipped: {e}")
+        logger.warning(f"CDA issuer method update skipped: {e}")
+        try:
+            _record_cycle_error(
+                error_type="worker_run_slow_cycle_parallel_cda_issuer_update_failure",
+                error_message=str(e)[:500],
+                cycle_phase="worker_run_slow_cycle_parallel",
+            )
+        except Exception:
+            pass
 
     # Contract surveillance re-scan — force if no scans in 24h
     try:
@@ -2789,8 +2969,18 @@ async def run_slow_cycle_parallel():
     try:
         from app.api_usage_tracker import flush
         await asyncio.to_thread(flush)
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as _fe:
+        logger.warning(f"slow-cycle api_usage_tracker flush failed: {_fe}")
+        try:
+            _record_cycle_error(
+                error_type="worker_run_slow_cycle_parallel_api_usage_tracker_flush_failure",
+                error_message=str(_fe)[:500],
+                cycle_phase="worker_run_slow_cycle_parallel",
+            )
+        except Exception:
+            pass
 
     elapsed = time.time() - start
     logger.info(f"=== Parallel slow cycle complete in {elapsed:.0f}s ===")
@@ -2830,8 +3020,16 @@ def _run_vacuum_analyze_sync():
                 logger.error(f"[startup] VACUUM ANALYZE {_tbl} failed: {_ve}")
                 try:
                     _vac_cur.execute(f"ANALYZE {_tbl}")
-                except Exception:
-                    pass
+                except Exception as _ae:
+                    logger.warning(f"[startup] ANALYZE fallback for {_tbl} failed: {_ae}")
+                    try:
+                        _record_cycle_error(
+                            error_type="worker_vacuum_analyze_fallback_failure",
+                            error_message=str(_ae)[:500],
+                            cycle_phase="worker_vacuum_analyze_sync",
+                        )
+                    except Exception:
+                        pass
         # Regular ANALYZE for other key tables
         for _tbl in [
             "score_history", "scores", "psi_scores",
@@ -2841,8 +3039,16 @@ def _run_vacuum_analyze_sync():
         ]:
             try:
                 _vac_cur.execute(f"ANALYZE {_tbl}")
-            except Exception:
-                pass
+            except Exception as _ae:
+                logger.warning(f"[startup] ANALYZE {_tbl} failed: {_ae}")
+                try:
+                    _record_cycle_error(
+                        error_type="worker_vacuum_analyze_main_failure",
+                        error_message=str(_ae)[:500],
+                        cycle_phase="worker_vacuum_analyze_sync",
+                    )
+                except Exception:
+                    pass
         _vac_cur.close()
         logger.error("[startup] VACUUM ANALYZE complete")
     finally:
@@ -3124,8 +3330,18 @@ async def main():
                 UNIQUE (table_name, snapshot_date)
             )
         """)
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as _ce:
+        logger.warning(f"[startup] state_growth_snapshots table create skipped: {_ce}")
+        try:
+            _record_cycle_error(
+                error_type="worker_main_state_growth_snapshots_create_failure",
+                error_message=str(_ce)[:500],
+                cycle_phase="worker_main_startup",
+            )
+        except Exception:
+            pass
 
     # Ensure oracle tables exist (migration 073 may not have been applied)
     try:
@@ -3300,8 +3516,18 @@ async def main():
                 (_st,),
             )
             logger.error(f"[schema_after] {_st}: {[r['column_name'] for r in (_cols or [])]}")
-        except Exception:
-            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as _se:
+            logger.warning(f"[schema_after] {_st} columns query failed: {_se}")
+            try:
+                _record_cycle_error(
+                    error_type="worker_main_schema_after_columns_query_failure",
+                    error_message=str(_se)[:500],
+                    cycle_phase="worker_main_startup",
+                )
+            except Exception:
+                pass
 
     # Startup diagnostic fires via the independent loop after 60s
     # Schema validation — catch all drift in one shot
