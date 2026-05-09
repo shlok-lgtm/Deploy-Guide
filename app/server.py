@@ -512,8 +512,19 @@ async def startup():
     try:
         await execute_async("DELETE FROM temporal_reconstructions WHERE components_available = 0")
         logger.info("Cleared stale temporal reconstruction cache entries")
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"clean stale temporal reconstruction cache failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="server_startup_temporal_cache_cleanup_failure",
+                error_message=str(e)[:500],
+                cycle_phase="server_startup",
+            )
+        except Exception:
+            pass
     # Ensure historical_protocol_data table exists on this database
     try:
         await execute_async("""
@@ -649,8 +660,19 @@ async def startup():
     try:
         from app.ops.tools.alerter import send_alert
         await send_alert("service_restart", "API server started.")
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"startup service_restart alert failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="server_startup_alert_failure",
+                error_message=str(e)[:500],
+                cycle_phase="server_startup",
+            )
+        except Exception:
+            pass
 
 
 async def _run_mcp_session_manager(session_manager):
@@ -746,8 +768,17 @@ async def _engine_scheduler_shutdown():
 try:
     from app.usage_tracker import flush as _flush_usage_atexit
     atexit.register(_flush_usage_atexit)
-except Exception:
-    pass
+except Exception as e:
+    logger.warning(f"atexit usage_tracker flush registration failed: {e}")
+    try:
+        from app.worker import _record_cycle_error
+        _record_cycle_error(
+            error_type="server_module_atexit_register_failure",
+            error_message=str(e)[:500],
+            cycle_phase="server_module_init",
+        )
+    except Exception:
+        pass
 
 
 # =============================================================================
@@ -1047,8 +1078,17 @@ def _also_scored_in(slug: str, primary_index: str) -> list:
         try:
             if fetch_one(sql, params):
                 others.append(idx_name)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"_also_scored_in check {idx_name} failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="server_also_scored_in_check_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="server_also_scored_in",
+                )
+            except Exception:
+                pass
     return others
 
 
@@ -1625,8 +1665,19 @@ async def get_scores(response: Response, methodology_version: Optional[str] = Qu
         )
         if cda_count and cda_count["cnt"] > 0:
             data_sources.add("Parallel.ai+Reducto")
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"get_scores cda_count query failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="server_get_scores_cda_count_failure",
+                error_message=str(e)[:500],
+                cycle_phase="server_get_scores",
+            )
+        except Exception:
+            pass
 
     scores_result = {
         "stablecoins": results,
@@ -3047,8 +3098,18 @@ def _keygen_ensure_columns():
                 cur.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS email VARCHAR(255)")
                 cur.execute("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS tier VARCHAR(20) DEFAULT 'pro'")
                 conn.commit()
-    except Exception:
-        pass  # columns may already exist
+    except Exception as e:
+        # columns may already exist
+        logger.warning(f"_keygen_ensure_columns ALTER TABLE failed (may already exist): {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="server_keygen_ensure_columns_failure",
+                error_message=str(e)[:500],
+                cycle_phase="server_keygen_ensure_columns",
+            )
+        except Exception:
+            pass
 
 
 def _keygen_store_email_tier(email, key_string):
@@ -5704,8 +5765,19 @@ async def treasury_profile(address: str):
     try:
         from app.wallet_profile import generate_wallet_profile
         profile = await asyncio.to_thread(generate_wallet_profile, addr_lower)
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"treasury_profile generate_wallet_profile failed for {addr_lower}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="server_treasury_profile_wallet_profile_failure",
+                error_message=str(e)[:500],
+                cycle_phase="server_treasury_profile",
+            )
+        except Exception:
+            pass
 
     # Get recent events
     events = await fetch_all_async("""
@@ -7533,8 +7605,17 @@ def _render_proof_html(identifier: str, surface: str) -> str:
         <p>Inputs hash: <code>{h}</code></p>
         <p>You can verify this score independently by calling <code>GET {json_api}</code> and applying the published formula to the component readings. The same inputs always produce the same output.</p>
     </div>"""
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"_render_proof_html inputs hash compute failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="server_render_proof_html_hash_failure",
+                error_message=str(e)[:500],
+                cycle_phase="server_render_proof_html",
+            )
+        except Exception:
+            pass
 
     json_ld = json.dumps({
         "@context": "https://schema.org",
@@ -7976,8 +8057,19 @@ async def drift_exploit_analysis():
                 elif isinstance(v, uuid_mod.UUID):
                     d[k] = str(v)
             result["event"] = d
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"drift_exploit_analysis assessment event query failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="server_drift_exploit_assessment_event_failure",
+                error_message=str(e)[:500],
+                cycle_phase="server_drift_exploit_analysis",
+            )
+        except Exception:
+            pass
 
     # 2. Drift PSI score
     psi_row = await fetch_one_async("""
@@ -8032,8 +8124,19 @@ async def drift_exploit_analysis():
                 }
                 for r in exposure_rows
             ]
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"drift_exploit_analysis exposure query failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="server_drift_exploit_exposure_failure",
+                error_message=str(e)[:500],
+                cycle_phase="server_drift_exploit_analysis",
+            )
+        except Exception:
+            pass
 
     # 4. CQI pairs
     for symbol in ["usdc", "usdt", "dai"]:
@@ -8045,8 +8148,19 @@ async def drift_exploit_analysis():
                     "sii": cqi.get("inputs", {}).get("sii", {}).get("score"),
                     "psi": cqi.get("inputs", {}).get("psi", {}).get("score"),
                 }
-        except Exception:
-            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"drift_exploit_analysis cqi pair {symbol}/drift failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="server_drift_exploit_cqi_pair_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="server_drift_exploit_analysis",
+                )
+            except Exception:
+                pass
 
     # 5. Market impact (DRIFT token from CoinGecko)
     try:
@@ -8060,8 +8174,19 @@ async def drift_exploit_analysis():
                 "drift_market_cap": market.get("market_cap", {}).get("usd"),
                 "drift_volume_24h": market.get("total_volume", {}).get("usd"),
             }
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"drift_exploit_analysis market impact fetch failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="server_drift_exploit_market_impact_failure",
+                error_message=str(e)[:500],
+                cycle_phase="server_drift_exploit_analysis",
+            )
+        except Exception:
+            pass
 
     # 6. Narrative
     psi_score = result["drift_psi"]["current_score"] if result["drift_psi"] else "N/A"
