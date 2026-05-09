@@ -21,6 +21,7 @@ import httpx
 
 from app.database import fetch_all, fetch_one, execute, fetch_one_async, fetch_all_async, execute_async
 from app.api_usage_tracker import track_api_call
+from app.utils.rpc_provider import call_sync as _rpc_call_sync, RPCError
 
 logger = logging.getLogger(__name__)
 
@@ -29,35 +30,30 @@ logger = logging.getLogger(__name__)
 # RPC helpers
 # ---------------------------------------------------------------------------
 
-def _get_rpc_url(chain: str = "ethereum") -> str:
-    alchemy_key = os.environ.get("ALCHEMY_API_KEY", "")
-    if not alchemy_key:
-        return ""
-    chain_map = {
-        "ethereum": "eth-mainnet",
-        "arbitrum": "arb-mainnet",
-        "base": "base-mainnet",
-    }
-    network = chain_map.get(chain, "eth-mainnet")
-    return f"https://{network}.g.alchemy.com/v2/{alchemy_key}"
+_ROUTER_CHAINS = {"ethereum", "base", "arbitrum"}
+
+
+def _has_router_provider() -> bool:
+    return bool(
+        os.environ.get("ALCHEMY_API_KEY")
+        or os.environ.get("DWELLIR_API_KEY")
+        or os.environ.get("DWELLIR_ETH_URL")
+    )
 
 
 def _eth_call_sync(contract: str, data: str, chain: str = "ethereum") -> str:
-    """Execute eth_call via Alchemy RPC (sync). Falls back to Etherscan."""
-    rpc_url = _get_rpc_url(chain)
-    if rpc_url:
+    """Execute eth_call through the Dwellir failover router (sync).
+
+    Routes via `app.utils.rpc_provider.call_sync()` (Alchemy primary, Dwellir
+    failover on 429/5xx). Falls back to Etherscan for ethereum mainnet on
+    failure, preserving the existing fallback semantics.
+    """
+    if chain in _ROUTER_CHAINS and _has_router_provider():
         try:
-            resp = httpx.post(
-                rpc_url,
-                json={
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "eth_call",
-                    "params": [{"to": contract, "data": data}, "latest"],
-                },
-                timeout=15,
+            result = _rpc_call_sync(
+                "eth_call", [{"to": contract, "data": data}, "latest"],
+                chain=chain, timeout=15.0,
             )
-            result = resp.json().get("result", "0x")
             if result and result != "0x":
                 return result
         except Exception as e:

@@ -22,6 +22,7 @@ import httpx
 
 from app.database import fetch_all, fetch_one, execute, get_cursor, fetch_all_async, execute_async, fetch_one_async
 from app.api_usage_tracker import track_api_call
+from app.utils.rpc_provider import call as _rpc_call, RPCError
 
 logger = logging.getLogger(__name__)
 
@@ -66,19 +67,19 @@ FALLBACK_RPCS = {
 # ---------------------------------------------------------------------------
 
 def _get_rpc_url(chain: str) -> str:
-    """Get RPC URL for chain, preferring Alchemy, falling back to public."""
+    """Compatibility shim: returns a non-empty marker if the provider router
+    has Alchemy or Dwellir configured for `chain`. The actual RPC URL is
+    owned by `app.utils.rpc_provider`; callers only use this to gate-skip
+    chains with no provider configured. Falls through to legacy public RPC
+    only if neither provider is configured (dev environments).
+    """
     alchemy_key = os.environ.get("ALCHEMY_API_KEY", "")
-    if alchemy_key:
-        chain_map = {
-            "ethereum": "eth-mainnet",
-            "base": "base-mainnet",
-            "arbitrum": "arb-mainnet",
-        }
-        network = chain_map.get(chain)
-        if network:
-            return f"https://{network}.g.alchemy.com/v2/{alchemy_key}"
+    dwellir_key = os.environ.get("DWELLIR_API_KEY", "") or os.environ.get("DWELLIR_ETH_URL", "")
+    if alchemy_key or dwellir_key:
+        if chain in ("ethereum", "base", "arbitrum"):
+            return f"router://{chain}"
 
-    # Chain-specific env vars
+    # Chain-specific env var override (legacy).
     env_map = {"ethereum": "ETHEREUM_RPC_URL", "base": "BASE_RPC_URL"}
     env_url = os.environ.get(env_map.get(chain, ""), "")
     if env_url:
@@ -89,84 +90,42 @@ def _get_rpc_url(chain: str) -> str:
 
 async def _async_eth_call(client: httpx.AsyncClient, rpc_url: str, to: str, data: str,
                           chain: str = "ethereum") -> str:
-    """Async eth_call via the provider router. Returns hex result or empty string.
+    """Async eth_call routed through the Dwellir failover provider.
 
-    As of the Dwellir integration (migration 090), eth_call dispatches through
-    `app.utils.rpc_provider.call()` which routes between Alchemy and Dwellir
-    and records usage in `rpc_provider_usage`. The `rpc_url` argument is kept
-    for signature compatibility with existing callers but is no longer the
-    transport — the router owns URL resolution. It's still used as a
-    fall-back-of-the-fall-back if the router can't resolve either configured
-    provider (e.g., both API keys missing in a dev environment).
+    Dispatches via `app.utils.rpc_provider.call()` which selects Alchemy or
+    Dwellir per-method and falls back automatically on 429/5xx. The `rpc_url`
+    arg is preserved for signature compatibility but is no longer the
+    transport — the router owns URL resolution. Returns "0x" on any error
+    so callers can continue (this collector is documented as never-raises).
     """
     try:
-        from app.utils.rpc_provider import call as _rpc_call, RPCError
         result = await _rpc_call(
             "eth_call", [{"to": to, "data": data}, "latest"],
             chain=chain, client=client, timeout=15.0,
         )
         return result if result else "0x"
-    except RPCError as e:
-        logger.debug(f"eth_call routed failed for {to}: {e}")
     except Exception as e:
-        logger.debug(f"eth_call router unavailable for {to}: {e}")
-
-    # Fallback to the old direct httpx path — preserved so a router-path
-    # misconfiguration doesn't take the oracle pipeline down silently.
-    if not rpc_url:
-        return "0x"
-    try:
-        resp = await client.post(
-            rpc_url,
-            json={
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "eth_call",
-                "params": [{"to": to, "data": data}, "latest"],
-            },
-            timeout=15,
-        )
-        result = resp.json().get("result", "0x")
-        return result if result else "0x"
-    except Exception as e:
-        logger.debug(f"eth_call direct-fallback failed for {to}: {e}")
+        logger.debug(f"eth_call failed for {to}: {e}")
         return "0x"
 
 
 async def _async_get_block_timestamp(client: httpx.AsyncClient, rpc_url: str,
                                      chain: str = "ethereum") -> int:
-    """Get current block timestamp via the provider router (see _async_eth_call
-    for rationale)."""
+    """Get current block timestamp via the Dwellir failover router.
+
+    Returns wall-clock time on any error so the latency calculation in the
+    caller degrades gracefully (this collector never raises).
+    """
     try:
-        from app.utils.rpc_provider import call as _rpc_call, RPCError
         block = await _rpc_call(
             "eth_getBlockByNumber", ["latest", False],
             chain=chain, client=client, timeout=10.0,
         )
         if block:
             return int(block.get("timestamp", "0x0"), 16)
-    except RPCError as e:
-        logger.debug(f"eth_getBlockByNumber routed failed: {e}")
     except Exception as e:
-        logger.debug(f"eth_getBlockByNumber router unavailable: {e}")
-
-    if not rpc_url:
-        return int(time.time())
-    try:
-        resp = await client.post(
-            rpc_url,
-            json={
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "eth_getBlockByNumber",
-                "params": ["latest", False],
-            },
-            timeout=10,
-        )
-        block = resp.json().get("result", {})
-        return int(block.get("timestamp", "0x0"), 16)
-    except Exception:
-        return int(time.time())
+        logger.debug(f"eth_getBlockByNumber failed: {e}")
+    return int(time.time())
 
 
 def _decode_uint256(hex_str: str, offset: int = 0) -> int:

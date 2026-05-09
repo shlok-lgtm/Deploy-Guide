@@ -25,10 +25,13 @@ import httpx
 
 from app.database import execute, fetch_one, get_cursor
 from app.api_usage_tracker import track_api_call
+from app.utils.rpc_provider import call as _rpc_call, RPCError
 
 logger = logging.getLogger(__name__)
 
 ALCHEMY_API_KEY = os.environ.get("ALCHEMY_API_KEY", "")
+# Retained as a last-ditch fallback only — actual transport is the
+# `app.utils.rpc_provider` router (Alchemy primary, Dwellir failover).
 ETH_RPC = (
     f"https://eth-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}"
     if ALCHEMY_API_KEY
@@ -54,16 +57,18 @@ CONTRACTS = {
 
 
 async def _eth_call(client: httpx.AsyncClient, to: str, data: str) -> str:
-    """Execute eth_call and return hex result."""
-    payload = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "eth_call",
-        "params": [{"to": to, "data": data}, "latest"],
-    }
-    resp = await client.post(ETH_RPC, json=payload, timeout=15)
-    result = resp.json()
-    return result.get("result", "0x")
+    """Execute eth_call through the Dwellir failover router and return hex result.
+
+    Routes via `app.utils.rpc_provider.call()` which selects Alchemy/Dwellir
+    per-method and falls back automatically on 429/5xx. Raises on RPC error
+    so the caller's existing `try/except` (which logs and returns an error
+    dict) preserves its semantics.
+    """
+    result = await _rpc_call(
+        "eth_call", [{"to": to, "data": data}, "latest"],
+        chain="ethereum", client=client, timeout=15.0,
+    )
+    return result if result else "0x"
 
 
 def _decode_uint256(hex_str: str) -> int:

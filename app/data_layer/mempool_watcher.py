@@ -69,6 +69,82 @@ _ALCHEMY_WS_CHAIN_MAP = {
     "arbitrum": "arb-mainnet",
 }
 
+# ---------------------------------------------------------------------------
+# Reconciliation error categorization (in-memory diagnostic, last 60 min)
+# ---------------------------------------------------------------------------
+
+_ERROR_CATEGORIES = (
+    "timeout",
+    "rate_limited",
+    "both_failed",
+    "network",
+    "http_5xx",
+    "rpc_error",
+    "other",
+)
+
+# Rolling 60-minute event log: list of (epoch_seconds, category) tuples.
+_reconcile_error_events: list[tuple[float, str]] = []
+_RECONCILE_ERROR_WINDOW_SEC = 3600
+
+# Throttle the hourly summary log so we emit at most once every 60s.
+_last_hourly_summary_log_ts: float = 0.0
+_HOURLY_SUMMARY_LOG_INTERVAL_SEC = 60
+
+
+def _classify_reconcile_error(exc: Exception) -> str:
+    """Map an exception raised by the reconciliation RPC call to one of
+    the _ERROR_CATEGORIES buckets. Order matters: more specific buckets
+    are checked before broader ones."""
+    msg = str(exc) if exc else ""
+    msg_lc = msg.lower()
+    status = getattr(exc, "status", None)
+    rpc_code = getattr(exc, "rpc_code", None)
+
+    if status == 599 or "timeout" in msg_lc:
+        return "timeout"
+    if status == 429:
+        return "rate_limited"
+    if msg.startswith("both providers failed"):
+        return "both_failed"
+    if status == 598 or msg.startswith("network:"):
+        return "network"
+    if isinstance(status, int) and 500 <= status < 600 and status != 599:
+        return "http_5xx"
+    if rpc_code is not None:
+        return "rpc_error"
+    return "other"
+
+
+def _record_reconcile_error(category: str) -> None:
+    """Append an error event to the rolling window."""
+    _reconcile_error_events.append((time.time(), category))
+
+
+def _prune_reconcile_errors(now: float | None = None) -> None:
+    """Drop events older than _RECONCILE_ERROR_WINDOW_SEC. Cheap O(n);
+    list stays small because we only log a few hundred per hour at most."""
+    cutoff = (now if now is not None else time.time()) - _RECONCILE_ERROR_WINDOW_SEC
+    # Find first index >= cutoff (events are appended in time order).
+    keep_from = 0
+    for i, (ts, _) in enumerate(_reconcile_error_events):
+        if ts >= cutoff:
+            keep_from = i
+            break
+    else:
+        keep_from = len(_reconcile_error_events)
+    if keep_from > 0:
+        del _reconcile_error_events[:keep_from]
+
+
+def _aggregate_reconcile_errors_60m() -> dict[str, int]:
+    """Return per-category counts over the rolling 60-minute window."""
+    agg = {cat: 0 for cat in _ERROR_CATEGORIES}
+    for _, cat in _reconcile_error_events:
+        if cat in agg:
+            agg[cat] += 1
+    return agg
+
 
 # ---------------------------------------------------------------------------
 # Watchlist builder
@@ -533,7 +609,25 @@ async def reconcile_once() -> dict:
     """
     from app.utils.rpc_provider import call as rpc_call, RPCError
 
-    counts = {"checked": 0, "confirmed": 0, "dropped": 0, "still_pending": 0, "errors": 0}
+    # Existing keys are preserved for backward compatibility with anything
+    # reading the return value. New per-category subcounts are appended.
+    counts: dict[str, int] = {
+        "checked": 0,
+        "confirmed": 0,
+        "dropped": 0,
+        "still_pending": 0,
+        "errors": 0,
+    }
+    err_buckets: dict[str, int] = {cat: 0 for cat in _ERROR_CATEGORIES}
+
+    def _bump_err(category: str) -> None:
+        counts["errors"] += 1
+        err_buckets[category] = err_buckets.get(category, 0) + 1
+        _record_reconcile_error(category)
+
+    # Prune the rolling window once per pass so it stays bounded even when
+    # the loop is mostly idle.
+    _prune_reconcile_errors()
 
     try:
         rows = await fetch_all_async(
@@ -549,6 +643,10 @@ async def reconcile_once() -> dict:
         ) or []
     except Exception as e:
         logger.warning(f"[mempool_watcher] reconcile query failed: {e}")
+        # Surface the bucketed counts even on early-return so callers see
+        # a stable schema.
+        for cat, n in err_buckets.items():
+            counts[f"err_{cat}"] = n
         return counts
 
     now_ms = int(time.time() * 1000)
@@ -562,11 +660,11 @@ async def reconcile_once() -> dict:
                 "eth_getTransactionByHash", [tx_hash], chain="ethereum", timeout=8.0,
             )
         except RPCError as e:
-            counts["errors"] += 1
+            _bump_err(_classify_reconcile_error(e))
             logger.debug(f"[mempool_watcher] reconcile RPC fail {tx_hash[:12]}: {e}")
             continue
         except Exception as e:
-            counts["errors"] += 1
+            _bump_err(_classify_reconcile_error(e))
             logger.debug(
                 f"[mempool_watcher] reconcile exc {tx_hash[:12]}: "
                 f"{type(e).__name__}: {e}"
@@ -578,7 +676,7 @@ async def reconcile_once() -> dict:
             try:
                 block_num = int(tx["blockNumber"], 16)
             except Exception:
-                counts["errors"] += 1
+                _bump_err("other")
                 continue
             latency_ms = max(0, now_ms - int(r["seen_at_ms"]))
             try:
@@ -594,7 +692,7 @@ async def reconcile_once() -> dict:
                 )
                 counts["confirmed"] += 1
             except Exception as e:
-                counts["errors"] += 1
+                _bump_err("other")
                 logger.debug(f"[mempool_watcher] reconcile update failed: {e}")
         else:
             # Unconfirmed — if older than drop threshold, mark dropped.
@@ -606,10 +704,15 @@ async def reconcile_once() -> dict:
                     )
                     counts["dropped"] += 1
                 except Exception as e:
-                    counts["errors"] += 1
+                    _bump_err("other")
                     logger.debug(f"[mempool_watcher] drop mark failed: {e}")
             else:
                 counts["still_pending"] += 1
+
+    # Expose per-category subcounts on the return dict (additive — does
+    # not displace the existing `errors` key).
+    for cat, n in err_buckets.items():
+        counts[f"err_{cat}"] = n
 
     return counts
 
@@ -617,16 +720,32 @@ async def reconcile_once() -> dict:
 async def run_reconciliation_loop() -> None:
     """Fires `reconcile_once` every RECONCILIATION_INTERVAL_SEC. Caller
     schedules as a background task."""
+    global _last_hourly_summary_log_ts
     while True:
         try:
             counts = await reconcile_once()
             if any(counts.values()):
+                err_breakdown = " ".join(
+                    f"err_{cat}={counts.get(f'err_{cat}', 0)}"
+                    for cat in _ERROR_CATEGORIES
+                )
                 logger.error(
                     f"[mempool_watcher] reconcile: "
                     f"checked={counts['checked']} confirmed={counts['confirmed']} "
                     f"still_pending={counts['still_pending']} "
-                    f"dropped={counts['dropped']} errors={counts['errors']}"
+                    f"dropped={counts['dropped']} errors={counts['errors']} "
+                    f"{err_breakdown}"
                 )
+
+            # Hourly rolling-window summary, throttled to once per minute.
+            now_s = time.time()
+            if now_s - _last_hourly_summary_log_ts >= _HOURLY_SUMMARY_LOG_INTERVAL_SEC:
+                _prune_reconcile_errors(now_s)
+                agg = _aggregate_reconcile_errors_60m()
+                if sum(agg.values()) > 0:
+                    parts = " ".join(f"{cat}={agg[cat]}" for cat in _ERROR_CATEGORIES)
+                    logger.error(f"[mempool_watcher] reconcile_errors_60m: {parts}")
+                _last_hourly_summary_log_ts = now_s
         except asyncio.CancelledError:
             raise
         except Exception as e:
