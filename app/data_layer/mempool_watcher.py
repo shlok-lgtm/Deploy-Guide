@@ -577,9 +577,18 @@ async def run_watcher(chain: str = "ethereum") -> None:
             if consecutive_failures >= 20:
                 logger.critical(
                     f"[mempool_watcher] {consecutive_failures} consecutive failures — "
-                    f"exiting to trigger restart. Last: {type(e).__name__}: {e}"
+                    f"disabling watcher (non-critical telemetry). Last: {type(e).__name__}: {e}"
                 )
-                raise SystemExit(1)
+                try:
+                    from app.worker import _record_cycle_error
+                    _record_cycle_error(
+                        error_type="mempool_watcher_disabled",
+                        error_message=f"{consecutive_failures} consecutive failures. Last: {type(e).__name__}: {e}"[:500],
+                        cycle_phase="mempool_watcher",
+                    )
+                except Exception:
+                    pass
+                return
             elif consecutive_failures >= 5:
                 logger.error(
                     f"[mempool_watcher] failure #{consecutive_failures} after {elapsed}s: "
