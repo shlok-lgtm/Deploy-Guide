@@ -269,19 +269,14 @@ async def run_contract_surveillance() -> dict:
             with open(registry_path) as f:
                 registry = _json.load(f)
             for slug, contracts in registry.get("protocols", {}).items():
-                core = contracts.get("core_contract")
-                if core and core.get("address"):
+                for key, entry in contracts.items():
+                    if not isinstance(entry, dict) or not entry.get("address"):
+                        continue
+                    suffix = f"_{key}" if key != "core_contract" else ""
                     contracts_to_scan.append({
-                        "entity_id": slug,
-                        "chain": core.get("chain", "ethereum"),
-                        "contract_address": core["address"],
-                    })
-                timelock = contracts.get("governance_timelock")
-                if timelock and timelock.get("address"):
-                    contracts_to_scan.append({
-                        "entity_id": f"{slug}_timelock",
-                        "chain": timelock.get("chain", "ethereum"),
-                        "contract_address": timelock["address"],
+                        "entity_id": f"{slug}{suffix}",
+                        "chain": entry.get("chain", "ethereum"),
+                        "contract_address": entry["address"],
                     })
     except asyncio.CancelledError:
         raise
