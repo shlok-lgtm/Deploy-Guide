@@ -1,0 +1,53 @@
+{
+  "_meta": {
+    "version": "v1",
+    "purpose": "Synthetic SII + PSI + treasury holdings input for composition determinism + serialization tests. NOT prod data.",
+    "snapshot_date": "2026-05-09"
+  },
+  "scores": [
+    {"symbol": "USDC", "overall_score": 87.42, "grade": "A", "component_count": 38},
+    {"symbol": "USDT", "overall_score": 73.18, "grade": "B", "component_count": 36},
+    {"symbol": "DAI",  "overall_score": 81.05, "grade": "A-", "component_count": 37},
+    {"symbol": "FRAX", "overall_score": 68.90, "grade": "B-", "component_count": 33},
+    {"symbol": "PYUSD", "overall_score": 79.55, "grade": "B+", "component_count": 32}
+  ],
+  "psi_scores": [
+    {
+      "protocol_slug": "aave-v3",
+      "protocol_name": "Aave v3",
+      "overall_score": 82.10,
+      "grade": "A-",
+      "component_scores": {"governance": 85, "smart_contract": 88, "liquidity": 79, "treasury": 76, "oracle": 82}
+    },
+    {
+      "protocol_slug": "compound-v3",
+      "protocol_name": "Compound v3",
+      "overall_score": 76.40,
+      "grade": "B+",
+      "component_scores": {"governance": 78, "smart_contract": 82, "liquidity": 71, "treasury": 74}
+    },
+    {
+      "protocol_slug": "morpho",
+      "protocol_name": "Morpho",
+      "overall_score": 71.20,
+      "grade": "B",
+      "component_scores": {"governance": 70, "smart_contract": 78, "liquidity": 65}
+    }
+  ],
+  "treasury_holdings": {
+    "aave-v3": [
+      {"token_symbol": "USDC", "usd_value": 250000000.0, "sii_score": 87.42, "is_stablecoin": true, "snapshot_date": "2026-05-09"},
+      {"token_symbol": "USDT", "usd_value": 180000000.0, "sii_score": 73.18, "is_stablecoin": true, "snapshot_date": "2026-05-09"},
+      {"token_symbol": "DAI",  "usd_value":  90000000.0, "sii_score": 81.05, "is_stablecoin": true, "snapshot_date": "2026-05-09"}
+    ],
+    "compound-v3": [
+      {"token_symbol": "USDC", "usd_value": 120000000.0, "sii_score": 87.42, "is_stablecoin": true, "snapshot_date": "2026-05-09"},
+      {"token_symbol": "DAI",  "usd_value":  40000000.0, "sii_score": 81.05, "is_stablecoin": true, "snapshot_date": "2026-05-09"}
+    ],
+    "morpho": [
+      {"token_symbol": "USDC", "usd_value":  60000000.0, "sii_score": 87.42, "is_stablecoin": true, "snapshot_date": "2026-05-09"},
+      {"token_symbol": "FRAX", "usd_value":  10000000.0, "sii_score": 68.90, "is_stablecoin": true, "snapshot_date": "2026-05-09"}
+    ]
+  },
+  "target_protocols": ["aave-v3", "compound-v3", "morpho"]
+}

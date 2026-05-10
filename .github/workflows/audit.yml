@@ -23,6 +23,26 @@ jobs:
       - name: Audit sync-DB-in-async (advisory)
         run: python3 scripts/audit_sync_db_in_async.py || true
 
+  composition-publication-ready:
+    # Enforces V9.13 §N — composition outputs declared publication_ready
+    # must satisfy all four invariants. Failure means drift from spec or
+    # lost guarantee. Either fix the drift or remove the domain from
+    # PUBLICATION_READY_DOMAINS — never silently downgrade the assertion.
+    needs: [audit-async, audit-sync-db-advisory]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - name: Install deps
+        run: pip install -r requirements.txt
+      - name: Run determinism tests
+        run: python -m pytest tests/test_composition_determinism.py -v
+      - name: Run serialization tests
+        run: python -m pytest tests/test_composition_serialization.py -v
+      - name: Run audit in strict mode
+        run: python tools/audit/attestation_orphan_audit.py app/ --strict
+
   oracle-keys-parity:
     # Asserts both Python (app/oracle_keys.py) and TypeScript
     # (keeper/optionC_keys.ts) implementations of the entityId scheme
