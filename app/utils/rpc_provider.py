@@ -268,6 +268,67 @@ def _track_failure(primary: str, fallback_provider: str, method: str,
     _track(fallback_provider, method, chain, "error", fallback_reason=reason[:200])
 
 
+# Cap the per-minute sample array. Bounds row size; p95 is still accurate
+# at this sample density. See migration 106 for the rationale.
+_LATENCY_SAMPLE_CAP = 100
+
+# Strong references for in-flight fire-and-forget latency-write tasks so
+# they're not collected before completion. Tasks remove themselves via
+# add_done_callback in _spawn_latency_write below.
+_LATENCY_TASKS: set[asyncio.Task] = set()
+
+
+def _track_latency(provider: str, method: str, chain: str, status: str,
+                   latency_ms: int) -> None:
+    """Per-minute latency aggregator. Upserts a row keyed by
+    (provider, method, chain, status, minute) and folds the new sample
+    into running aggregates. Non-fatal — wraps everything in try/except
+    so a tracking failure never breaks the call path.
+
+    Status is 'ok' for any successful response, 'error' otherwise.
+    The fallback bookkeeping in rpc_provider_usage is intentionally not
+    mirrored here; this table exists to answer "how fast is each
+    provider?" not "how often did it fall back?".
+    """
+    try:
+        execute(
+            """
+            INSERT INTO rpc_provider_latency
+                (provider, method, chain, status, observed_at,
+                 calls, sum_ms, min_ms, max_ms, samples_ms)
+            VALUES
+                (%s, %s, %s, %s, date_trunc('minute', NOW()),
+                 1, %s, %s, %s, ARRAY[%s]::INT[])
+            ON CONFLICT (provider, method, chain, status, observed_at) DO UPDATE
+            SET calls = rpc_provider_latency.calls + 1,
+                sum_ms = rpc_provider_latency.sum_ms + EXCLUDED.sum_ms,
+                min_ms = LEAST(rpc_provider_latency.min_ms, EXCLUDED.min_ms),
+                max_ms = GREATEST(rpc_provider_latency.max_ms, EXCLUDED.max_ms),
+                samples_ms = CASE
+                    WHEN array_length(rpc_provider_latency.samples_ms, 1) >= %s
+                        THEN rpc_provider_latency.samples_ms
+                    ELSE rpc_provider_latency.samples_ms || EXCLUDED.samples_ms
+                END
+            """,
+            (
+                provider, method, chain, status,
+                latency_ms, latency_ms, latency_ms, latency_ms,
+                _LATENCY_SAMPLE_CAP,
+            ),
+        )
+    except Exception as e:
+        logger.warning(f"[rpc] latency tracking skipped: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="utils_rpc_track_latency_failure",
+                error_message=str(e)[:500],
+                cycle_phase="utils_rpc_provider",
+            )
+        except Exception:
+            pass
+
+
 # ---------------------------------------------------------------------------
 # JSON-RPC primitive
 # ---------------------------------------------------------------------------
@@ -337,20 +398,54 @@ async def _call_provider(provider: str, method: str, params: list, chain: str,
 
         return payload.get("result")
     finally:
+        _latency_ms = int((time.monotonic() - _t0) * 1000)
         try:
             track_api_call(
                 provider=_tracker_provider,
                 endpoint=f"/rpc/{method}",
                 caller="utils.rpc_provider",
                 status=_http_status,
-                latency_ms=int((time.monotonic() - _t0) * 1000),
+                latency_ms=_latency_ms,
             )
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.warning(f"rpc_provider: _call_provider track_api_call failed: {e}")
             try:
                 from app.worker import _record_cycle_error
                 _record_cycle_error(
                     error_type="utils_rpc_call_provider_track_api_call_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="utils_rpc_provider",
+                )
+            except Exception:
+                pass
+        # Per-call latency observation. Fire-and-forget on a worker thread
+        # so the call path is never blocked by the DB write. Status maps
+        # any 2xx HTTP to 'ok' and everything else (including network /
+        # timeout / RPC error fields) to 'error' — this table is for
+        # answering "how fast is each provider on healthy calls?", not
+        # for replicating the fallback bookkeeping in rpc_provider_usage.
+        try:
+            _lat_status = "ok" if (
+                _http_status is not None and 200 <= _http_status < 300
+            ) else "error"
+            _task = asyncio.create_task(
+                asyncio.to_thread(
+                    _track_latency, provider, method, chain,
+                    _lat_status, _latency_ms,
+                )
+            )
+            _LATENCY_TASKS.add(_task)
+            _task.add_done_callback(_LATENCY_TASKS.discard)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"rpc_provider: _call_provider latency observation failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="utils_rpc_call_provider_latency_observation_failure",
                     error_message=str(e)[:500],
                     cycle_phase="utils_rpc_provider",
                 )
