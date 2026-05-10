@@ -158,7 +158,8 @@ async def _bulk_row_counts() -> dict[str, int]:
     # pg_stat n_live_tup inflates massively between VACUUM cycles for these.
     TABLE_COUNT_OVERRIDES = {
         "wallet_graph.wallet_risk_scores": "SELECT COUNT(DISTINCT wallet_address) as cnt FROM wallet_graph.wallet_risk_scores",
-        "wallet_graph.wallet_holdings": "SELECT COUNT(DISTINCT wallet_address || token_address) as cnt FROM wallet_graph.wallet_holdings WHERE public.immutable_date(indexed_at) = CURRENT_DATE",
+        "wallet_graph.wallet_holdings": "SELECT COUNT(DISTINCT wallet_address) as cnt FROM wallet_graph.wallet_holdings",
+        "wallet_graph.wallet_edges": "SELECT COUNT(DISTINCT addr) as cnt FROM (SELECT LOWER(from_address) AS addr FROM wallet_graph.wallet_edges UNION SELECT LOWER(to_address) FROM wallet_graph.wallet_edges) sub",
         "component_readings": "SELECT COUNT(DISTINCT stablecoin_id || component_id) as cnt FROM component_readings WHERE collected_at > NOW() - INTERVAL '24 hours'",
         "peg_snapshots_5m": "SELECT COUNT(*) as cnt FROM peg_snapshots_5m",
         "yield_snapshots": "SELECT COUNT(*) as cnt FROM yield_snapshots",
