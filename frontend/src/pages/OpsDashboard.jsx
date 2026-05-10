@@ -1070,6 +1070,10 @@ function StateGrowthPanel() {
                   <Lbl>PSI</Lbl>
                   <div style={{ fontSize: 12, fontFamily: T.mono, color: T.inkMid }}>{ec.psi?.scored || 0}</div>
                 </div>
+                <div>
+                  <Lbl>RPI</Lbl>
+                  <div style={{ fontSize: 12, fontFamily: T.mono, color: T.inkMid }}>{ec.rpi?.scored || 0}</div>
+                </div>
                 {ec.circle7 && Object.entries(ec.circle7).map(([idx, cnt]) => (
                   <div key={idx}>
                     <Lbl>{idx.toUpperCase()}</Lbl>
