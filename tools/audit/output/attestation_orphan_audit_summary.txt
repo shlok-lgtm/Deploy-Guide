@@ -1,4 +1,3 @@
-audit: DATABASE_URL not set or unreachable -- skipping DB query, AST-only output.
 # attestation orphan audit summary
 #   db_status: no_db_url
 #   total domains: 45
