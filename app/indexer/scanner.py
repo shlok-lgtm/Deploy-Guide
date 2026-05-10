@@ -744,27 +744,48 @@ async def scan_wallet_holdings(
     return holdings
 
 
+_PROVIDER_CONFIGS = {
+    "etherscan": {
+        "base_url": ETHERSCAN_BASE,
+        "top_holders_action": "tokenholderlist",
+        "chain_key": "chainid",
+        "rate_limit_delay": 0.11,
+        "address_field": "TokenHolderAddress",
+    },
+    "blockscout": {
+        "base_url": "https://api.blockscout.com/v2/api",
+        "top_holders_action": "getTokenHolders",
+        "chain_key": "chain_id",
+        "rate_limit_delay": 0.22,
+        "address_field": "address",
+    },
+}
+
+
 async def fetch_top_holders(
     client: httpx.AsyncClient,
     contract_address: str,
     api_key: str,
     page: int = 1,
     offset: int = 100,
+    provider: str = None,
 ) -> list[str]:
     """
     Fetch top token holders for a contract via the explorer API.
     Returns list of holder addresses. Falls back to empty list on failure.
-    Etherscan action: tokenholderlist (requires Pro plan).
-    Blockscout action: getTokenHolders (PRO API).
-    Response field: TokenHolderAddress (Etherscan) or address (Blockscout) — both handled.
+
+    Args:
+        provider: "etherscan" or "blockscout". Defaults to BLOCK_EXPLORER_PROVIDER.
     """
+    prov = provider or BLOCK_EXPLORER_PROVIDER
+    cfg = _PROVIDER_CONFIGS.get(prov, _PROVIDER_CONFIGS.get(BLOCK_EXPLORER_PROVIDER))
     try:
         resp = await client.get(
-            EXPLORER_BASE,
+            cfg["base_url"],
             params={
-                _EXPLORER_CHAIN_KEY: 1,
+                cfg["chain_key"]: 1,
                 "module": "token",
-                "action": _TOP_HOLDERS_ACTION,
+                "action": cfg["top_holders_action"],
                 "contractaddress": contract_address,
                 "page": page,
                 "offset": offset,
@@ -784,12 +805,12 @@ async def fetch_top_holders(
     except asyncio.CancelledError:
         raise
     except Exception as e:
-        logger.warning(f"Top holders fetch error for {contract_address[:10]}…: {e}")
+        logger.warning(f"Top holders fetch error for {contract_address[:10]}… ({prov}): {e}")
         try:
             from app.worker import _record_cycle_error
             _record_cycle_error(
                 error_type="indexer_fetch_top_holders_explorer_failure",
-                error_message=str(e)[:500],
+                error_message=f"{prov}: {e}"[:500],
                 cycle_phase="wallet_scanner",
             )
         except Exception:
