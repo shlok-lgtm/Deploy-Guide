@@ -11,7 +11,9 @@ GET /api/ops/state-growth (existing — reads from daily_pulses history)
 import asyncio
 import json
 import logging
+import os
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 from app.database import fetch_all, fetch_one, fetch_one_async, fetch_all_async, execute_async
 
@@ -199,9 +201,29 @@ def _resolve_count(pg_counts: dict, table_name: str) -> int:
     return c
 
 
+def _log_db_host():
+    """Log the connected DB host so wrong-DB connections are visible in logs."""
+    try:
+        db_url = os.environ.get("DATABASE_URL", "")
+        if db_url:
+            parsed = urlparse(db_url)
+            logger.info(
+                "[state_growth] snapshot connecting to DB host=%s dbname=%s",
+                parsed.hostname or "unknown",
+                parsed.path.lstrip("/") if parsed.path else "unknown",
+            )
+        else:
+            logger.warning("[state_growth] DATABASE_URL is empty — snapshot may target wrong DB")
+    except Exception as e:
+        logger.warning(f"[state_growth] could not parse DATABASE_URL for host logging: {e}")
+
+
 def _snapshot_row_counts_sync(pg_counts: dict):
     """Sync helper: create table + upsert row counts."""
-    from app.database import execute as _exec, get_cursor as _gc
+    from app.database import execute as _exec, get_cursor as _gc, fetch_one as _f1
+
+    _log_db_host()
+
     _exec("""
         CREATE TABLE IF NOT EXISTS state_growth_snapshots (
             id SERIAL PRIMARY KEY,
@@ -211,6 +233,43 @@ def _snapshot_row_counts_sync(pg_counts: dict):
             UNIQUE (table_name, snapshot_date)
         )
     """)
+
+    # --- Regression guard ---
+    # Compute today's total from pg_counts.
+    today_total = sum(_resolve_count(pg_counts, tbl) for tbl in TRACKED_TABLES)
+
+    # Fetch yesterday's total from state_growth_snapshots.
+    yesterday_row = _f1(
+        """SELECT COALESCE(SUM(row_count), 0) AS total
+           FROM state_growth_snapshots
+           WHERE snapshot_date = CURRENT_DATE - 1"""
+    )
+    yesterday_total = int(yesterday_row["total"]) if yesterday_row and yesterday_row.get("total") else 0
+
+    if yesterday_total > 0 and today_total < yesterday_total:
+        delta = today_total - yesterday_total
+        logger.error(
+            "[state_growth] REGRESSION GUARD: today_total=%d < yesterday_total=%d "
+            "(delta=%d). State accumulates monotonically — this likely indicates "
+            "a wrong-DB connection. Skipping snapshot write.",
+            today_total, yesterday_total, delta,
+        )
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="state_growth_regression_guard",
+                error_message=(
+                    f"Snapshot aborted: today_total={today_total} < "
+                    f"yesterday_total={yesterday_total} (delta={delta}). "
+                    f"Possible wrong-DB connection."
+                ),
+                cycle_phase="state_growth",
+                severity="critical",
+            )
+        except Exception:
+            pass
+        return  # Skip the write — do NOT corrupt the table
+
     with _gc() as cur:
         for tbl in TRACKED_TABLES:
             count = _resolve_count(pg_counts, tbl)
