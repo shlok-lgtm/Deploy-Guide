@@ -60,6 +60,18 @@
       "multisig": {"address": "0xa3C5A1e09150B75ff251c1a7815A07182c3de2FB", "chain": "ethereum", "type": "gnosis_safe"},
       "core_contract": {"address": "0xF403C135812408BFbE8713b5A23a04b3D48AAE31", "chain": "ethereum"}
     },
+    "ethena": {
+      "governance_timelock": null,
+      "multisig": {"address": "0x3e4C1137b8D2e0E5E2E1A84ced641B2F5F83e971", "chain": "ethereum", "type": "gnosis_safe"},
+      "core_contract": {"address": "0x4c9EDD5852cd905f086C759E8383e09bff1E68B3", "chain": "ethereum"},
+      "staking_contract": {"address": "0x9D39A5DE30e57443BfF2A8307A4256c8797A3497", "chain": "ethereum"}
+    },
+    "pendle": {
+      "governance_timelock": {"address": "0x8270400d528C34E1596EF367eeDEc99080A1B592", "chain": "ethereum"},
+      "multisig": null,
+      "core_contract": {"address": "0x888888888889758F76e7103c6CbF23ABbF58F946", "chain": "ethereum"},
+      "market_factory": {"address": "0x27b1dAcd74688aF24a64BD3C9C1B143118740784", "chain": "ethereum"}
+    },
     "drift": {
       "governance_timelock": null,
       "multisig": null,
