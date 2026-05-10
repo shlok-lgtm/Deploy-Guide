@@ -63,11 +63,29 @@ from typing import Optional
 # Constants
 # ---------------------------------------------------------------------------
 
-# The two active orchestrator entry points. Anything reachable from these
-# (via static call-graph traversal) is "live" — anything else is an orphan.
+# Every async entry point that is started by app.worker's main loop or
+# scheduled via asyncio.create_task at startup must appear here. When you
+# add a new background loop or scheduled task, add its module+function
+# name to this list. Otherwise the audit will report its downstream
+# state_attestations writes as orphans (false positive).
 ACTIVE_ORCHESTRATORS = (
+    # Cycle entrypoints (run from worker.py main loop)
+    ("app.worker", "run_fast_cycle"),
     ("app.worker", "run_slow_cycle_parallel"),
     ("app.enrichment_worker", "run_enrichment_pipeline"),
+    # Background loops (asyncio.create_task'd at startup)
+    ("app.worker", "_diagnostic_loop"),
+    ("app.lib.watchdog", "cancellation_watchdog"),
+    ("app.data_layer.oracle_cadence_collector", "run_oracle_cadence_loop"),
+    ("app.data_layer.holder_ingestion_collector", "holder_ingestion_background_loop"),
+    ("app.data_layer.multichain_holder_collector", "multichain_holder_background_loop"),
+    ("app.data_layer.wallet_presence_scanner", "wallet_presence_background_loop"),
+    ("app.indexer.edges", "edge_builder_background_loop"),
+    ("app.data_layer.transfer_edge_builder", "transfer_edge_builder_background_loop"),
+    ("app.data_layer.trace_collector", "trace_collector_background_loop"),
+    ("app.data_layer.approval_collector", "approval_collector_background_loop"),
+    ("app.data_layer.mempool_watcher", "start_mempool_tasks"),
+    ("app.utils.rpc_provider", "probe_rpc_capabilities"),
 )
 
 # Function name we're hunting. Verified against ``app/state_attestation.py``
