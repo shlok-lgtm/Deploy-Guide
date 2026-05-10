@@ -3,14 +3,118 @@ Composition Engine
 ===================
 Composes indices (SII, PSI) into composite risk views (CQI).
 All scores computed on-demand — no storage.
+
+Publication-ready (V9.13 §N): cqi_compositions, rqs_composition, and
+rqs_compositions are derived from attested SII and PSI state. They are
+not orchestrator-driven (no scheduled refresher) — see V9.13 §N for the
+four invariants they hold to. The attestation payload below records
+input hashes (SII/PSI snapshots) and an output hash so a third party can
+reproduce a published composition without reading source. Spec is in
+docs/composition_spec.md.
 """
 
 import logging
 import math
+from datetime import datetime, timezone
 
+from app.composition_serialization import canonical_hash
 from app.database import fetch_all, fetch_one
 
 logger = logging.getLogger(__name__)
+
+
+# -----------------------------------------------------------------------------
+# Publication-ready attestation helpers (V9.13 §N)
+# -----------------------------------------------------------------------------
+
+def _hour_truncated_now_iso() -> str:
+    """UTC ISO-8601 timestamp truncated to the hour. Sub-hour fluctuation
+    must NOT affect the attestation payload — otherwise determinism tests
+    that re-run the same compute within the same hour would see drift."""
+    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    return now.isoformat()
+
+
+def _sii_snapshot_for_hash() -> tuple[str, list[dict]]:
+    """Fetch the current SII snapshot and return (input_sii_hash, raw rows).
+
+    The hash is taken over a normalized projection of the scores table,
+    so a verifier can reconstruct the input set: (symbol, overall_score,
+    component_count) keyed by stablecoin symbol. Coerced through
+    canonical_hash so float/Decimal mismatches at the DB layer don't
+    break verification.
+    """
+    rows = fetch_all("""
+        SELECT st.symbol, s.overall_score, s.component_count
+        FROM scores s
+        JOIN stablecoins st ON st.id = s.stablecoin_id
+        WHERE s.overall_score IS NOT NULL
+    """) or []
+    snapshot = sorted(
+        [
+            {
+                "symbol": r["symbol"].upper(),
+                "overall_score": r.get("overall_score"),
+                "component_count": r.get("component_count") or 0,
+            }
+            for r in rows
+        ],
+        key=lambda x: x["symbol"],
+    )
+    return canonical_hash(snapshot), snapshot
+
+
+def _psi_snapshot_for_hash() -> tuple[str, list[dict]]:
+    """Fetch the current PSI snapshot (latest score per protocol) for
+    hashing. Same shape contract as ``_sii_snapshot_for_hash``."""
+    rows = fetch_all("""
+        SELECT DISTINCT ON (protocol_slug)
+            protocol_slug, overall_score
+        FROM psi_scores
+        WHERE overall_score IS NOT NULL
+        ORDER BY protocol_slug, computed_at DESC
+    """) or []
+    snapshot = sorted(
+        [
+            {
+                "protocol_slug": r["protocol_slug"],
+                "overall_score": r.get("overall_score"),
+            }
+            for r in rows
+        ],
+        key=lambda x: x["protocol_slug"],
+    )
+    return canonical_hash(snapshot), snapshot
+
+
+def build_publication_payload(
+    domain: str,
+    output,
+    *,
+    input_sii_hash: str,
+    input_psi_hash: str,
+    row_count: int,
+) -> dict:
+    """Assemble the V9.13 §N publication-ready attestation payload.
+
+    Returns a single-record dict (the caller wraps it in a list and
+    passes it to ``attest_state``). The output is hashed via
+    ``canonical_hash`` (composition_serialization), so a verifier with
+    the same SII/PSI inputs and the same composition formula reproduces
+    ``output_hash`` byte-for-byte.
+
+    Why this is a function and not inline: forces the four-field shape
+    on every call site. If the shape drifts, the snapshot test in
+    tests/test_composition_serialization.py breaks loudly.
+    """
+    return {
+        "domain": domain,
+        "computed_at": _hour_truncated_now_iso(),
+        "input_sii_hash": input_sii_hash,
+        "input_psi_hash": input_psi_hash,
+        "output_hash": canonical_hash(output),
+        "row_count": int(row_count),
+    }
 
 
 def compose_geometric_mean(scores):
@@ -246,7 +350,9 @@ def compute_rqs(holdings: list[dict], coverage_threshold: float = 0.0) -> dict:
         "withheld": withheld,
         "confidence": conf["confidence"],
         "confidence_tag": conf["tag"],
-        "breakdown": sorted(breakdown, key=lambda x: x["contribution"], reverse=True),
+        # Stable: contribution DESC, then symbol ASC for tiebreaker.
+        # V9.13 §N invariant 1 (deterministic compute).
+        "breakdown": sorted(breakdown, key=lambda x: (-x["contribution"], x["symbol"])),
         "warnings": warnings,
         "method": "weighted_average",
         "formula_version": "composition-v1.0.0",
@@ -313,10 +419,12 @@ def compute_rqs_for_protocol(protocol_slug: str, coverage_threshold: float = 0.0
     if total_usd <= 0:
         return {"error": f"Zero stablecoin value in treasury for '{protocol_slug}'"}
 
-    # Build holdings list with USD-proportional weights
+    # Build holdings list with USD-proportional weights. Sort by symbol
+    # so iteration order downstream (in compute_rqs) is deterministic
+    # regardless of DB row order. V9.13 §N invariant 1.
     holdings = [
         {"symbol": sym, "weight": usd / total_usd}
-        for sym, usd in by_symbol.items()
+        for sym, usd in sorted(by_symbol.items())
     ]
 
     result = compute_rqs(holdings, coverage_threshold=coverage_threshold)
@@ -353,14 +461,27 @@ def compute_rqs_for_protocol(protocol_slug: str, coverage_threshold: float = 0.0
     elif sii_at_str:
         result["data_as_of"] = sii_at_str[:10]
 
-    # Attest state
+    # Attest state — V9.13 §N publication-ready payload.
+    # Records input_sii_hash + input_psi_hash so a verifier can
+    # reproduce the composition from upstream attested state.
     try:
         from app.state_attestation import attest_state
-        attest_state("rqs_composition", [
-            {"protocol": protocol_slug, "rqs_score": result.get("rqs_score")},
-        ], entity_id=protocol_slug)
+        sii_hash, _ = _sii_snapshot_for_hash()
+        psi_hash, _ = _psi_snapshot_for_hash()
+        payload = build_publication_payload(
+            "rqs_composition",
+            result,
+            input_sii_hash=sii_hash,
+            input_psi_hash=psi_hash,
+            row_count=1,
+        )
+        attest_state("rqs_composition", [payload], entity_id=protocol_slug)
     except Exception:
-        pass  # attestation is non-critical
+        # Attestation is non-critical for the API response, but the
+        # downstream record_cycle_error path catches the broader case
+        # (rqs_compositions / cqi_compositions). For the per-protocol
+        # path, a logged warning is sufficient.
+        logger.warning(f"rqs_composition attestation failed for {protocol_slug}", exc_info=True)
 
     return result
 
@@ -379,18 +500,32 @@ def compute_rqs_all() -> dict:
         else:
             results.append(result)
 
-    results.sort(key=lambda x: x.get("rqs_score", 0), reverse=True)
+    # Stable ordering: rqs_score DESC, then protocol_slug ASC. Tiebreaker
+    # is required for determinism — pure score sort produces unstable
+    # output across iterations of a Python set or DB row order. V9.13 §N
+    # invariant 1.
+    results.sort(key=lambda x: (-(x.get("rqs_score") or 0), x.get("protocol_slug", "")))
 
-    # Attest batch
+    output = {
+        "protocols": results,
+        "count": len(results),
+        "skipped": errors,
+        "formula_version": "composition-v1.0.0",
+    }
+
+    # Attest batch — V9.13 §N publication-ready payload.
     try:
         from app.state_attestation import attest_state
-        if results:
-            attest_state("rqs_compositions", [
-                {"protocol": r["protocol_slug"], "rqs_score": round(r["rqs_score"], 2)}
-                for r in results if r.get("rqs_score") is not None
-            ])
-        else:
-            attest_state("rqs_compositions", [{"status": "ran_no_results", "results_count": 0}])
+        sii_hash, _ = _sii_snapshot_for_hash()
+        psi_hash, _ = _psi_snapshot_for_hash()
+        payload = build_publication_payload(
+            "rqs_compositions",
+            output,
+            input_sii_hash=sii_hash,
+            input_psi_hash=psi_hash,
+            row_count=len(results),
+        )
+        attest_state("rqs_compositions", [payload])
     except Exception as ae:
         logger.error(f"rqs_compositions attestation failed: {ae}")
         try:
@@ -403,12 +538,7 @@ def compute_rqs_all() -> dict:
         except Exception:
             pass
 
-    return {
-        "protocols": results,
-        "count": len(results),
-        "skipped": errors,
-        "formula_version": "composition-v1.0.0",
-    }
+    return output
 
 
 def compute_cqi_matrix():
@@ -451,15 +581,27 @@ def compute_cqi_matrix():
                     "psi_score": psi,
                 })
 
-    matrix.sort(key=lambda x: x.get("cqi_score", 0), reverse=True)
+    # Stable ordering: cqi_score DESC, then (asset, protocol_slug) ASC.
+    # Pure cqi_score sort would be unstable across ties (different DB row
+    # orders → different output); tiebreakers pin determinism. Required
+    # by V9.13 §N invariant 1 (deterministic compute).
+    matrix.sort(key=lambda x: (-x.get("cqi_score", 0), x["asset"], x["protocol_slug"]))
 
-    # Attest CQI compositions
+    output = {"matrix": matrix, "count": len(matrix)}
+
+    # Attest CQI compositions — V9.13 §N publication-ready payload.
     try:
         from app.state_attestation import attest_state
-        if matrix:
-            attest_state("cqi_compositions", [{"asset": r["asset"], "protocol": r["protocol_slug"], "cqi_score": round(r["cqi_score"], 2)} for r in matrix])
-        else:
-            attest_state("cqi_compositions", [{"status": "ran_no_results", "results_count": 0}])
+        sii_hash, _ = _sii_snapshot_for_hash()
+        psi_hash, _ = _psi_snapshot_for_hash()
+        payload = build_publication_payload(
+            "cqi_compositions",
+            output,
+            input_sii_hash=sii_hash,
+            input_psi_hash=psi_hash,
+            row_count=len(matrix),
+        )
+        attest_state("cqi_compositions", [payload])
     except Exception as ae:
         logger.error(f"cqi_compositions attestation failed: {ae}")
         try:
@@ -472,7 +614,7 @@ def compute_cqi_matrix():
         except Exception:
             pass
 
-    return {"matrix": matrix, "count": len(matrix)}
+    return output
 
 
 # =============================================================================
