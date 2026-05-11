@@ -1201,6 +1201,8 @@ async def run_fast_cycle():
     except Exception as _e1: logger.error(f"=== ENTITIES FAILED: {_e1} ===")
 
     # ==== 2. EXCHANGE SNAPSHOTS ====
+    _ex_ok, _ex_err = 0, 0
+    _ex_block_error: str | None = None
     try:
         _EX = ["binance","coinbase-exchange","okx","bybit_spot","kraken","kucoin","gate",
                "bitget","htx","crypto_com","mexc","bitfinex","bitstamp","gemini","lbank"]
@@ -1211,7 +1213,6 @@ async def run_fast_cycle():
             "htx": "huobi",                # HTX rebranded from Huobi, CG still uses 'huobi'
             "mexc": "mxc",                 # CoinGecko slug is 'mxc'
         }
-        _ex_ok, _ex_err = 0, 0
         async with httpx.AsyncClient(timeout=30) as _xc:
             for _xid in _EX:
                 _cg_xid = _EX_FIX.get(_xid, _xid)
@@ -1233,21 +1234,33 @@ async def run_fast_cycle():
                 await asyncio.sleep(0.15)
         _ex_total = await fetch_one_async("SELECT COUNT(*) as c FROM exchange_snapshots")
         logger.error(f"=== EXCHANGES: {_ex_ok} ok, {_ex_err} err, total={_ex_total} ===")
+    except Exception as _e2:
+        _ex_block_error = f"{type(_e2).__name__}: {_e2}"[:200]
+        logger.error(f"=== EXCHANGES FAILED: {_e2} ===")
 
-        # Attest from the live worker.py path (see peg_snapshots_5m comment
-        # below for why PR #146's data_layer/exchange_collector.py patch
-        # didn't take). data_layer:exchange_snapshots was 2.7d stale until
-        # this added the call to the inline writer's actual end.
-        try:
-            from app.data_layer.provenance_scaling import attest_data_batch
-            await asyncio.to_thread(attest_data_batch, "exchange_snapshots", [{
-                "status": "ok" if _ex_ok else "ran_no_inserts",
-                "exchanges_ok": _ex_ok,
-                "exchanges_err": _ex_err,
-            }])
-        except Exception as _e_attest:
-            logger.warning(f"exchange_snapshots worker attest failed: {_e_attest}")
-    except Exception as _e2: logger.error(f"=== EXCHANGES FAILED: {_e2} ===")
+    # Attest from the live worker.py path. Lives OUTSIDE the outer try
+    # because the Wave 3 #153 placement inside the try meant any failure
+    # of fetch_one_async/COUNT(*) or other inner step swallowed the attest
+    # too. Wave 5a moves it out so freshness signal advances independently
+    # of the block's success/failure. Status carries the block outcome.
+    try:
+        from app.data_layer.provenance_scaling import attest_data_batch
+        if _ex_block_error:
+            _ex_status = "block_failed"
+        elif _ex_ok:
+            _ex_status = "ok"
+        else:
+            _ex_status = "ran_no_inserts"
+        _ex_payload: dict = {
+            "status": _ex_status,
+            "exchanges_ok": _ex_ok,
+            "exchanges_err": _ex_err,
+        }
+        if _ex_block_error:
+            _ex_payload["error"] = _ex_block_error
+        await asyncio.to_thread(attest_data_batch, "exchange_snapshots", [_ex_payload])
+    except Exception as _e_attest:
+        logger.warning(f"exchange_snapshots worker attest failed: {_e_attest}")
 
     # ==== 3. YIELD SNAPSHOTS (DeFiLlama) ====
     try:
@@ -1295,8 +1308,9 @@ async def run_fast_cycle():
     # Table schema retained for future backfill. See basis_protocol_v9_3_constitution_amendment.md.
 
     # ==== 5. PEG 5-MIN + MARKET CHART ====
+    _pg_ok, _mc_ok = 0, 0
+    _peg_block_error: str | None = None
     try:
-        _pg_ok, _mc_ok = 0, 0
         _mc_start = time.time()
         _peg_coins = await fetch_all_async("SELECT id, coingecko_id FROM stablecoins WHERE scoring_enabled = TRUE AND coingecko_id IS NOT NULL") or []
         _cg_fix_mc = {"susd": "nusd", "spark": "spark-protocol"}
@@ -1330,24 +1344,33 @@ async def run_fast_cycle():
                 except Exception as _e: logger.error(f"peg fail {_sc['id']}: {_e}")
                 await asyncio.sleep(0.15)
         logger.error(f"=== PEG: {_pg_ok}, MCHART: {_mc_ok}, elapsed={time.time()-_mc_start:.1f}s ===")
+    except Exception as _e5:
+        _peg_block_error = f"{type(_e5).__name__}: {_e5}"[:200]
+        logger.error(f"=== PEG FAILED: {_e5} ===")
 
-        # Attest from the live worker.py path. PR #146 patched
-        # app/data_layer/peg_monitor.py but that module is only called
-        # from the enrichment task, whose db_gate on peg_snapshots_5m
-        # stays closed because *this* loop keeps the table fresh. So
-        # the patched code is dead on the live path. Attest here instead
-        # — `data_layer:peg_snapshots_5m` was 2.7 days stale until this
-        # fix landed despite peg_snapshots_5m being written every cycle.
-        try:
-            from app.data_layer.provenance_scaling import attest_data_batch
-            await asyncio.to_thread(attest_data_batch, "peg_snapshots_5m", [{
-                "status": "ok" if _pg_ok else "ran_no_inserts",
-                "peg_rows": _pg_ok,
-                "mchart_rows": _mc_ok,
-            }])
-        except Exception as _e_attest:
-            logger.warning(f"peg_snapshots_5m worker attest failed: {_e_attest}")
-    except Exception as _e5: logger.error(f"=== PEG FAILED: {_e5} ===")
+    # Attest from the live worker.py path. Lives OUTSIDE the outer try
+    # (Wave 5a fix): Wave 3 #153 placed this inside the try, so any
+    # failure of the per-coin loop or the bulk-insert wrapper swallowed
+    # the attest too — domain went 2.7d stale despite the table being
+    # written every cycle. Status carries the block outcome.
+    try:
+        from app.data_layer.provenance_scaling import attest_data_batch
+        if _peg_block_error:
+            _peg_status = "block_failed"
+        elif _pg_ok:
+            _peg_status = "ok"
+        else:
+            _peg_status = "ran_no_inserts"
+        _peg_payload: dict = {
+            "status": _peg_status,
+            "peg_rows": _pg_ok,
+            "mchart_rows": _mc_ok,
+        }
+        if _peg_block_error:
+            _peg_payload["error"] = _peg_block_error
+        await asyncio.to_thread(attest_data_batch, "peg_snapshots_5m", [_peg_payload])
+    except Exception as _e_attest:
+        logger.warning(f"peg_snapshots_5m worker attest failed: {_e_attest}")
 
     # ==== 6. LIQUIDITY DEPTH (CEX tickers) ====
     try:
