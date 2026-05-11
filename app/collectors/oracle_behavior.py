@@ -665,4 +665,25 @@ async def collect_oracle_readings() -> dict:
         f"stress={results['stress_events_detected']} "
         f"errors={results['errors']}"
     )
+
+    # Per-cycle heartbeat attestation. _handle_stress_event() at line 471
+    # writes oracle_stress_events rows when an actual stress event is
+    # detected, but in steady state (no anomalies) the domain stays silent.
+    # Same family as #144 (mempool_observations) — emit a cycle-summary row
+    # so the domain freshness tracks "the detector ran" rather than "an
+    # event happened." Coherence threshold for oracle_stress_events is 168h
+    # (event-driven, weekly check), but operators still want a per-cycle
+    # signal that the detector is alive.
+    try:
+        from app.state_attestation import attest_state
+        await asyncio.to_thread(attest_state, "oracle_stress_events", [{
+            "status": "cycle_complete",
+            "oracles_read": results["oracles_read"],
+            "readings_stored": results["readings_stored"],
+            "stress_events_detected": results["stress_events_detected"],
+            "errors_count": len(results["errors"]),
+        }])
+    except Exception as e:
+        logger.warning(f"[oracle] cycle heartbeat attestation skipped: {e}")
+
     return results
