@@ -1024,7 +1024,11 @@ async def run_enrichment_pipeline() -> dict:
         name="contract_dependencies", func=_run_contract_dependencies,
         timeout_seconds=600, group="security", priority=5,
         gate_check=_db_gate(
-            "SELECT MAX(scanned_at) AS latest FROM contract_dependency_graph",
+            # NOTE: migration file is 070_contract_dependency_graph.sql but
+            # the actual table created is `contract_dependencies` (consistent
+            # with app/collectors/contract_dependencies.py and server.py:9508+).
+            # Wave 9c fix for `gate CHECK FAILED: relation does not exist`.
+            "SELECT MAX(last_confirmed_at) AS latest FROM contract_dependencies",
             min_hours=20,
         ),
     ))
