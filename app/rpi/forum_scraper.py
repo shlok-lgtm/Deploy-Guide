@@ -18,6 +18,7 @@ import time
 from datetime import datetime, timezone, timedelta
 
 import httpx
+from psycopg2.extras import Json
 
 from app.database import execute, fetch_one, fetch_all
 
@@ -268,7 +269,13 @@ def scrape_forum(protocol_slug: str, config: dict = None,
                 """, (
                     protocol_slug, base_url, post_id, str(topic_id), title,
                     body_excerpt, op.get("username", ""), str(cat_id),
-                    bool(vendors), vendors if vendors else None,
+                    # mentioned_vendors is a JSONB column; psycopg2 adapts a
+                    # Python list to text[] by default, which the column type
+                    # rejects ("column is of type jsonb but expression is of
+                    # type text[]"). Serialize explicitly so it goes in as
+                    # jsonb. Surfaced in the May-10 schema-drift triage at
+                    # 38 fails/24h.
+                    bool(vendors), Json(vendors) if vendors else None,
                     has_incident, has_budget,
                     budget_amount, posted_at,
                 ))

@@ -221,12 +221,23 @@ def _check_sii_psi_alignment() -> list[dict]:
         sii_rows = fetch_all("SELECT stablecoin_id FROM scores")
         sii_ids = {r["stablecoin_id"] for r in sii_rows} if sii_rows else set()
 
-        # Check collateral exposure table for stablecoins referenced by PSI
+        # Check collateral exposure for stablecoins PSI references that
+        # don't have an SII score. protocol_collateral_exposure tracks
+        # tokens by `token_symbol` (e.g. "USDC"), not by an internal
+        # stablecoin id, so we resolve the canonical stablecoin id via a
+        # case-insensitive join against the stablecoins registry. The
+        # previous query asked for a `stablecoin_id` column on
+        # protocol_collateral_exposure, which has never existed on that
+        # table — the May-10 schema-drift triage surfaced this as 65
+        # fails/24h across all 13 scored protocols.
         exposure_rows = fetch_all(
             """
-            SELECT DISTINCT stablecoin_id
-            FROM protocol_collateral_exposure
-            WHERE snapshot_date > CURRENT_DATE - 7
+            SELECT DISTINCT s.id AS stablecoin_id
+            FROM protocol_collateral_exposure pce
+            JOIN stablecoins s
+              ON LOWER(s.symbol) = LOWER(pce.token_symbol)
+            WHERE pce.snapshot_date > CURRENT_DATE - 7
+              AND pce.is_stablecoin = TRUE
             """
         )
         for row in (exposure_rows or []):
