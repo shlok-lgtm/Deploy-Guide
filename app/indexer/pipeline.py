@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from app.database import fetch_all, fetch_one, execute, fetch_one_async, fetch_all_async, execute_async
+from app.database import fetch_all, fetch_one, execute, fetch_one_async, fetch_all_async, execute_async, get_cursor
 from app.indexer.config import BLOCK_EXPLORER_PROVIDER, EXPLORER_RATE_LIMIT_DELAY
 from app.indexer.scanner import batch_scan_all_holdings, fetch_top_holders, fetch_token_list
 from app.indexer.scorer import compute_wallet_risk
@@ -78,39 +78,62 @@ async def _store_wallet(address: str, source: str, label: str = None, chain: str
     )
 
 
-async def _store_holdings(wallet_address: str, holdings: list[dict]) -> None:
-    """Insert wallet holdings snapshot (one per wallet/token/day)."""
+def _store_holdings_sync(wallet_address: str, holdings: list[dict]) -> None:
+    """Full-refresh today's holdings for a wallet — one DELETE + one bulk INSERT.
+
+    The previous implementation issued one DELETE + one INSERT per holding,
+    i.e. 2N transactions per wallet. Under the Neon -pooler endpoint each of
+    those takes a pool slot, and at ~50 holdings/wallet × hundreds of wallets
+    per indexer batch this can saturate the 50-conn pool. This converts to a
+    single transaction (1 DELETE + 1 bulk INSERT via execute_values) per wallet.
+
+    All four call sites pass the complete current holdings snapshot for the
+    wallet, so the DELETE-all-today-then-bulk-insert semantics match what
+    callers expect.
+    """
     wallet_address = wallet_address.lower()
-    for h in holdings:
-        # Delete existing row for today, then insert fresh
-        await execute_async(
+    import psycopg2.extras as _pgex
+    with get_cursor() as cur:
+        cur.execute(
             """
             DELETE FROM wallet_graph.wallet_holdings
             WHERE wallet_address = %s
-              AND token_address = %s
               AND public.immutable_date(indexed_at) = CURRENT_DATE
             """,
-            (wallet_address, h["token_address"]),
+            (wallet_address,),
         )
-        await execute_async(
+        if not holdings:
+            return
+        _pgex.execute_values(
+            cur,
             """
             INSERT INTO wallet_graph.wallet_holdings
                 (wallet_address, token_address, symbol, balance, value_usd,
                  is_scored, sii_score, sii_grade, pct_of_wallet, indexed_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+            VALUES %s
             """,
-            (
-                wallet_address,
-                h["token_address"],
-                h["symbol"],
-                h["balance"],
-                h["value_usd"],
-                h["is_scored"],
-                h.get("sii_score"),
-                None,
-                h.get("pct_of_wallet"),
-            ),
+            [
+                (
+                    wallet_address,
+                    h["token_address"],
+                    h["symbol"],
+                    h["balance"],
+                    h["value_usd"],
+                    h["is_scored"],
+                    h.get("sii_score"),
+                    None,
+                    h.get("pct_of_wallet"),
+                )
+                for h in holdings
+            ],
+            template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())",
+            page_size=200,
         )
+
+
+async def _store_holdings(wallet_address: str, holdings: list[dict]) -> None:
+    """Async wrapper around the sync bulk-store helper."""
+    await asyncio.to_thread(_store_holdings_sync, wallet_address, holdings)
 
 
 async def _store_risk_score(wallet_address: str, risk: dict) -> None:

@@ -2809,11 +2809,39 @@ async def run_scoring_cycle():
     return result
 
 
+def _direct_db_url() -> str:
+    """Derive the unpooled Neon endpoint URL from DATABASE_URL.
+
+    VACUUM cannot run via the -pooler endpoint (pgbouncer transaction mode
+    rejects session-level autocommit and disallows VACUUM in a transaction).
+    The owned Neon project exposes both a pooled host (-pooler suffix) and a
+    direct host without the suffix; this helper strips the suffix so VACUUM
+    can target the direct endpoint while every other connection in the app
+    keeps using the pooler.
+
+    Returns empty string if DATABASE_URL is unset or doesn't have the
+    expected `-pooler.` infix.
+    """
+    url = os.environ.get("DATABASE_URL", "")
+    if not url or "-pooler." not in url:
+        return ""
+    return url.replace("-pooler.", ".", 1)
+
+
 def _run_vacuum_analyze_sync():
-    """Sync helper: VACUUM ANALYZE churny tables (called via to_thread)."""
+    """Sync helper: VACUUM ANALYZE churny tables (called via to_thread).
+
+    Uses the direct (unpooled) Neon endpoint — VACUUM is incompatible with
+    pgbouncer transaction-mode pooling. If the direct URL can't be derived
+    we skip the explicit VACUUM and rely on autovacuum instead.
+    """
     import psycopg2 as _vac_pg
-    _vac_url = os.environ.get("DATABASE_URL", "")
+    _vac_url = _direct_db_url()
     if not _vac_url:
+        logger.info(
+            "[startup] VACUUM ANALYZE skipped: direct (unpooled) DATABASE_URL "
+            "not derivable. Relying on autovacuum."
+        )
         return
     _vac_conn = _vac_pg.connect(_vac_url)
     _vac_conn.autocommit = True
