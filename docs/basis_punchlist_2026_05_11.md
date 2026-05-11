@@ -385,6 +385,77 @@ implied "stale" reading.
 
 ---
 
+## Wave 9 — Stability Closeout
+
+Three independent stability gates closed in parallel via subagent
+orchestration. Each PR opened with file:line citations per lesson 10
+and substrate-quoted verification queries per lesson 7.
+
+| PR | Subagent | Root cause (file:line) | Fix |
+|---|---|---|---|
+| #181 | A | `enrichment_worker.py:584` called `run_pipeline_batch(batch_size=5000)` against scanner's documented 500-budget (`scanner.py:80-87`) — every cycle exceeded the 900s task timeout. 848,947 wallets stuck since 2026-05-01. | Shrink batch_size 5000 → 400. Drain backlog via cadence over ~2 weeks. |
+| #182 | B | `ohlcv_collector.py:234,267` ran two sequential `for pool in ...:` loops awaiting `_fetch_pool_ohlcv` one at a time. 658 pools × ~1.5s = ~990s, routinely exceeding 900s budget. Secondary: `enrichment_worker.py:909` bypassed v9.12's `run_ohlcv_collection_scheduled` wrapper. | Parallelize via `asyncio.gather` under `Semaphore(8)`, counters under `asyncio.Lock`. Switch caller to scheduled wrapper. |
+| #183 | C | 4 tables tripped `gate CHECK FAILED` at boot. 3 of 4 (validator_performance_snapshots, parent_company_registry, sanctions_screen_targets) were case (ii) — pg_dump silent drift, `migrations` records 064/065/067/068/070 as applied but tables missing. The 4th (`contract_dependency_graph`) was case (iii) — gate-check at `enrichment_worker.py:1024` referenced a name that never existed; actual table is `contract_dependencies`. | Migration 108 replays DDL for 8 dropped tables (the 4 listed + 4 secondary surfaced during diagnosis). Gate-check name corrected. `EXPECTED_TABLES` in `app/schema_heal.py` extended so future drift is fail-loud. |
+
+### Substrate at write-time (per lesson 7)
+
+Snapshot 2026-05-11 20:43 UTC, ~5 min after PR #183 merged. Deploys
+still in flight:
+
+  open_failures (cycle_errors last 2h): 1   (likely pre-deploy carryover)
+  oldest_wallet_indexed (MIN last_indexed_at): 2026-04-05 22:31 UTC
+  newest_wallet_indexed (MAX last_indexed_at): 2026-05-01 19:40 UTC  ← unchanged baseline
+  dex_pool_latest (data_layer:dex_pool_ohlcv attest): 50m stale       ← fresh via heartbeat fallback
+  Railway deploys: PR #181 SUCCESS, PR #182 BUILDING, PR #183 QUEUED
+
+**Wave 9 is NOT yet closed.** Per lesson 7, no closure claim until
+the operator can quote post-cycle substrate showing all three signals
+green. The next slow-cycle completion (~30-60 min) is the verification
+window.
+
+### Verification queries (operator runs after next slow cycle)
+
+```sql
+SELECT
+  (SELECT COUNT(*) FROM cycle_errors
+   WHERE occurred_at > NOW() - INTERVAL '2 hours'
+     AND (error_message ILIKE '%wallet_reindex%' OR
+          error_message ILIKE '%dex_pool_ohlcv%' OR
+          error_message ILIKE '%gate CHECK FAILED%')) AS open_failures,
+  (SELECT MAX(last_indexed_at) FROM wallet_graph.wallets
+   WHERE address LIKE '0x%') AS newest_wallet,
+  (SELECT MAX(cycle_timestamp) FROM state_attestations
+   WHERE domain = 'data_layer:dex_pool_ohlcv') AS dex_pool_latest,
+  (SELECT COUNT(*) FROM state_attestations
+   WHERE domain = 'data_layer:dex_pool_ohlcv'
+     AND cycle_timestamp > NOW() - INTERVAL '4 hours') AS ohlcv_attest_recent;
+```
+
+Expected:
+- `open_failures = 0`
+- `newest_wallet > 2026-05-01 19:40 UTC`
+- `dex_pool_latest within last 2h`
+- `ohlcv_attest_recent ≥ 1` (work-path attest firing, not just heartbeat fallback)
+
+### Operator-decision items surfaced
+
+1. **Wider migrations-vs-tables drift.** PR #183 found 5 secondary
+   tables (validator_slashing_events, sanctions_screening_results,
+   parent_company_financials, contract_dependencies,
+   dependency_graph_snapshots) that were also recorded as applied but
+   missing. Recommend an audit: every `migrations` row vs
+   `information_schema.tables`. Out of scope for Wave 9.
+2. **wallet backlog drain rate.** At 400 wallets/cycle × 6 cycles/day,
+   the 848k backlog drains in ~2 weeks. If faster drain is needed,
+   bump BLOCKSCOUT_CONCURRENCY past 10 (capped at the rate-limit
+   ceiling) — separate decision.
+3. **`parent_company_registry` vs `parent_company_financials`** was
+   originally feared a naming collision; PR #183 confirmed both are
+   distinct tables in migration 067 (registry of CIKs to scrape vs
+   scraped XBRL data).
+
+---
+
 ## Verification
 
 **cycle_errors — last hour:**
