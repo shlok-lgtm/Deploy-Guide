@@ -2782,7 +2782,7 @@ async def _emit_slow_cycle_heartbeats(
 
     try:
         from app.state_attestation import attest_state
-        for _domain in ("wallets", "web_research", "psi_discoveries"):
+        for _domain in ("wallets", "web_research", "psi_discoveries", "rpi_components"):
             try:
                 await asyncio.to_thread(attest_state, _domain, [base_payload])
             except Exception as e:
