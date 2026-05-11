@@ -25,18 +25,26 @@ DBT_PROJECT_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "dbt"
 
 
 def _ensure_pg_env():
-    """Parse DATABASE_URL into PG* env vars if they aren't already set."""
-    if os.environ.get("PGHOST"):
-        return
+    """Derive PG* env vars from DATABASE_URL for the dbt subprocess.
+
+    DATABASE_URL is the single source of truth (see dbt/profiles.yml,
+    which references {{ env_var('PGHOST') }} etc.). Historically Replit
+    auto-injected PG* vars from its managed Postgres, so this function
+    early-returned when PGHOST was already set. Post-Railway migration
+    (2026-05-10) the runtime no longer pre-populates PG* vars, and any
+    stale values left behind from previous environments would point at
+    the wrong host. Always re-derive from DATABASE_URL so dbt connects
+    to the same database as the application pool.
+    """
     db_url = os.environ.get("DATABASE_URL", "")
     if not db_url:
         return
     parsed = urlparse(db_url)
-    os.environ.setdefault("PGHOST", parsed.hostname or "")
-    os.environ.setdefault("PGPORT", str(parsed.port or 5432))
-    os.environ.setdefault("PGUSER", parsed.username or "")
-    os.environ.setdefault("PGPASSWORD", parsed.password or "")
-    os.environ.setdefault("PGDATABASE", parsed.path.lstrip("/") if parsed.path else "")
+    os.environ["PGHOST"] = parsed.hostname or ""
+    os.environ["PGPORT"] = str(parsed.port or 5432)
+    os.environ["PGUSER"] = parsed.username or ""
+    os.environ["PGPASSWORD"] = parsed.password or ""
+    os.environ["PGDATABASE"] = parsed.path.lstrip("/") if parsed.path else ""
 
 
 def run_dbt():

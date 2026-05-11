@@ -221,8 +221,9 @@ Connection via `DATABASE_URL` env var. Pool: min=2, max=10, with keepalives.
 | Scoring worker | `Dockerfile.worker` | Python 3.11 | Runs single scoring cycle |
 | Oracle keeper | `Dockerfile.keeper` | Node 22 | TypeScript via tsx |
 
-- **Railway:** `railway.json` — restart on failure, max 5 retries
-- **Replit:** `.replit` — Python 3.11, Node.js 20, Postgres 16
+- **Railway:** `railway.json` — restart on failure, max 5 retries.
+  Production runs in the `valiant-celebration` Railway project; database
+  is on owned Neon (pooler endpoint).
 
 ## dbt Analytics
 

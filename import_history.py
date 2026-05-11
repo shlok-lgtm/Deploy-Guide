@@ -2,13 +2,21 @@
 """
 Basis Protocol - Historical Data Import
 =========================================
-Imports data from pg_dump SQL files into the new database.
-Handles deduplication when merging Neon + Replit dumps.
+One-time bootstrap helper. Imports historical data from pg_dump SQL
+files into the database. Idempotent — uses INSERT ... ON CONFLICT DO
+NOTHING so re-running is safe and deduplicates against existing rows.
+
+This was originally used during the 2026-02 cutover from the old SII
+prototype (when two parallel Neon databases — one direct, one
+Replit-managed — had to be merged). It is preserved for any future
+data-restore scenario. Filenames with the historical `replit_` and
+`neon_` prefixes are still recognised so old dump archives keep
+working; the prefixes are now purely cosmetic.
 
 Usage:
     python import_history.py --dir ./dumps/
 
-Expected files in --dir:
+Expected files in --dir (any subset; missing files are skipped):
     neon_score_history.sql
     replit_score_history.sql
     neon_score_events.sql

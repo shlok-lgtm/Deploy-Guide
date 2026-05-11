@@ -1,6 +1,6 @@
 # AGENTS.md — Universal Agent Context
 
-> Any AI agent (Replit Agent, Claude Code, Copilot, etc.) working on this
+> Any AI agent (Claude Code, Copilot, Cursor, etc.) working on this
 > project MUST read this file first. It prevents the most common mistakes.
 
 ## CRITICAL RULES
@@ -17,7 +17,7 @@ at launch and now scores 14+. It will keep growing.
 - The stablecoins table in Postgres is the source of truth
 
 ### 2. Hub vs Spoke architecture
-The Replit app (this repo) is the HUB. It owns:
+This repo is the HUB. It owns:
 - Neon Postgres (all data)
 - Scoring engine
 - REST API

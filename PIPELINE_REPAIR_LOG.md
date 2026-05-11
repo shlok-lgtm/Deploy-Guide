@@ -22,7 +22,7 @@ Ran full pipeline audit. Most issues described in the repair prompt were already
 
 ### 1. API Latency: 5453ms → 163ms
 **File:** `app/ops/tools/health_checker.py`
-**Root cause:** `check_api_health()` was hitting the public URL (`https://basisprotocol.xyz`) through the Replit proxy, adding ~5s of network round-trip.
+**Root cause:** `check_api_health()` was hitting the public URL (`https://basisprotocol.xyz`) through the public load balancer, adding ~5s of network round-trip.
 **Fix:** Changed to use `http://127.0.0.1:{PORT}/api/health` (localhost). Also tightened the healthy threshold from 5000ms to 2000ms.
 
 ### 2. Treasury Flows Not Running

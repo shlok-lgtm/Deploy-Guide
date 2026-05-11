@@ -25,7 +25,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# SII API (the app we just built — can be localhost or Replit URL)
+# SII API (this hub's REST API — localhost in dev, production URL otherwise)
 SII_API_BASE = os.environ.get("SII_API_BASE", "http://localhost:5000")
 
 # Claude API for draft generation
