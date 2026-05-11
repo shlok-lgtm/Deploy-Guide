@@ -2739,6 +2739,60 @@ def _update_cda_issuers_sync():
 # Orchestrator: Parallel slow cycle via enrichment worker
 # =============================================================================
 
+
+async def _emit_slow_cycle_heartbeats(
+    pipeline_error: str | None,
+    pipeline_result: dict | None,
+) -> None:
+    """Heartbeat attestations for slow-cycle domains whose canonical
+    worker.py inline blocks live in dead code (`run_slow_cycle`, which is
+    never called — `run_slow_cycle_parallel` calls run_enrichment_pipeline
+    instead). Wave-5b backfill of Wave-3 #155/#156/#157.
+
+    Fires once per slow cycle from run_slow_cycle_parallel. Status reflects
+    the enrichment pipeline outcome. Per-task results are nested when
+    available; failure path attests "pipeline_failed" with the truncated
+    error message so coherence can distinguish "slow cycle never ran"
+    from "slow cycle ran but every task errored".
+    """
+    if pipeline_error:
+        base_status = "pipeline_failed"
+    elif pipeline_result:
+        base_status = "ok"
+    else:
+        base_status = "ran_no_result"
+    base_payload: dict = {"status": base_status, "via": "run_slow_cycle_parallel"}
+    if pipeline_error:
+        base_payload["error"] = pipeline_error
+    if pipeline_result:
+        base_payload["succeeded"] = pipeline_result.get("succeeded")
+        base_payload["total_tasks"] = pipeline_result.get("total_tasks")
+
+    # data_layer:dex_pool_ohlcv uses the attest_data_batch helper which
+    # prepends "data_layer:" to the domain. wallets / web_research /
+    # psi_discoveries use plain attest_state — they're top-level domains,
+    # not data_layer ones.
+    try:
+        from app.data_layer.provenance_scaling import attest_data_batch
+        await asyncio.to_thread(
+            attest_data_batch, "dex_pool_ohlcv", [base_payload]
+        )
+    except Exception as e:
+        logger.warning(f"slow-cycle heartbeat dex_pool_ohlcv attest failed: {e}")
+
+    try:
+        from app.state_attestation import attest_state
+        for _domain in ("wallets", "web_research", "psi_discoveries"):
+            try:
+                await asyncio.to_thread(attest_state, _domain, [base_payload])
+            except Exception as e:
+                logger.warning(
+                    f"slow-cycle heartbeat {_domain} attest failed: {e}"
+                )
+    except Exception as e:
+        logger.warning(f"slow-cycle heartbeat import failed: {e}")
+
+
 async def run_slow_cycle_parallel():
     """
     Parallel slow cycle using the enrichment worker.
@@ -2748,19 +2802,39 @@ async def run_slow_cycle_parallel():
     start = time.time()
     logger.info("=== Parallel slow cycle start ===")
 
+    _pipeline_error: str | None = None
+    _pipeline_result: dict | None = None
     try:
         from app.enrichment_worker import run_enrichment_pipeline
-        result = await run_enrichment_pipeline()
+        _pipeline_result = await run_enrichment_pipeline()
         logger.error(
-            f"=== ENRICHMENT PIPELINE COMPLETE: {result.get('succeeded', 0)}/{result.get('total_tasks', 0)} "
-            f"tasks in {result.get('total_elapsed_s', 0)}s ==="
+            f"=== ENRICHMENT PIPELINE COMPLETE: "
+            f"{_pipeline_result.get('succeeded', 0)}/{_pipeline_result.get('total_tasks', 0)} "
+            f"tasks in {_pipeline_result.get('total_elapsed_s', 0)}s ==="
         )
     except Exception as e:
+        _pipeline_error = f"{type(e).__name__}: {e}"[:200]
         logger.error(f"=== ENRICHMENT PIPELINE FAILED: {type(e).__name__}: {e} ===")
         import traceback as _tb
         logger.error(_tb.format_exc())
         await run_slow_cycle()
+        # Even on fallback, emit slow-cycle heartbeats below before returning
+        # so the freshness signal advances.
+        await _emit_slow_cycle_heartbeats(_pipeline_error, None)
         return
+
+    # Slow-cycle heartbeat attestations. Wave-3 #155/#156/#157 placed
+    # worker-side attests inside `run_slow_cycle`, which is dead code
+    # — `run_slow_cycle_parallel` calls run_enrichment_pipeline above
+    # and never falls through to run_slow_cycle in steady state. Same
+    # v9.11 pattern, one level higher.
+    #
+    # Heartbeats from here guarantee the four affected domains
+    # (data_layer:dex_pool_ohlcv, wallets, web_research, psi_discoveries)
+    # advance once per slow cycle regardless of how the enrichment
+    # pipeline went. Status reflects the pipeline's outcome.
+    await _emit_slow_cycle_heartbeats(_pipeline_error, _pipeline_result)
+    result = _pipeline_result
 
     # Post-pipeline tasks that depend on enrichment results.
     # Each is wrapped in asyncio.wait_for(to_thread(...)) so a blocking
