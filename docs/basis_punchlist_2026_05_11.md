@@ -247,6 +247,45 @@ write, confirm a fresh row exists.
 
 ---
 
+## Wave 7 — rpi_components, the seventh dead-canonical victim
+
+Lesson 8's diagnostic (`COUNT(*) before MAX()`) surfaced a domain
+Wave 5 missed: `rpi_components` had only 4 attestation rows across
+28 days (first 2026-04-12 14:08 UTC, last 2026-05-10 12:03 UTC).
+
+Same shape as the Wave 5b group:
+- dex_pool_ohlcv: 2 rows ever
+- web_research: 5 rows ever
+- psi_discoveries: 5 rows ever
+- wallets: 981 rows ever (but mostly from a broken pre-Wave-4 pipeline)
+- rpi_components: 4 rows ever ← Wave 7
+
+PR #148 patched the canonical collector module per the gate-on-truthy
+family, but per v9.11 that's dead code in steady state. Wave 7 fix:
+add `"rpi_components"` to the tuple in `_emit_slow_cycle_heartbeats()`
+(PR #163) so it heartbeats from the live `run_slow_cycle_parallel`
+path on every cycle.
+
+Same call pattern as wallets / web_research / psi_discoveries — plain
+`attest_state`, not `attest_data_batch` (rpi_components is a top-level
+domain, not a `data_layer:` one). Both branches:
+- happy path after run_enrichment_pipeline → status="ok"
+- fallback path after legacy run_slow_cycle returns → status="pipeline_failed"
+
+PR #148's canonical attest is left in place — harmless if that path
+ever opens.
+
+Why Wave 5 missed it: rpi_components has 4 historical rows spaced
+across 28 days, which superficially looked like "slow cadence
+attestation" rather than "rare-firing dead path." Lesson 8 added in
+Wave 6 specifically calls this out (single-digit row count = dead
+path, not slow cadence).
+
+Verification (per lesson 7): pending. Substrate confirmation after
+worker redeploy + slow-cycle elapse.
+
+---
+
 ## Verification
 
 **cycle_errors — last hour:**
