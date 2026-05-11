@@ -538,17 +538,29 @@ async def run_web_research_collection() -> list[dict]:
         except Exception as e:
             logger.warning(f"Meeting cadence research failed for {slug}: {e}")
 
-    # Attest
+    # Attest — always, even when scored is empty. Previously gated on
+    # `if scored:`, which made the domain go silent whenever the research
+    # cycle ran but produced no scoreable rows (parser miss, source down,
+    # all targets skipped). Same family as #137 / #142: attest the
+    # ran-but-empty state with a structured payload so the cycle is in the
+    # audit trail.
     try:
         from app.state_attestation import attest_state
         scored = [r for r in results if "score" in r]
         if scored:
-            _loop = asyncio.get_event_loop()
-            await _loop.run_in_executor(None, attest_state, "web_research", [
+            payload = [
                 {"type": r["entity_type"], "slug": r["entity_slug"],
                  "component": r["component"], "score": r["score"]}
                 for r in scored
-            ])
+            ]
+        else:
+            payload = [{
+                "status": "ran_no_scores",
+                "results_count": len(results),
+                "scored_count": 0,
+            }]
+        _loop = asyncio.get_event_loop()
+        await _loop.run_in_executor(None, attest_state, "web_research", payload)
     except asyncio.CancelledError:
         raise
     except Exception as e:
