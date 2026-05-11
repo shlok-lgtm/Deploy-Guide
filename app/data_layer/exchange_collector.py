@@ -260,11 +260,19 @@ async def run_exchange_collection() -> dict:
             await asyncio.to_thread(_store_exchange_snapshots, snapshots)
             total_snapshots = len(snapshots)
 
-    # Provenance
+    # Provenance — always attest, even when total_snapshots=0. Previously
+    # gated on `if total_snapshots > 0`, which let the domain go silent
+    # whenever the cycle ran but produced zero exchange snapshots (rate
+    # limit, all targets skipped). Same family as #141 (dex_pool_ohlcv).
+    # link_batch_to_proof is still conditional because there are no rows
+    # to correlate when snapshots=0.
     try:
         from app.data_layer.provenance_scaling import attest_data_batch, link_batch_to_proof
+        payload = {"exchanges": total_snapshots}
+        if total_snapshots == 0:
+            payload["status"] = "ran_no_snapshots"
+        await asyncio.to_thread(attest_data_batch, "exchange_snapshots", [payload])
         if total_snapshots > 0:
-            await asyncio.to_thread(attest_data_batch, "exchange_snapshots", [{"exchanges": total_snapshots}])
             await link_batch_to_proof("exchange_snapshots", "exchange_snapshots")
     except asyncio.CancelledError:
         raise
