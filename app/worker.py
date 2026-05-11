@@ -338,15 +338,25 @@ def store_component_readings(components: list[dict]):
     
     with get_cursor() as cur:
         for comp in components:
+            # Persist `is_stale` and `error_message` if the collector
+            # provided them. Both columns exist on component_readings
+            # (migration 001). Before this fix the INSERT silently dropped
+            # them, so PR #138's exchange_trust_ratio "field absent" path
+            # was writing raw=NULL/normalized=NULL with is_stale=false and
+            # no error message — contradicting the structured-stale signal
+            # the fix intended.
             cur.execute("""
                 INSERT INTO component_readings
-                    (stablecoin_id, component_id, category, raw_value, normalized_score, data_source, collected_at)
-                VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                    (stablecoin_id, component_id, category, raw_value, normalized_score,
+                     data_source, is_stale, error_message, collected_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT (stablecoin_id, component_id, immutable_date(collected_at))
                 DO UPDATE SET
                     raw_value = EXCLUDED.raw_value,
                     normalized_score = EXCLUDED.normalized_score,
                     data_source = EXCLUDED.data_source,
+                    is_stale = EXCLUDED.is_stale,
+                    error_message = EXCLUDED.error_message,
                     collected_at = EXCLUDED.collected_at
             """, (
                 comp["stablecoin_id"],
@@ -355,6 +365,8 @@ def store_component_readings(components: list[dict]):
                 comp.get("raw_value"),
                 comp.get("normalized_score"),
                 comp.get("data_source", "unknown"),
+                bool(comp.get("is_stale", False)),
+                comp.get("error_message"),
             ))
 
 

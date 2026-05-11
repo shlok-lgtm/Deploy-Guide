@@ -248,11 +248,21 @@ def run_worker_loop():
                     f"PSI expansion: {synced} stablecoins synced, {discovered} discovered, "
                     f"{enriched} enriched, {promoted} promoted"
                 )
-                # Attest PSI discoveries
+                # Attest PSI discoveries — always, even with discovered=0 and
+                # promoted=0. The enrichment-task path (#137) added the same
+                # fix at app/enrichment_worker.py, but its db_gate stays
+                # closed because main.py's `collect_collateral_exposure()`
+                # call above keeps `protocol_collateral_exposure` fresh —
+                # so the enrichment task never actually fires in production.
+                # That made #137's fix a no-op for the live code path and
+                # left psi_discoveries silent. Dropping the gate here too.
                 try:
                     from app.state_attestation import attest_state
-                    if discovered or promoted:
-                        attest_state("psi_discoveries", [{"synced": synced, "discovered": discovered, "enriched": enriched, "promoted": promoted}])
+                    attest_state(
+                        "psi_discoveries",
+                        [{"synced": synced, "discovered": discovered,
+                          "enriched": enriched, "promoted": promoted}],
+                    )
                 except Exception as ae:
                     logger.debug(f"PSI discovery attestation skipped: {ae}")
             except Exception as e:
