@@ -23,6 +23,26 @@ jobs:
       - name: Audit sync-DB-in-async (advisory)
         run: python3 scripts/audit_sync_db_in_async.py || true
 
+  audit-silent-failures:
+    # ADVISORY MODE — does not fail build.
+    # Surfaces three patterns from the 2026-05-11 waves:
+    #   - SILENT-EXCEPT: broad except without log+attest
+    #   - ATTEST-EMPTY-LIST: attest_state(list-comp) without justification
+    #   - ATTEST-DOMAIN-LEN: domain literal > 30 chars
+    # Baseline at PR-merge time: ~1812 SILENT-EXCEPT, ~12
+    # ATTEST-EMPTY-LIST, 0 ATTEST-DOMAIN-LEN.
+    # Promotion plan: 48h of clean CI on ATTEST-* (the actionable
+    # families) flips those to blocking. SILENT-EXCEPT stays
+    # advisory until a baseline diff is wired (separate PR).
+    # First eligible flip date: 2026-05-13.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - name: Audit silent-failure patterns (advisory)
+        run: python3 scripts/audit_silent_failures.py || true
+
   oracle-keys-parity:
     # Asserts both Python (app/oracle_keys.py) and TypeScript
     # (keeper/optionC_keys.ts) implementations of the entityId scheme
