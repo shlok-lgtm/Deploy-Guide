@@ -343,6 +343,79 @@ async def run_ohlcv_collection() -> dict:
     }
 
 
+# Module-canonical scheduled entry per v9.12.
+# Replaces the inline gate-plus-heartbeat block previously at
+# app/worker.py:2200-2245. The scheduler (worker.py / enrichment task)
+# calls this on its cadence; the module decides whether to fire actual
+# work and attests its decision in either branch.
+_OHLCV_FRESHNESS_HOURS = 6
+
+
+async def run_ohlcv_collection_scheduled() -> dict:
+    """Module-canonical entry: 6h freshness gate + work + attestation.
+
+    Returns a status dict regardless of branch:
+      - {"status": "skipped_fresh", "table_age_hours": X}
+      - {"status": "ran", ...run_ohlcv_collection() result}
+      - {"status": "error", "error": str}
+    The state_attestations row fires inside this function (or inside
+    run_ohlcv_collection() on the work path); the scheduler should NOT
+    re-attest.
+    """
+    from app.database import fetch_one
+    from app.data_layer.provenance_scaling import attest_data_batch
+
+    table_age_hours: float = float(_OHLCV_FRESHNESS_HOURS)
+    try:
+        latest = await asyncio.to_thread(
+            fetch_one, "SELECT MAX(timestamp) AS t FROM dex_pool_ohlcv"
+        )
+        if latest and latest.get("t"):
+            _ot = latest["t"]
+            if hasattr(_ot, "tzinfo") and _ot.tzinfo is None:
+                _ot = _ot.replace(tzinfo=timezone.utc)
+            if hasattr(_ot, "timestamp"):
+                table_age_hours = (
+                    datetime.now(timezone.utc) - _ot
+                ).total_seconds() / 3600
+    except Exception as e:
+        logger.warning(f"[ohlcv_collector] freshness check failed: {e}")
+        table_age_hours = float(_OHLCV_FRESHNESS_HOURS)
+
+    if table_age_hours < _OHLCV_FRESHNESS_HOURS:
+        try:
+            await asyncio.to_thread(
+                attest_data_batch,
+                "dex_pool_ohlcv",
+                [{
+                    "status": "skipped_fresh",
+                    "table_age_hours": round(table_age_hours, 2),
+                }],
+            )
+        except Exception as e:
+            logger.warning(f"[ohlcv_collector] skipped-fresh attest failed: {e}")
+        return {"status": "skipped_fresh", "table_age_hours": round(table_age_hours, 2)}
+
+    try:
+        result = await run_ohlcv_collection()
+        return {"status": "ran", "table_age_hours": round(table_age_hours, 2), **result}
+    except Exception as e:
+        logger.warning(f"[ohlcv_collector] collection failed: {e}")
+        try:
+            await asyncio.to_thread(
+                attest_data_batch,
+                "dex_pool_ohlcv",
+                [{
+                    "status": "error",
+                    "table_age_hours": round(table_age_hours, 2),
+                    "error": str(e)[:200],
+                }],
+            )
+        except Exception:
+            pass
+        return {"status": "error", "error": str(e)[:500]}
+
+
 def _parse_ohlcv(ohlcv_list: list, pool: dict) -> list[dict]:
     """Parse OHLCV list into storage records."""
     records = []

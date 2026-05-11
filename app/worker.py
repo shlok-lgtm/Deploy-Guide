@@ -2195,54 +2195,17 @@ async def run_slow_cycle():
         logger.warning(f"Incident detection failed: {e}")
 
     # -------------------------------------------------------------------------
-    # DEX pool OHLCV — 6-hour gate, GeckoTerminal API
+    # DEX pool OHLCV — module-canonical per v9.12.
+    # The 6h freshness gate, work, and attestation all live inside
+    # app/data_layer/ohlcv_collector.py::run_ohlcv_collection_scheduled().
+    # Worker.py is the scheduler; the module is the only writer.
     # -------------------------------------------------------------------------
-    _ohlcv_status = "skipped_unknown"
-    _ohlcv_result = None
     try:
-        ohlcv_last = await fetch_one_async("SELECT MAX(timestamp) as t FROM dex_pool_ohlcv")
-        ohlcv_age = 7
-        if ohlcv_last and ohlcv_last.get("t"):
-            _ot = ohlcv_last["t"]
-            if hasattr(_ot, 'tzinfo') and _ot.tzinfo is None:
-                _ot = _ot.replace(tzinfo=timezone.utc)
-            if hasattr(_ot, 'timestamp'):
-                ohlcv_age = (datetime.now(timezone.utc) - _ot).total_seconds() / 3600
-        if ohlcv_age >= 6:
-            from app.data_layer.ohlcv_collector import run_ohlcv_collection
-            logger.info("Running DEX pool OHLCV collection...")
-            _ohlcv_result = await run_ohlcv_collection()
-            _ohlcv_status = "ran"
-            logger.info(
-                f"OHLCV collection: {_ohlcv_result.get('records_stored', 0)} records, "
-                f"{_ohlcv_result.get('pools_found', 0)} pools"
-            )
-        else:
-            _ohlcv_status = "skipped_fresh"
-            logger.info(f"OHLCV collection skipped — last ran {ohlcv_age:.1f}h ago")
+        from app.data_layer.ohlcv_collector import run_ohlcv_collection_scheduled
+        _ohlcv_outcome = await run_ohlcv_collection_scheduled()
+        logger.info(f"OHLCV: {_ohlcv_outcome}")
     except Exception as e:
-        _ohlcv_status = "error"
-        logger.warning(f"OHLCV collection failed: {e}")
-
-    # Attest from worker.py side regardless of whether the 6h gate opened.
-    # PR #141 added attestation inside run_ohlcv_collection(), but the gate
-    # at the top of this block keeps the function silent in steady state
-    # (data is fresh ~4 hours out of every 6) — so the patched attest
-    # fired only 2 times ever per state_attestations. Heartbeating from
-    # the worker side gives the domain hourly freshness with a status that
-    # reflects whether collection actually fired.
-    try:
-        from app.data_layer.provenance_scaling import attest_data_batch
-        _ohlcv_payload = {
-            "status": _ohlcv_status,
-            "table_age_hours": round(ohlcv_age, 2) if isinstance(ohlcv_age, (int, float)) else None,
-        }
-        if _ohlcv_result:
-            _ohlcv_payload["records_stored"] = _ohlcv_result.get("records_stored", 0)
-            _ohlcv_payload["pools_found"] = _ohlcv_result.get("pools_found", 0)
-        await asyncio.to_thread(attest_data_batch, "dex_pool_ohlcv", [_ohlcv_payload])
-    except Exception as _e_attest:
-        logger.warning(f"dex_pool_ohlcv worker attest failed: {_e_attest}")
+        logger.warning(f"OHLCV collection scheduler call failed: {e}")
 
     # -------------------------------------------------------------------------
     # Wallet behavior tagging — every cycle, computed from existing data
