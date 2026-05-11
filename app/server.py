@@ -176,7 +176,8 @@ async def rate_limit_and_track(request: Request, call_next):
             break
 
     # Resolve real client IP — prefer X-Forwarded-For over direct connection
-    # (GCP/Railway/Replit proxies set the direct connection to their own IPs like 35.191.*)
+    # (Railway and GCP load balancers terminate TLS and set the direct
+    # connection to their own internal IPs like 35.191.* / 10.*)
     forwarded_for = request.headers.get("x-forwarded-for", "")
     if forwarded_for:
         # X-Forwarded-For: client, proxy1, proxy2 — first value is the real client
@@ -193,15 +194,13 @@ async def rate_limit_and_track(request: Request, call_next):
         "basis-keeper",        # Oracle keeper
         "basis-worker",        # Background worker
         "uvicorn",             # Internal health checks
-        "headlesschrome",      # Replit internal rendering
+        "headlesschrome",      # Headless browser SSR / link previews
         "claudebot",           # Anthropic web crawler
         "python-requests",     # Internal Python HTTP calls
-        "replit",              # Replit internal traffic
     ]
     INTERNAL_IP_PREFIXES = [
-        "35.191.",             # GCP load balancer (Replit proxy)
-        "10.81.",              # Replit internal network
-        "10.",                 # Any private 10.x.x.x network
+        "35.191.",             # GCP load balancer health checks
+        "10.",                 # Any private 10.x.x.x network (Railway internal mesh)
         "127.0.0.",            # Localhost
     ]
     is_internal = (
@@ -742,7 +741,7 @@ async def _engine_scheduler_shutdown():
         logger.warning(f"Engine scheduler shutdown error: {e}")
 
 
-# Atexit fallback for non-graceful shutdowns (SIGKILL, Replit restarts, etc.)
+# Atexit fallback for non-graceful shutdowns (SIGKILL, container restarts, etc.)
 try:
     from app.usage_tracker import flush as _flush_usage_atexit
     atexit.register(_flush_usage_atexit)

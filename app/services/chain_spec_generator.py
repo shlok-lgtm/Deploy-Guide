@@ -226,7 +226,7 @@ After the collector is built, add these protocols to PSI (same pattern as Drift/
 ## Verification
 
 After building:
-1. Set the RPC API key in Replit secrets
+1. Set the RPC API key as a Railway service variable
 2. Trigger a scoring cycle
 3. Verify components are collected for stablecoins on this chain
 4. Add top protocols to PSI TARGET_PROTOCOLS

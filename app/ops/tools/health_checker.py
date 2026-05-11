@@ -15,7 +15,8 @@ logger = logging.getLogger(__name__)
 
 TIMEOUT_MS = 5000  # 5-second statement timeout for all ops reads
 
-# Use the public URL for HTTP checks (localhost doesn't work behind Replit proxy)
+# Use the public URL for HTTP checks (localhost doesn't traverse the
+# Railway/GCP load balancer the same way external traffic does).
 _PUBLIC_BASE = os.environ.get("PUBLIC_URL", "https://basisprotocol.xyz")
 
 

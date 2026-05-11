@@ -1,8 +1,8 @@
 """
-Basis Protocol — Replit Entry Point
-=====================================
+Basis Protocol — Entry Point
+=============================
 Runs the API server + background worker in a single process.
-Replit runs `python main.py` — this handles everything.
+The Dockerfile.api image invokes this with `python main.py`.
 """
 
 import asyncio
@@ -810,7 +810,7 @@ def main():
     else:
         logger.info("Keeper disabled (set KEEPER_ENABLED=true to enable)")
 
-    # 3. Start API server (always port 5000 — mapped to :80 by Replit)
+    # 3. Start API server. Railway sets PORT; falls back to 5000 locally.
     port = int(os.environ.get("PORT", 5000))
     free_port(port)
     logger.info(f"Starting API on port {port}")
