@@ -186,6 +186,67 @@ ever calls it directly.
 
 ---
 
+## Wave 6 — diagnosis that contradicted its own hypothesis
+
+User flagged that 5 waves of attest-hoisting hadn't fixed three
+data_layer domains. Substrate at 2026-05-11 15:18 UTC:
+
+  data_layer:peg_snapshots_5m    last attest 2026-05-08 20:23 UTC
+  data_layer:exchange_snapshots  last attest 2026-05-08 20:19 UTC
+  data_layer:dex_pool_ohlcv      last attest 2026-05-01 08:01 UTC
+
+Hypothesis going in: the inline blocks were disabled on those
+specific dates (May 8 for peg/exchange, May 1 for ohlcv) by an
+intervening commit, env var flip, or feature flag.
+
+Diagnostic ran:
+  1. `git log` near those dates touching worker.py / data_layer /
+     collectors.
+  2. Read worker.py sub-block headers; checked for outer conditionals.
+  3. Queried cycle_errors in the May 8 19:30-22:00 window.
+  4. Pulled total-rows-ever for each affected domain in
+     state_attestations.
+
+Finding that contradicts the hypothesis
+---------------------------------------
+The blocks were NEVER reliably attesting. Total state_attestations
+rows ever:
+
+  data_layer:peg_snapshots_5m:   3 rows ever (Apr 29 – May 8)
+  data_layer:exchange_snapshots: 11 rows ever (Apr 29 – May 8)
+  data_layer:dex_pool_ohlcv:     2 rows ever (Apr 30 – May 1)
+
+Meanwhile the underlying DATA tables are being written approximately
+hourly (peg_snapshots_5m latest data row 1h55m old at diagnosis time;
+exchange_snapshots latest 1h55m old, exact same minute as peg).
+
+So the inline blocks ARE running, every fast_cycle, and writing data.
+The attest just wasn't on the live path. The "last attest" dates
+reflect when the DEAD canonical path stopped firing — the enrichment
+task that wraps app/data_layer/peg_monitor.py / exchange_collector.py
+/ ohlcv_collector.py has db_gates that stay closed because worker.py
+keeps the data tables fresh. Same v9.11 pattern as Wave 3, but with a
+narrower historical artifact: the enrichment task fired a handful of
+times in late April and once in early May, then went silent because
+its gates stopped opening.
+
+Wave 5a (PR #162) hoisted the worker.py-inline peg/exchange attests
+out of the outer try/except where they had been buried. Wave 5b
+(PR #163) added run_slow_cycle_parallel heartbeats for the four
+slow-cycle-dead domains, including data_layer:dex_pool_ohlcv. Both
+deployed at 2026-05-11 15:13 UTC. At the time of Wave 6 diagnosis
+(15:27 UTC), the post-deploy fast_cycle was still in its scoring
+phase (per Railway logs: per-coin peg component collectors firing
+~15:20 UTC), so the inline data_layer block hadn't been reached
+post-deploy yet. No fix shipped in Wave 6.
+
+Verification deferred to next fast_cycle completion (~15:45-16:00
+UTC expected). Substrate-only verification per lesson 7: query
+state_attestations for the three domains AFTER the next data table
+write, confirm a fresh row exists.
+
+---
+
 ## Verification
 
 **cycle_errors — last hour:**
@@ -302,3 +363,16 @@ Plus 6 manual DDL re-applies on prod Neon for the 6 dropped tables.
    not advanced. Wave 5 had to add the missing diagnostic.
    Future rule: any "verification" line in a punchlist or PR
    description must quote the actual query result at write-time.
+
+8. **A "specific stop date" on state_attestations doesn't imply the
+   code path was disabled.** Wave 6 went in expecting a May 8 / May 1
+   trigger commit and didn't find one. The substrate revealed those
+   dates were the last time the DEAD canonical attest path (an
+   enrichment-task wrapper around app/data_layer/*_collector.py)
+   happened to fire — its db_gate stays closed in steady state
+   because worker.py keeps the underlying data table fresh. The
+   inline live path had never attested. Before chasing a disablement
+   commit: query `SELECT COUNT(*) FROM state_attestations WHERE
+   domain = X`. If total rows ever is in single digits, the live
+   path probably has never attested; the "stop date" is the last
+   rare firing of a dead-by-design path, not an active disablement.
