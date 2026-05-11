@@ -30,8 +30,14 @@ def test_psi_expansion_attests_when_discovered_or_promoted():
         ]
 
 
-def test_psi_expansion_skips_attestation_when_nothing_discovered():
-    """When both discovered=0 and promoted=0, attest_state should NOT be called."""
+def test_psi_expansion_attests_every_cycle_even_when_nothing_discovered():
+    """When discovered=0 and promoted=0, attest_state must STILL be called.
+
+    Regression: gating on (discovered or promoted) made the domain go silent
+    for 29 days once the protocol registry stabilized. An attestation of
+    `{discovered: 0, promoted: 0}` is the canonical statement that the
+    discovery cycle ran and the registry is steady.
+    """
     mock_attest = MagicMock()
 
     with (
@@ -47,4 +53,9 @@ def test_psi_expansion_skips_attestation_when_nothing_discovered():
         result = asyncio.run(_run_psi_expansion())
 
         assert result == {"synced": 2, "discovered": 0, "enriched": 0, "promoted": 0}
-        mock_attest.assert_not_called()
+        mock_attest.assert_called_once()
+        call_args = mock_attest.call_args
+        assert call_args[0][0] == "psi_discoveries"
+        assert call_args[0][1] == [
+            {"synced": 2, "discovered": 0, "enriched": 0, "promoted": 0}
+        ]
