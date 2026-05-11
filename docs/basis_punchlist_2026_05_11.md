@@ -148,4 +148,4 @@ Plus 6 manual DDL re-applies on prod Neon for the 6 dropped tables.
 
 4. **Two-path attest sites need both paths fixed.** psi_discoveries (#137 → #150) and wallets (#142, both sites) showed the pattern: a "canonical" implementation in a service module + a "legacy" duplicate in main.py. Fixing only one is a no-op if the other is what's actually running. Always trace which path the worker is invoking before declaring victory.
 
-5. **Per-service Railway config beats repo-wide railway.json** for any project where service shapes differ (HTTP server vs forever-loop vs one-shot). Lesson now codified in basis-protocol/canon constitution v9.9.
+5. **Per-service Railway config beats repo-wide railway.json** for any project where service shapes differ (HTTP server vs forever-loop vs one-shot). Lesson now codified in basis-hub canon docs as constitution amendment v9.10.
