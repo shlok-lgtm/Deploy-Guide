@@ -2468,6 +2468,9 @@ async def run_slow_cycle():
     # -------------------------------------------------------------------------
     # PSI expansion pipeline — daily gate (discover → enrich → promote)
     # -------------------------------------------------------------------------
+    _psi_status = "skipped_unknown"
+    _psi_synced = _psi_discovered = _psi_enriched = _psi_promoted = 0
+    _psi_hours_since: float | None = None
     try:
         from app.collectors.psi_collector import (
             collect_collateral_exposure,
@@ -2486,22 +2489,50 @@ async def run_slow_cycle():
             from datetime import date
             days_diff = (date.today() - last_date).days if isinstance(last_date, date) else 1
             hours_since = days_diff * 24
+        _psi_hours_since = hours_since
 
         if hours_since >= 24:
             logger.info("Running PSI expansion pipeline...")
             await asyncio.to_thread(collect_collateral_exposure)
-            synced = await asyncio.to_thread(sync_collateral_to_backlog)
-            discovered = await asyncio.to_thread(discover_protocols)
-            enriched = await asyncio.to_thread(enrich_protocol_backlog)
-            promoted = await asyncio.to_thread(promote_eligible_protocols)
+            _psi_synced = await asyncio.to_thread(sync_collateral_to_backlog)
+            _psi_discovered = await asyncio.to_thread(discover_protocols)
+            _psi_enriched = await asyncio.to_thread(enrich_protocol_backlog)
+            _psi_promoted = await asyncio.to_thread(promote_eligible_protocols)
+            _psi_status = "ran"
             logger.info(
-                f"PSI expansion: {synced} stablecoins synced, {discovered} discovered, "
-                f"{enriched} enriched, {promoted} promoted"
+                f"PSI expansion: {_psi_synced} stablecoins synced, {_psi_discovered} discovered, "
+                f"{_psi_enriched} enriched, {_psi_promoted} promoted"
             )
         else:
+            _psi_status = "skipped_fresh"
             logger.info(f"PSI expansion skipped — last ran {hours_since:.0f}h ago")
     except Exception as e:
+        _psi_status = "error"
         logger.warning(f"PSI expansion pipeline failed: {e}")
+
+    # Attest psi_discoveries from the live worker path. PR #137 patched
+    # the enrichment_worker task and PR #150 patched main.py:244, but
+    # this block at worker.py:2468 is the actual code that fires on
+    # every fast cycle. It runs `collect_collateral_exposure()` itself,
+    # which keeps protocol_collateral_exposure fresh, which closes the
+    # 24h db_gate on BOTH the enrichment task AND main.py's path —
+    # rendering both prior fixes dead code in practice.
+    #
+    # Heartbeat from here so freshness tracks the worker cycle, not the
+    # rare day when this block's own 24h gate happens to open.
+    try:
+        from app.state_attestation import attest_state
+        await asyncio.to_thread(attest_state, "psi_discoveries", [{
+            "status": _psi_status,
+            "hours_since_last_expansion": round(_psi_hours_since, 2)
+                if isinstance(_psi_hours_since, (int, float)) else None,
+            "synced": _psi_synced,
+            "discovered": _psi_discovered,
+            "enriched": _psi_enriched,
+            "promoted": _psi_promoted,
+        }])
+    except Exception as _e_attest:
+        logger.warning(f"psi_discoveries worker attest failed: {_e_attest}")
 
     # -------------------------------------------------------------------------
     # Pool wallet discovery — daily gate via DB timestamp
