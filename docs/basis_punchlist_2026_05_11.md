@@ -312,11 +312,25 @@ ORDER BY n DESC;
    work completes. Mempool capture is heartbeat-only in the interim;
    parameter_history collector continues failing ~88/day. Accepted
    degraded state.
-2. **state_attestations.domain VARCHAR(30) truncation** — 3 collectors
-   generate names exceeding 30 chars (entity_snapshots_hourly=34,
-   market_chart_history=31, wallet_chain_presence=32). 2 silent
-   `data_layer_attest_data_batch_failure` "value too long" errors in 24h.
-   Schema migration to TEXT (or VARCHAR(128)) queued.
+2. **state_attestations.domain VARCHAR(30) truncation — FIXED in
+   migration 107**. Diagnostic surfaced 10 attestation-related columns
+   with restrictive lengths (2 × `domain` VARCHAR(30), 8 ×
+   `methodology_version` VARCHAR(20) across state_attestations,
+   discovery_signals, assessment_events, component_batch_hashes,
+   cqi_attestations, report_attestations, rpi_score_history, rpi_scores).
+   All 10 widened to TEXT via `migrations/107_widen_attestation_columns_to_text.sql`,
+   applied to prod 2026-05-11T15:40:54Z.
+
+   Substrate verification (per lesson 7):
+   - `information_schema.columns`: all 10 columns now `data_type='text'`,
+     `character_maximum_length=NULL`
+   - `cycle_errors WHERE error_message LIKE '%value too long%' AND
+     occurred_at > NOW() - INTERVAL '1 hour'`: **0 rows** (was 2/24h
+     pre-migration)
+   - `migrations` table: row inserted `2026-05-11T15:40:54.978Z`
+
+   Long-named domain attestation verification (entity_snapshots_hourly,
+   market_chart_history, wallet_chain_presence) deferred to next cycle.
 3. **run_pipeline_batch structural hang** — FIXED in PR #160 (Wave 4).
    See above for diagnostic. Watch the Wave-4 verification queries over
    the next 24h: enrichment_wallet_reindex timeouts should stop, MAX
