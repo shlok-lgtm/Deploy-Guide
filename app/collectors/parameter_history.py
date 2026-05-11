@@ -68,7 +68,13 @@ def _eth_call_sync(contract: str, data: str, chain: str = "ethereum") -> str:
             except Exception:
                 pass
 
-    # Etherscan fallback (ethereum only)
+    # Etherscan fallback (ethereum only). Etherscan v2 requires `chainid`;
+    # without it the API returns `{"status":"0","message":"NOTOK","result":
+    # "Missing/Invalid Chain Id, see https://api.etherscan.io/v2/chainlist ..."}`,
+    # whose `result` field is a URL/error string, not hex. The previous
+    # code took that string and returned it; downstream _decode_uint256
+    # then crashed in int(value, 16). The May-10 cycle_errors triage saw
+    # 44 invalid-literal failures/24h from this single path.
     if chain == "ethereum":
         api_key = os.environ.get("ETHERSCAN_API_KEY", "")
         if api_key:
@@ -76,6 +82,7 @@ def _eth_call_sync(contract: str, data: str, chain: str = "ethereum") -> str:
                 resp = httpx.get(
                     "https://api.etherscan.io/v2/api",
                     params={
+                        "chainid": 1,
                         "module": "proxy",
                         "action": "eth_call",
                         "to": contract,
@@ -85,9 +92,40 @@ def _eth_call_sync(contract: str, data: str, chain: str = "ethereum") -> str:
                     },
                     timeout=15,
                 )
-                result = resp.json().get("result", "0x")
-                if result and result != "0x":
-                    return result
+                # Guard 1: HTTP error returned an HTML body. httpx.json()
+                # would raise on non-JSON, but Etherscan sometimes wraps an
+                # error message in valid JSON with status="0".
+                try:
+                    body = resp.json()
+                except ValueError:
+                    logger.warning(
+                        f"Etherscan returned non-JSON body for {contract}: "
+                        f"content-type={resp.headers.get('content-type', '?')} "
+                        f"prefix={resp.text[:80]!r}"
+                    )
+                    body = None
+
+                if isinstance(body, dict):
+                    raw = body.get("result", "0x")
+                    # Guard 2: result must be a non-empty hex string.
+                    # Etherscan's error-state result is plain text (e.g.
+                    # "Missing/Invalid Chain Id ...") which str.startswith
+                    # filters cleanly.
+                    if (
+                        isinstance(raw, str)
+                        and raw.startswith("0x")
+                        and len(raw) >= 2
+                        and all(c in "0123456789abcdefABCDEF" for c in raw[2:])
+                    ):
+                        if raw != "0x":
+                            return raw
+                    else:
+                        logger.warning(
+                            f"Etherscan eth_call returned non-hex result for "
+                            f"{contract}: status={body.get('status')!r} "
+                            f"message={body.get('message')!r} "
+                            f"result={str(raw)[:80]!r}"
+                        )
             except Exception as e:
                 logger.warning(f"Etherscan eth_call fallback failed: {e}")
                 try:

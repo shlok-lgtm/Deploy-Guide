@@ -1879,8 +1879,14 @@ async def protocol_deep_dive(slug: str, request: Request):
 
         collateral = []
         try:
+            # `protocol_collateral_exposure` exposes the token name as
+            # `token_symbol`, not `stablecoin_symbol`. The previous column
+            # name has never existed on this table; the May-10 schema-drift
+            # triage attributed 65 fails/24h across all 13 scored protocols
+            # to this single mismatch. We alias to `stablecoin_symbol` in the
+            # SELECT so callers downstream don't have to change.
             collateral = await fetch_all_async("""
-                SELECT stablecoin_symbol, tvl_usd, pool_count
+                SELECT token_symbol AS stablecoin_symbol, tvl_usd, pool_count
                 FROM protocol_collateral_exposure
                 WHERE protocol_slug = %s
                 ORDER BY tvl_usd DESC
