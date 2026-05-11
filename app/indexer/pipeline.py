@@ -803,11 +803,23 @@ async def run_pipeline_batch(batch_size: int = 500) -> dict:
         f"elapsed={elapsed:.0f}s, remaining={total_remaining - indexed}"
     )
 
-    # Attest wallet batch
+    # Attest wallet batch — always, even when indexed=0. The `if indexed > 0`
+    # gate kept "wallets" silent in state_attestations whenever the batch
+    # reindex ran but found no stale wallets to refresh (steady state across
+    # a freshly-indexed graph). Same pattern as #137 / #141: attest the
+    # ran-but-empty case so the audit trail records the cycle.
     try:
         from app.state_attestation import attest_state
-        if indexed > 0:
-            await asyncio.to_thread(attest_state, "wallets", [{"cycle": "batch_reindex", "processed": indexed, "scored": scored, "balances_updated": balances_updated}])
+        await asyncio.to_thread(
+            attest_state,
+            "wallets",
+            [{
+                "cycle": "batch_reindex",
+                "processed": indexed,
+                "scored": scored,
+                "balances_updated": balances_updated,
+            }],
+        )
     except asyncio.CancelledError:
         raise
     except Exception as ae:
