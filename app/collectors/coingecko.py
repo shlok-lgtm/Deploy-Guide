@@ -33,6 +33,27 @@ def _headers() -> dict:
     return h
 
 
+def _has_trust_signal(ticker: dict) -> bool:
+    """Return True iff CoinGecko provided ANY usable trust signal on this ticker.
+
+    Distinguishes "field absent" (signal=None, both keys missing or null) from
+    "low trust" (signal=red, or numeric rank>10). The former should NOT count
+    toward the denominator of exchange_trust_ratio — we have no information,
+    not bad information.
+
+    Signals we consider present:
+      - trust_score is a known string value ("green", "yellow", "red")
+      - trust_score_rank is a finite numeric value
+    """
+    ts = ticker.get("trust_score")
+    if ts in ("green", "yellow", "red"):
+        return True
+    rank = ticker.get("trust_score_rank")
+    if isinstance(rank, (int, float)):
+        return True
+    return False
+
+
 def _is_high_trust(ticker: dict) -> bool:
     """Check if a ticker is from a high-trust exchange.
 
@@ -499,16 +520,41 @@ async def collect_market_activity_components(
     })
     
     # Trust Score Ratio
+    #
+    # CoinGecko's response shape for tickers has drifted: for some assets
+    # (notably USDC on 2026-05-11) both `trust_score` and `trust_score_rank`
+    # are null on every ticker. The previous implementation divided
+    # high_trust by len(tickers) regardless, producing raw=0/normalized=0 —
+    # which falsely scored the asset as "no exchange has high trust" when the
+    # truth is "CoinGecko didn't tell us." Distinguish those two cases:
+    # divide only by tickers that have a usable trust signal, and if NONE do,
+    # mark the reading stale instead of emitting a misleading zero.
     if tickers:
-        high_trust = sum(1 for t in tickers if _is_high_trust(t))
-        trust_ratio = high_trust / len(tickers)
-        components.append({
-            "component_id": "exchange_trust_ratio",
-            "category": "market_activity",
-            "raw_value": round(trust_ratio, 4),
-            "normalized_score": round(trust_ratio * 100, 2),
-            "data_source": "coingecko",
-        })
+        rated = [t for t in tickers if _has_trust_signal(t)]
+        if rated:
+            high_trust = sum(1 for t in rated if _is_high_trust(t))
+            trust_ratio = high_trust / len(rated)
+            components.append({
+                "component_id": "exchange_trust_ratio",
+                "category": "market_activity",
+                "raw_value": round(trust_ratio, 4),
+                "normalized_score": round(trust_ratio * 100, 2),
+                "data_source": "coingecko",
+            })
+        else:
+            components.append({
+                "component_id": "exchange_trust_ratio",
+                "category": "market_activity",
+                "raw_value": None,
+                "normalized_score": None,
+                "data_source": "coingecko",
+                "is_stale": True,
+                "error_message": (
+                    f"CoinGecko returned {len(tickers)} tickers but none "
+                    f"carried a trust_score or trust_score_rank — field "
+                    f"absent, not zero."
+                ),
+            })
     
     # Stablecoin Market Share
     market_cap = md.get("market_cap", {}).get("usd", 0)
