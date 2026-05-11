@@ -1,0 +1,51 @@
+name: pr-substrate-gate
+# Enforces lesson 7 (verification must cite substrate, not expectation).
+# Every PR body must contain a "## Substrate verification" section
+# AND at least one of the three subsections: Pre-deploy / Post-deploy /
+# N/A. Failure means the operator forgot to fill in the template.
+#
+# Bypass: this check only runs on `pull_request` events, not on
+# direct pushes to main (those are blocked by branch protection
+# elsewhere). Bot accounts (dependabot, etc.) can be added to the
+# ALLOWLIST below if needed.
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+
+jobs:
+  substrate-section-present:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PR body contains substrate-verification section
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          ALLOWLIST="dependabot[bot] github-actions[bot]"
+          for bot in $ALLOWLIST; do
+            if [ "$PR_AUTHOR" = "$bot" ]; then
+              echo "Bypass: PR author $PR_AUTHOR is allowlisted."
+              exit 0
+            fi
+          done
+
+          if [ -z "$PR_BODY" ]; then
+            echo "::error::PR body is empty — substrate verification section required."
+            exit 1
+          fi
+
+          # The required outer header.
+          if ! grep -qE '^##[[:space:]]+Substrate verification' <<<"$PR_BODY"; then
+            echo "::error::PR body missing '## Substrate verification' section. See .github/PULL_REQUEST_TEMPLATE.md."
+            exit 1
+          fi
+
+          # Must include at least one of the three subsection headers.
+          if grep -qE '^###[[:space:]]+(Pre-deploy|Post-deploy|N/A)' <<<"$PR_BODY"; then
+            echo "Substrate verification section present with at least one subsection."
+            exit 0
+          fi
+
+          echo "::error::'## Substrate verification' present, but no '### Pre-deploy', '### Post-deploy', or '### N/A' subsection found."
+          exit 1
