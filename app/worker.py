@@ -1233,6 +1233,20 @@ async def run_fast_cycle():
                 await asyncio.sleep(0.15)
         _ex_total = await fetch_one_async("SELECT COUNT(*) as c FROM exchange_snapshots")
         logger.error(f"=== EXCHANGES: {_ex_ok} ok, {_ex_err} err, total={_ex_total} ===")
+
+        # Attest from the live worker.py path (see peg_snapshots_5m comment
+        # below for why PR #146's data_layer/exchange_collector.py patch
+        # didn't take). data_layer:exchange_snapshots was 2.7d stale until
+        # this added the call to the inline writer's actual end.
+        try:
+            from app.data_layer.provenance_scaling import attest_data_batch
+            await asyncio.to_thread(attest_data_batch, "exchange_snapshots", [{
+                "status": "ok" if _ex_ok else "ran_no_inserts",
+                "exchanges_ok": _ex_ok,
+                "exchanges_err": _ex_err,
+            }])
+        except Exception as _e_attest:
+            logger.warning(f"exchange_snapshots worker attest failed: {_e_attest}")
     except Exception as _e2: logger.error(f"=== EXCHANGES FAILED: {_e2} ===")
 
     # ==== 3. YIELD SNAPSHOTS (DeFiLlama) ====
@@ -1316,6 +1330,23 @@ async def run_fast_cycle():
                 except Exception as _e: logger.error(f"peg fail {_sc['id']}: {_e}")
                 await asyncio.sleep(0.15)
         logger.error(f"=== PEG: {_pg_ok}, MCHART: {_mc_ok}, elapsed={time.time()-_mc_start:.1f}s ===")
+
+        # Attest from the live worker.py path. PR #146 patched
+        # app/data_layer/peg_monitor.py but that module is only called
+        # from the enrichment task, whose db_gate on peg_snapshots_5m
+        # stays closed because *this* loop keeps the table fresh. So
+        # the patched code is dead on the live path. Attest here instead
+        # — `data_layer:peg_snapshots_5m` was 2.7 days stale until this
+        # fix landed despite peg_snapshots_5m being written every cycle.
+        try:
+            from app.data_layer.provenance_scaling import attest_data_batch
+            await asyncio.to_thread(attest_data_batch, "peg_snapshots_5m", [{
+                "status": "ok" if _pg_ok else "ran_no_inserts",
+                "peg_rows": _pg_ok,
+                "mchart_rows": _mc_ok,
+            }])
+        except Exception as _e_attest:
+            logger.warning(f"peg_snapshots_5m worker attest failed: {_e_attest}")
     except Exception as _e5: logger.error(f"=== PEG FAILED: {_e5} ===")
 
     # ==== 6. LIQUIDITY DEPTH (CEX tickers) ====
@@ -2081,6 +2112,8 @@ async def run_slow_cycle():
     # -------------------------------------------------------------------------
     # DEX pool OHLCV — 6-hour gate, GeckoTerminal API
     # -------------------------------------------------------------------------
+    _ohlcv_status = "skipped_unknown"
+    _ohlcv_result = None
     try:
         ohlcv_last = await fetch_one_async("SELECT MAX(timestamp) as t FROM dex_pool_ohlcv")
         ohlcv_age = 7
@@ -2093,15 +2126,38 @@ async def run_slow_cycle():
         if ohlcv_age >= 6:
             from app.data_layer.ohlcv_collector import run_ohlcv_collection
             logger.info("Running DEX pool OHLCV collection...")
-            ohlcv_result = await run_ohlcv_collection()
+            _ohlcv_result = await run_ohlcv_collection()
+            _ohlcv_status = "ran"
             logger.info(
-                f"OHLCV collection: {ohlcv_result.get('records_stored', 0)} records, "
-                f"{ohlcv_result.get('pools_found', 0)} pools"
+                f"OHLCV collection: {_ohlcv_result.get('records_stored', 0)} records, "
+                f"{_ohlcv_result.get('pools_found', 0)} pools"
             )
         else:
+            _ohlcv_status = "skipped_fresh"
             logger.info(f"OHLCV collection skipped — last ran {ohlcv_age:.1f}h ago")
     except Exception as e:
+        _ohlcv_status = "error"
         logger.warning(f"OHLCV collection failed: {e}")
+
+    # Attest from worker.py side regardless of whether the 6h gate opened.
+    # PR #141 added attestation inside run_ohlcv_collection(), but the gate
+    # at the top of this block keeps the function silent in steady state
+    # (data is fresh ~4 hours out of every 6) — so the patched attest
+    # fired only 2 times ever per state_attestations. Heartbeating from
+    # the worker side gives the domain hourly freshness with a status that
+    # reflects whether collection actually fired.
+    try:
+        from app.data_layer.provenance_scaling import attest_data_batch
+        _ohlcv_payload = {
+            "status": _ohlcv_status,
+            "table_age_hours": round(ohlcv_age, 2) if isinstance(ohlcv_age, (int, float)) else None,
+        }
+        if _ohlcv_result:
+            _ohlcv_payload["records_stored"] = _ohlcv_result.get("records_stored", 0)
+            _ohlcv_payload["pools_found"] = _ohlcv_result.get("pools_found", 0)
+        await asyncio.to_thread(attest_data_batch, "dex_pool_ohlcv", [_ohlcv_payload])
+    except Exception as _e_attest:
+        logger.warning(f"dex_pool_ohlcv worker attest failed: {_e_attest}")
 
     # -------------------------------------------------------------------------
     # Wallet behavior tagging — every cycle, computed from existing data
