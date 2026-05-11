@@ -781,6 +781,24 @@ async def run_enrichment_pipeline() -> dict:
         timeout_seconds=300, group="analysis", priority=3,
     ))
 
+    # ---- CQI composition (matrix) ----
+    #
+    # compute_cqi_matrix() builds the asset × protocol CQI grid and
+    # attests `cqi_compositions` for both the populated and empty cases
+    # (composition.py:460 / :462). But the only call site was the HTTP
+    # endpoint at server.py:6720, so the domain went 3 days silent
+    # whenever no agent hit /api/compose/cqi. Same shape as rqs_composition
+    # — run it on the slow cycle so the domain stays fresh independent of
+    # API traffic.
+    async def _run_cqi_composition():
+        from app.composition import compute_cqi_matrix
+        return await asyncio.to_thread(compute_cqi_matrix)
+
+    pipeline.add(EnrichmentTask(
+        name="cqi_composition", func=_run_cqi_composition,
+        timeout_seconds=300, group="analysis", priority=3,
+    ))
+
     # =========================================================================
     # Universal Data Layer collectors
     # =========================================================================
