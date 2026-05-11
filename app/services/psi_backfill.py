@@ -16,7 +16,7 @@ from datetime import datetime, timezone, timedelta
 
 import httpx
 
-from app.database import execute, fetch_one
+from app.database import execute, fetch_one, get_cursor
 from app.index_definitions.psi_v01 import TARGET_PROTOCOLS
 from app.collectors.psi_collector import PROTOCOL_GOVERNANCE_TOKENS
 from app.api_usage_tracker import track_api_call
@@ -108,36 +108,53 @@ def backfill_protocol_tvl(slug: str) -> int:
         if "-" not in k and isinstance(v, (int, float)) and v > 0
     ]) if current_chain_tvls else 1
 
-    records = 0
+    rows: list[tuple] = []
     for entry in tvl_history:
         ts = entry.get("date")
         tvl_val = entry.get("totalLiquidityUSD", 0)
         if not ts or not tvl_val:
             continue
-
         record_date = datetime.fromtimestamp(ts, tz=timezone.utc).date()
+        rows.append((slug, record_date.isoformat(), tvl_val, chain_count))
 
-        try:
-            execute("""
+    if not rows:
+        logger.info(f"Backfilled 0 TVL records for {slug} (no eligible entries)")
+        return 0
+
+    # Single batched upsert replaces what was an O(n) per-row execute() loop.
+    # Each row used to consume a pool slot and a separate transaction; under
+    # the Neon -pooler endpoint that's particularly wasteful, and at hundreds
+    # of rows per protocol it dwarfs the actual insert work.
+    import psycopg2.extras as _pgex
+    try:
+        with get_cursor() as cur:
+            _pgex.execute_values(
+                cur,
+                """
                 INSERT INTO historical_protocol_data
                     (protocol_slug, record_date, tvl, chain_count, data_source)
-                VALUES (%s, %s, %s, %s, 'defillama')
+                VALUES %s
                 ON CONFLICT (protocol_slug, record_date) DO UPDATE SET
                     tvl = EXCLUDED.tvl,
                     chain_count = EXCLUDED.chain_count
-            """, (slug, record_date.isoformat(), tvl_val, chain_count))
-            records += 1
-        except Exception as e:
-            logger.warning(f"TVL insert error for {slug} @ {record_date}: {e}")
-            try:
-                from app.worker import _record_cycle_error
-                _record_cycle_error(
-                    error_type="services_backfill_protocol_tvl_insert_failure",
-                    error_message=str(e)[:500],
-                    cycle_phase="psi_backfill",
-                )
-            except Exception:
-                pass
+                """,
+                [(s, d, t, c, "defillama") for (s, d, t, c) in rows],
+                template="(%s, %s, %s, %s, %s)",
+                page_size=500,
+            )
+        records = len(rows)
+    except Exception as e:
+        logger.warning(f"TVL bulk insert error for {slug}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="services_backfill_protocol_tvl_insert_failure",
+                error_message=str(e)[:500],
+                cycle_phase="psi_backfill",
+            )
+        except Exception:
+            pass
+        records = 0
 
     logger.info(f"Backfilled {records} TVL records for {slug}")
     return records
@@ -216,21 +233,38 @@ def backfill_protocol_token(slug: str, gecko_id: str, from_date: str = "2024-01-
             d = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).date()
             vol_map[d] = val
 
-        for ts_ms, price in prices:
-            d = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).date()
+        token_rows = [
+            (
+                slug,
+                datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).date().isoformat(),
+                price,
+                mcap_map.get(datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).date()),
+                vol_map.get(datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).date()),
+            )
+            for ts_ms, price in prices
+        ]
+        if token_rows:
+            import psycopg2.extras as _pgex
             try:
-                execute("""
-                    INSERT INTO historical_protocol_data
-                        (protocol_slug, record_date, token_price, token_mcap, token_volume, data_source)
-                    VALUES (%s, %s, %s, %s, %s, 'coingecko')
-                    ON CONFLICT (protocol_slug, record_date) DO UPDATE SET
-                        token_price = COALESCE(EXCLUDED.token_price, historical_protocol_data.token_price),
-                        token_mcap = COALESCE(EXCLUDED.token_mcap, historical_protocol_data.token_mcap),
-                        token_volume = COALESCE(EXCLUDED.token_volume, historical_protocol_data.token_volume)
-                """, (slug, d.isoformat(), price, mcap_map.get(d), vol_map.get(d)))
-                records += 1
+                with get_cursor() as cur:
+                    _pgex.execute_values(
+                        cur,
+                        """
+                        INSERT INTO historical_protocol_data
+                            (protocol_slug, record_date, token_price, token_mcap, token_volume, data_source)
+                        VALUES %s
+                        ON CONFLICT (protocol_slug, record_date) DO UPDATE SET
+                            token_price = COALESCE(EXCLUDED.token_price, historical_protocol_data.token_price),
+                            token_mcap = COALESCE(EXCLUDED.token_mcap, historical_protocol_data.token_mcap),
+                            token_volume = COALESCE(EXCLUDED.token_volume, historical_protocol_data.token_volume)
+                        """,
+                        [(s, d, p, m, v, "coingecko") for (s, d, p, m, v) in token_rows],
+                        template="(%s, %s, %s, %s, %s, %s)",
+                        page_size=500,
+                    )
+                records += len(token_rows)
             except Exception as e:
-                logger.warning(f"psi_backfill: backfill_protocol_token insert failed for {slug} @ {d}: {e}")
+                logger.warning(f"psi_backfill: token bulk insert failed for {slug}: {e}")
                 try:
                     from app.worker import _record_cycle_error
                     _record_cycle_error(
