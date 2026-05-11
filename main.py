@@ -757,7 +757,14 @@ def run_migrations():
 def main():
     # 1. Initialize database
     logger.info("Initializing database pool...")
-    init_pool()
+    if not init_pool():
+        # Crash before binding the port so Railway marks the deploy CRASHED
+        # and rolls back. Without this, Uvicorn would happily bind anyway and
+        # every downstream request would 500 on "Database pool not initialized"
+        # while Railway thought the deploy was healthy — which is exactly the
+        # failure mode that produced the 2026-05-10 Neon-pooler incident.
+        logger.critical("init_pool() failed after retries — exiting before port bind")
+        sys.exit(1)
 
     db_status = db_health_check()
     if db_status.get("status") == "healthy":
