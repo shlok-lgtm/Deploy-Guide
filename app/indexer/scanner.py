@@ -75,12 +75,21 @@ class BlockscoutFetcher:
         wallet_addresses: list[str],
         chain_id: int = 1,
     ) -> dict[str, dict[str, int]]:
-        """Fetch token balances for all addresses with rate limiting.
+        """Fetch token balances for all addresses with bounded concurrency.
+
+        The semaphore inside `_fetch_single` (size = BLOCKSCOUT_CONCURRENCY)
+        caps in-flight calls; `asyncio.gather` here is what actually spawns
+        them concurrently. Before 2026-05-11, this function ran a serial
+        `for addr in wallet_addresses` loop, which made the semaphore a
+        no-op and capped throughput at ~1 wallet per (call+rate_limit_delay)
+        — about 1.7s per wallet. At batch_size=500 that's ~860s, right at
+        the 900s enrichment-task budget, with no margin for 429 retries.
+        Result: 848k wallets unindexed since 2026-05-01 (Wave 4 fix).
 
         Returns:
             {wallet_address_lower: {token_address_lower: raw_balance_int, ...}, ...}
             Only includes non-zero balances.
-            Stops early if > 50 consecutive failures (API likely down).
+            Stops feeding new tasks if > 50 consecutive failures (API likely down).
         """
         base_url = _BLOCKSCOUT_BASES.get(chain_id)
         if not base_url:
@@ -90,29 +99,51 @@ class BlockscoutFetcher:
         all_balances: dict[str, dict[str, int]] = {}
         consecutive_failures = 0
         MAX_CONSECUTIVE_FAILURES = 50
+        # `abort_event` is set when consecutive_failures exceeds the
+        # threshold; in-flight coroutines check it and short-circuit so
+        # the gather drains quickly rather than running the full batch.
+        abort_event = asyncio.Event()
+        wallet_count = len(wallet_addresses)
 
-        for i, addr in enumerate(wallet_addresses):
-            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                logger.error(
-                    f"Blockscout: {consecutive_failures} consecutive failures — "
-                    f"aborting batch early ({i}/{len(wallet_addresses)} processed)"
-                )
-                break
-
+        async def _scan_one(idx: int, addr: str) -> tuple[str, dict[str, int] | None]:
+            """Wrap _fetch_single with abort-on-cascade-failure semantics."""
+            nonlocal consecutive_failures
+            if abort_event.is_set():
+                return addr.lower(), None
             try:
                 result = await self._fetch_single(client, addr, base_url)
                 if result:
-                    all_balances[addr.lower()] = result
                     consecutive_failures = 0
-                else:
-                    consecutive_failures += 1
+                    return addr.lower(), result
+                # Empty dict — could be a no-tokens address or a soft
+                # failure. Treated as failure for consecutive-failure
+                # detection (matches pre-2026-05-11 behavior).
+                consecutive_failures += 1
             except Exception as e:
                 logger.debug(f"Blockscout fetch exception for {addr[:10]}…: {e}")
                 consecutive_failures += 1
+            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                if not abort_event.is_set():
+                    logger.error(
+                        f"Blockscout: {consecutive_failures} consecutive failures — "
+                        f"aborting remainder of batch ({idx + 1}/{wallet_count} attempted)"
+                    )
+                    abort_event.set()
+            return addr.lower(), None
 
-            # Rate limit: small delay between calls to avoid saturating connections
-            if i < len(wallet_addresses) - 1:
-                await asyncio.sleep(EXPLORER_RATE_LIMIT_DELAY)
+        # asyncio.gather respects the per-call semaphore inside
+        # `_fetch_single` for the actual rate cap. With default
+        # BLOCKSCOUT_CONCURRENCY=10 and per-call EXPLORER_RATE_LIMIT_DELAY
+        # of 0.22s baked into the outer scan loop, the achieved aggregate
+        # rate matches Blockscout's free-tier limit closely. Tune via the
+        # BLOCKSCOUT_CONCURRENCY env var if the provider tier changes.
+        results = await asyncio.gather(
+            *(_scan_one(i, addr) for i, addr in enumerate(wallet_addresses)),
+            return_exceptions=False,
+        )
+        for addr_lower, result in results:
+            if result:
+                all_balances[addr_lower] = result
 
         return all_balances
 
