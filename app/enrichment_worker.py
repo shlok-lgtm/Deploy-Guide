@@ -514,7 +514,7 @@ async def run_enrichment_pipeline() -> dict:
 
     pipeline.add(EnrichmentTask(
         name="onchain_governance_reads", func=_run_gov_reads,
-        timeout_seconds=300, group="data_collection", priority=3,
+        timeout_seconds=600, group="data_collection", priority=3,
     ))
 
     # ---- Web research ----
@@ -682,7 +682,7 @@ async def run_enrichment_pipeline() -> dict:
 
     pipeline.add(EnrichmentTask(
         name="treasury_flows", func=_run_treasury_flows,
-        timeout_seconds=300, group="data_collection", priority=3,
+        timeout_seconds=600, group="data_collection", priority=3,
     ))
 
     # ---- Edge building ----
@@ -757,7 +757,7 @@ async def run_enrichment_pipeline() -> dict:
 
     pipeline.add(EnrichmentTask(
         name="divergence_detection", func=_run_divergence,
-        timeout_seconds=300, group="analysis", priority=3,
+        timeout_seconds=600, group="analysis", priority=3,
     ))
 
     # ---- PSI expansion pipeline ----
@@ -848,7 +848,7 @@ async def run_enrichment_pipeline() -> dict:
 
     pipeline.add(EnrichmentTask(
         name="governance_activity", func=_run_governance_collection,
-        timeout_seconds=600, group="data_layer", priority=3,
+        timeout_seconds=900, group="data_layer", priority=3,
         gate_check=_db_gate(
             "SELECT MAX(captured_at) AS latest FROM governance_proposals",
             min_hours=24,
@@ -1121,7 +1121,7 @@ async def run_enrichment_pipeline() -> dict:
 
     pipeline.add(EnrichmentTask(
         name="entity_discovery", func=_run_entity_discovery,
-        timeout_seconds=300, group="growth", priority=5,
+        timeout_seconds=600, group="growth", priority=5,
         gate_check=_db_gate(
             "SELECT MAX(detected_at) AS latest FROM discovery_signals WHERE signal_type = 'entity_discovery'",
             min_hours=168,  # weekly
@@ -1171,7 +1171,7 @@ async def run_enrichment_pipeline() -> dict:
 
     pipeline.add(EnrichmentTask(
         name="materialized_compositions", func=_run_materialized,
-        timeout_seconds=120, group="computed", priority=4,
+        timeout_seconds=300, group="computed", priority=4,
     ))
 
     # ---- Daily pulse generation ----
@@ -1233,7 +1233,7 @@ async def run_enrichment_pipeline() -> dict:
 
     pipeline.add(EnrichmentTask(
         name="data_catalog_update", func=_run_catalog_update,
-        timeout_seconds=60, group="housekeeping", priority=10,
+        timeout_seconds=300, group="housekeeping", priority=10,
     ))
 
     # ---- Run the pipeline ----
