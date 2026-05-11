@@ -73,3 +73,41 @@ Each entry: timestamp + one-line summary + PR link.
 | 180 | docs: orchestrator closeout (this PR) |
 
 Eight PRs landed this session, well under the 15-PR ceiling.
+
+---
+
+## Wave 9 — Stability Closeout (post-orchestrator)
+
+Three independent stability gates closed in parallel via subagent
+fan-out. All three subagent PRs merged, deploys in flight at log time.
+
+| PR | Subagent | What |
+|---|---|---|
+| 181 | A | wallet_reindex 900s timeout — caller passed batch_size=5000 vs scanner's 500-budget. Shrunk to 400. |
+| 182 | B | dex_pool_ohlcv 900s timeout — sequential per-pool fetch parallelized via gather+Semaphore(8). Also switched caller to PR #179's v9.12 wrapper. |
+| 183 | C | schema_heal — replayed pg_dump drift for 4 pipeline tables (+ 4 secondary surfaced during diagnosis). Migration 108. |
+
+**Merge SHAs:** `51f76fd` (#181), `1342803` (#182), `1dc82df` (#183).
+
+**Substrate at write-time (per lesson 7):** 2026-05-11 20:43 UTC,
+~5 min after #183 merge. Wave 9 NOT yet declared closed.
+
+  open_failures (last 2h): 1   (likely pre-deploy carryover)
+  newest_wallet_indexed:   2026-05-01 19:40 UTC  ← unchanged baseline
+  dex_pool_latest attest:  50m stale (heartbeat fallback)
+  Railway: #181 SUCCESS, #182 BUILDING, #183 QUEUED
+
+Verification queries + closure criteria written into the punchlist's
+"Wave 9 — Stability Closeout" section. Operator quotes substrate
+post-cycle (~30-60 min) before closure.
+
+**Punchlist PR for the Wave 9 section + this session-log addendum:** #184.
+
+## Wave 9 PR addendum
+
+| # | Title |
+|---|---|
+| 181 | fix(wave9a): wallet_reindex timeout — shrink batch from 5000 to 400 |
+| 182 | fix(wave9b): dex_pool_ohlcv timeout — parallelize sequential per-pool fetch |
+| 183 | fix(wave9c): schema_heal — replay pg_dump drift for 4 pipeline tables |
+| 184 | docs(wave9): stability closeout — punchlist section + session-log addendum (this PR) |
