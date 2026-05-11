@@ -761,6 +761,26 @@ async def run_enrichment_pipeline() -> dict:
         ),
     ))
 
+    # ---- RQS composition (batch) ----
+    #
+    # compute_rqs_all() iterates TARGET_PROTOCOLS and calls
+    # compute_rqs_for_protocol() per slug. Each per-slug call attests the
+    # `rqs_composition` (singular) domain; the batch attests
+    # `rqs_compositions` (plural). Both domains used to be silent for 19
+    # days because the only call sites were the HTTP endpoints
+    # (server.py:6868, payments.py:402) — if no agent hit /api/compose/rqs,
+    # the domain stayed stale. This task makes the composition run on the
+    # slow cycle (no gate; the work is cheap — aggregates existing scores,
+    # no external API calls).
+    async def _run_rqs_composition():
+        from app.composition import compute_rqs_all
+        return await asyncio.to_thread(compute_rqs_all)
+
+    pipeline.add(EnrichmentTask(
+        name="rqs_composition", func=_run_rqs_composition,
+        timeout_seconds=300, group="analysis", priority=3,
+    ))
+
     # =========================================================================
     # Universal Data Layer collectors
     # =========================================================================
