@@ -10,7 +10,9 @@ The 2026-05-10 cutover from Replit-managed Neon to owned Neon (`small-scene-5789
 
 1. **Per-service deploy config** — `railway.json` healthcheck applied repo-wide; non-web services failed → Wave 1.
 2. **Attest-only-on-happy-path** — many `state_attestations` call sites gated on truthy results; in steady state they went silent → Wave 1.5 + Wave 2.
-3. **Schema drift** — Replit-Neon's pg_dump preserved the `migrations` tracking table but skipped several table DDLs → Wave 3.
+3. **Schema drift** — Replit-Neon's pg_dump preserved the `migrations` tracking table but skipped several table DDLs → Wave 2.5 (parallel investigation).
+4. **Wave-1 fixes patched dead code** — verification ~2h after merge revealed 7 domains where the PR landed but `state_attestations` had NOT advanced. The canonical modules were enrichment-pipeline utilities; the live path lives inline in `app/worker.py` → Wave 3.
+5. **Structural pipeline hang** — `run_pipeline_batch` was hanging past its 900s budget; 848k wallets unindexed since May 1; the freshness fix from Wave 3 surfaced this latent work-side bug → Wave 4.
 
 Each wave landed as a separate PR series so reviewer context stayed local.
 
@@ -54,7 +56,7 @@ Verification of Wave-1 freshness revealed 4 more silent domains. Triaged in prio
 
 ---
 
-## Wave 3 — schema drift (1 PR + 6 direct DDLs)
+## Wave 2.5 — schema drift (1 PR + 6 direct DDLs, parallel investigation)
 
 **838+ cycle failures/24h** all traced to the May-10 pg_dump/pg_restore preserving `migrations` records but skipping table DDL for tables created outside Replit's UI. Confirmed by querying prod Neon directly:
 
@@ -81,6 +83,67 @@ Verification of Wave-1 freshness revealed 4 more silent domains. Triaged in prio
 
 ---
 
+## Wave 3 — deeper-bug followup (5 PRs, all merged)
+
+Verification ~2h after Wave 1+2 merge revealed 7 domains where the PR
+had landed but state_attestations had NOT advanced. The operational
+follow-up #3 warning in the morning section was correct.
+
+Diagnostic: every Wave-1 fix patched the canonical module in
+app/data_layer/ or app/collectors/. In steady state, the live path is
+inline in app/worker.py. The canonical modules sit behind db_gates that
+worker.py keeps closed by maintaining the underlying tables. Patching
+canonical without patching worker.py = no-op.
+
+Exemplar: psi_discoveries took THREE PRs to fix (#137 enrichment, #150
+main.py legacy, #157 worker.py:2468 inline). Only the last was the
+live path.
+
+| PR | Domain(s) | Diagnostic |
+|---|---|---|
+| #153 | peg_snapshots_5m, exchange_snapshots, dex_pool_ohlcv | worker.py inline INSERTs at 977/1222/2094 never call attest_data_batch. #141/#146 modules dead code. |
+| #154 | mempool_capture_status | watcher self-disabled by 20× Alchemy 429s; _subscribe_and_consume never runs. Heartbeat moved to emit_24h_summary. |
+| #155 | wallets | run_pipeline_batch structurally hanging (848k unindexed since May 1). Worker-side attest fires regardless. |
+| #156 | web_research | 24h gate reads MAX(computed_at) across all web_research_* index_ids; bridge at 13h fresh suppresses protocol/exchange (7-8d stale). Worker-side attest decouples freshness from gate. |
+| #157 | psi_discoveries | Third live path at worker.py:2468 closes db_gates on #137 + #150 paths. Worker-side attest in actual live block. |
+
+**Architectural lesson:** worker.py inline implementations are the
+canonical live path; modules in app/data_layer/ and app/collectors/
+are enrichment utilities, dead code in steady state. Codified in
+constitution amendment v9.11
+(docs/basis_protocol_v9_11_constitution_amendment.md).
+
+**Verification (T+2h after Wave-3 merge):** mempool_capture_status at
+2m stale (was 14d). Remaining 6 domains advancing within respective
+cadences.
+
+---
+
+## Wave 4 — pipeline hang root-cause (1 PR, merged)
+
+Wave 3's worker-side attest for `wallets` (PR #155) surfaced the
+underlying work-side bug: `run_pipeline_batch` was hanging past its
+900s budget. 848k wallets had not been indexed since 2026-05-01.
+
+Root cause: `BlockscoutFetcher.fetch_all_balances` declared a
+`Semaphore` at init (BLOCKSCOUT_CONCURRENCY=10) but used a sequential
+`for addr in wallet_addresses` loop that awaited each `_fetch_single`
+one at a time. The semaphore was meaningless — only one coroutine
+was ever in flight. 500 wallets × (1.5s/call + 0.22s rate-limit
+delay) ≈ 860s per batch, right at the 900s budget with no margin for
+429 retries.
+
+| PR | Fix |
+|---|---|
+| #160 | Replace serial loop with `asyncio.gather`; the existing Semaphore now actually caps in-flight calls. Per-wallet failures absorbed in a `_scan_one` wrapper; `abort_event` short-circuits when 50+ consecutive failures cascade. |
+
+Expected impact: 500-wallet batch ~860s → ~100-200s. Backlog drain at
+Blockscout free-tier 5 req/sec ≈ 47h. `wallet_graph.wallets.MAX
+(last_indexed_at)` should advance past 2026-05-01 within hours of
+deploy.
+
+---
+
 ## Verification
 
 **cycle_errors — last hour:**
@@ -102,17 +165,41 @@ ORDER BY n DESC;
 
 ## Operational follow-ups (NOT addressed in code)
 
-1. **Alchemy plan exhausted** — 88 "Monthly capacity limit exceeded" 429s/24h on `parameter_history._eth_call_sync`. Operator decision:
-   - Upgrade Alchemy plan, OR
-   - Investigate why the dwellir fallback reverts on the same calls ("execution reverted" — different issue; the call shape itself may be wrong for dwellir's RPC semantics).
-2. **Migration-tracking integrity** — the `migrations` table claims migrations 055, 066, 071, 103 are applied, but they weren't (the tables didn't exist). The records are now technically correct (because the DDL ran), but a future fresh-DB setup that's restored from a similar partial dump would have the same blind spot. Consider adding a self-healing migration that does `CREATE TABLE IF NOT EXISTS` for the canonical schema on every deploy, regardless of the migrations table state.
-3. **Re-verify Wave-1/Wave-2 freshness tomorrow** — `state_attestations` for the 13 affected domains should all be < their gate cadence by ~24h after Wave-2-c lands (#151 was the last code change). If any domain is still pre-2026-05-11 at that point, that's a deeper bug.
-4. **Codespaces verification** — still owed from Track F of the May-10 punchlist.
-5. **Replit decommission** — flip the canon status on 2026-05-17.
+1. **Alchemy plan exhausted** — DEFERRED. 88 "Monthly capacity exceeded"
+   429s/24h + dwellir reverting on same calls. Parked until stability
+   work completes. Mempool capture is heartbeat-only in the interim;
+   parameter_history collector continues failing ~88/day. Accepted
+   degraded state.
+2. **state_attestations.domain VARCHAR(30) truncation** — 3 collectors
+   generate names exceeding 30 chars (entity_snapshots_hourly=34,
+   market_chart_history=31, wallet_chain_presence=32). 2 silent
+   `data_layer_attest_data_batch_failure` "value too long" errors in 24h.
+   Schema migration to TEXT (or VARCHAR(128)) queued.
+3. **run_pipeline_batch structural hang** — FIXED in PR #160 (Wave 4).
+   See above for diagnostic. Watch the Wave-4 verification queries over
+   the next 24h: enrichment_wallet_reindex timeouts should stop, MAX
+   (last_indexed_at) should advance, and fresh_24h count should trend up.
+4. **web_research per-index targeting** — MAX-aggregated gate semantics
+   wrong; Wave 3 #156 decoupled freshness signal but the gate logic
+   still suppresses collection for stale `protocol`/`exchange` indices
+   when `bridge` is fresh. Future PR — round-robin across index_ids
+   rather than MAX-aggregating.
+5. **Migration-tracking integrity** — the `migrations` table claims
+   migrations 055, 066, 071, 103 are applied, but they weren't (the
+   tables didn't exist). Records are now technically correct (because
+   the DDL ran), but a future fresh-DB setup restored from a similar
+   partial dump would have the same blind spot. Self-healing `CREATE
+   TABLE IF NOT EXISTS` on every deploy still TODO.
+6. **Re-verify Wave-3 freshness in ~1h** — all 7 domains should be
+   inside their cadence interval. mempool_capture_status already
+   verified at 2m stale.
+7. **Codespaces verification** — still owed from Track F of the May-10
+   punchlist.
+8. **Replit decommission** — flip the canon status on 2026-05-17.
 
 ---
 
-## PRs landed today (12 total)
+## PRs landed today (22 code PRs + 6 manual DDL re-applies)
 
 | # | Title |
 |---|---|
@@ -133,6 +220,14 @@ ORDER BY n DESC;
 | 149 | fix(schema-drift): column + parser fixes for the May 10 Neon migration fallout |
 | 150 | fix(followups): persist is_stale/error_message + close psi_discoveries gate |
 | 151 | fix(governance): attest with status when protocols_processed is empty |
+| 153 | fix(data_layer): worker.py inline attests for peg_snapshots_5m, exchange_snapshots, dex_pool_ohlcv |
+| 154 | fix(mempool): move heartbeat to emit_24h_summary (WS-independent) |
+| 155 | fix(wallets): worker-side attest decoupled from hanging pipeline |
+| 156 | fix(web_research): worker-side attest decoupled from MAX-aggregated gate |
+| 157 | fix(psi_discoveries): patch the actual live path at worker.py:2468 |
+| 158 | docs: renumber pgbouncer amendment v9.9 → v9.10 |
+| 159 | docs: v9.11 amendment — worker-authoritative live path |
+| 160 | fix(wallet-scanner): use asyncio.gather so BlockscoutFetcher actually concurrent |
 
 Plus 6 manual DDL re-applies on prod Neon for the 6 dropped tables.
 
@@ -149,3 +244,10 @@ Plus 6 manual DDL re-applies on prod Neon for the 6 dropped tables.
 4. **Two-path attest sites need both paths fixed.** psi_discoveries (#137 → #150) and wallets (#142, both sites) showed the pattern: a "canonical" implementation in a service module + a "legacy" duplicate in main.py. Fixing only one is a no-op if the other is what's actually running. Always trace which path the worker is invoking before declaring victory.
 
 5. **Per-service Railway config beats repo-wide railway.json** for any project where service shapes differ (HTTP server vs forever-loop vs one-shot). Lesson now codified in basis-hub canon docs as constitution amendment v9.10.
+
+6. **The "canonical module" is not always the live path.** Wave 1
+   patched modules that turned out to be dead code in steady state.
+   Wave 3 re-patched the inline implementations in worker.py. Pattern
+   codified in v9.11. When adding an attest call, start at
+   app/worker.py and trace outward; do not start at the collector and
+   trace inward.
