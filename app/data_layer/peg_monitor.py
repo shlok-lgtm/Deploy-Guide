@@ -368,11 +368,19 @@ async def run_peg_monitoring() -> dict:
             except Exception as e:
                 logger.warning(f"Peg monitoring failed for {stablecoin_id}: {e}")
 
-    # Provenance
+    # Provenance — always attest, even when total_snapshots=0. Previously
+    # gated on `if total_snapshots > 0`, which let the domain go silent
+    # whenever the cycle ran but produced zero snapshots (CoinGecko 429,
+    # geofenced response, all stablecoins skipped). Same family as
+    # #141 (dex_pool_ohlcv). link_batch_to_proof is still conditional
+    # because there are no rows to correlate when snapshots=0.
     try:
         from app.data_layer.provenance_scaling import attest_data_batch, link_batch_to_proof
+        payload = {"snapshots": total_snapshots, "vol_surfaces": vol_surfaces}
+        if total_snapshots == 0:
+            payload["status"] = "ran_no_snapshots"
+        await asyncio.to_thread(attest_data_batch, "peg_snapshots_5m", [payload])
         if total_snapshots > 0:
-            await asyncio.to_thread(attest_data_batch, "peg_snapshots_5m", [{"snapshots": total_snapshots, "vol_surfaces": vol_surfaces}])
             await link_batch_to_proof("peg_snapshots_5m", "peg_snapshots_5m")
             await link_batch_to_proof("volatility_surfaces", "volatility_surfaces")
     except asyncio.CancelledError:
