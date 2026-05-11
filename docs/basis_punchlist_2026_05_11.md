@@ -429,3 +429,14 @@ Plus 6 manual DDL re-applies on prod Neon for the 6 dropped tables.
    domain = X`. If total rows ever is in single digits, the live
    path probably has never attested; the "stop date" is the last
    rare firing of a dead-by-design path, not an active disablement.
+
+9. **A domain's name is not its cadence.** Before declaring a fix
+   didn't take, query the underlying data table's MAX(timestamp) and
+   compute the actual write interval. peg_snapshots_5m writes every
+   ~2h, not every 5 min — the "5m" describes data granularity (5-min
+   resolution candles), not invocation frequency. This lesson
+   surfaced when Wave 5a was prematurely declared failed at ~1h
+   post-deploy on a domain whose actual cadence was 2h. Substrate
+   query before substrate claim. See
+   docs/audits/2026-05-11-data-layer-cadence-audit.md for the full
+   cadence table.
