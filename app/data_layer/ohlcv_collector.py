@@ -229,71 +229,70 @@ async def run_ohlcv_collection() -> dict:
     pools_processed = 0
     top_processed = 0
 
+    # Concurrency: process pools in parallel. The shared rate_limiter still
+    # caps global CoinGecko throughput at 7.5 r/s, so this Semaphore only
+    # bounds in-flight HTTP+DB work. Pre-fix this loop was fully sequential:
+    # 658 pools * ~1.5s each = ~987s, exceeding the 900s task budget on every
+    # cycle (see cycle_errors: 6 consecutive timeouts since 2026-05-10).
+    OHLCV_CONCURRENCY = 8
+    sem = asyncio.Semaphore(OHLCV_CONCURRENCY)
+
+    # Counters protected by an asyncio.Lock since multiple coroutines mutate.
+    counter_lock = asyncio.Lock()
+
+    async def _process_pool(pool: dict, timeframe: str, limit: int, is_top: bool):
+        nonlocal total_records, pools_processed, top_processed
+
+        chain = pool.get("chain", "ethereum")
+        network = CHAIN_MAP.get(chain)
+        pool_address = pool.get("pool_address")
+        if not network or not pool_address:
+            return
+
+        async with sem:
+            try:
+                ohlcv_list = await _fetch_pool_ohlcv(
+                    client, network, pool_address, timeframe=timeframe, limit=limit
+                )
+                if ohlcv_list:
+                    records = _parse_ohlcv(ohlcv_list, pool)
+                    if records:
+                        await asyncio.to_thread(_store_ohlcv_records, records)
+                        async with counter_lock:
+                            total_records += len(records)
+                            pools_processed += 1
+                            if is_top:
+                                top_processed += 1
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                label = "15min" if is_top else "Hourly"
+                logger.warning(f"{label} OHLCV failed for {pool_address[:10]}…: {e}")
+                try:
+                    from app.worker import _record_cycle_error
+                    err_type = (
+                        "data_layer_run_ohlcv_collection_15min_failure"
+                        if is_top
+                        else "data_layer_run_ohlcv_collection_hourly_failure"
+                    )
+                    _record_cycle_error(
+                        error_type=err_type,
+                        error_message=str(e)[:500],
+                        cycle_phase="ohlcv_collector",
+                    )
+                except Exception:
+                    pass
+
     async with httpx.AsyncClient(timeout=30) as client:
-        # Top pools: 15-minute resolution
-        for pool in top_pools:
-            chain = pool.get("chain", "ethereum")
-            network = CHAIN_MAP.get(chain)
-            pool_address = pool.get("pool_address")
-            if not network or not pool_address:
-                continue
-
-            try:
-                ohlcv_list = await _fetch_pool_ohlcv(
-                    client, network, pool_address, timeframe="minute", limit=96
-                )
-                if ohlcv_list:
-                    records = _parse_ohlcv(ohlcv_list, pool)
-                    if records:
-                        await asyncio.to_thread(_store_ohlcv_records, records)
-                        total_records += len(records)
-                        pools_processed += 1
-                        top_processed += 1
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                logger.warning(f"15min OHLCV failed for {pool_address[:10]}…: {e}")
-                try:
-                    from app.worker import _record_cycle_error
-                    _record_cycle_error(
-                        error_type="data_layer_run_ohlcv_collection_15min_failure",
-                        error_message=str(e)[:500],
-                        cycle_phase="ohlcv_collector",
-                    )
-                except Exception:
-                    pass
-
-        # Other pools: hourly resolution
-        for pool in other_pools:
-            chain = pool.get("chain", "ethereum")
-            network = CHAIN_MAP.get(chain)
-            pool_address = pool.get("pool_address")
-            if not network or not pool_address:
-                continue
-
-            try:
-                ohlcv_list = await _fetch_pool_ohlcv(
-                    client, network, pool_address, timeframe="hour", limit=24
-                )
-                if ohlcv_list:
-                    records = _parse_ohlcv(ohlcv_list, pool)
-                    if records:
-                        await asyncio.to_thread(_store_ohlcv_records, records)
-                        total_records += len(records)
-                        pools_processed += 1
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                logger.warning(f"Hourly OHLCV failed for {pool_address[:10]}…: {e}")
-                try:
-                    from app.worker import _record_cycle_error
-                    _record_cycle_error(
-                        error_type="data_layer_run_ohlcv_collection_hourly_failure",
-                        error_message=str(e)[:500],
-                        cycle_phase="ohlcv_collector",
-                    )
-                except Exception:
-                    pass
+        tasks = [
+            _process_pool(p, timeframe="minute", limit=96, is_top=True)
+            for p in top_pools
+        ] + [
+            _process_pool(p, timeframe="hour", limit=24, is_top=False)
+            for p in other_pools
+        ]
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     # Provenance — always attest, even when total_records=0. The previous
     # `if total_records > 0` gate made the domain go silent whenever the
