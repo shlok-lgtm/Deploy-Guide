@@ -915,8 +915,12 @@ async def run_enrichment_pipeline() -> dict:
     # ---- GeckoTerminal OHLCV (pool-level candlestick data) ----
 
     async def _run_ohlcv():
-        from app.data_layer.ohlcv_collector import run_ohlcv_collection
-        return await run_ohlcv_collection()
+        # v9.12: call the module-canonical scheduled entry so the freshness
+        # gate + attestation live inside the module, not the scheduler. The
+        # scheduled wrapper short-circuits to a "skipped_fresh" attest when
+        # dex_pool_ohlcv is recent, avoiding redundant 658-pool fans-outs.
+        from app.data_layer.ohlcv_collector import run_ohlcv_collection_scheduled
+        return await run_ohlcv_collection_scheduled()
 
     pipeline.add(EnrichmentTask(
         name="dex_pool_ohlcv", func=_run_ohlcv,
