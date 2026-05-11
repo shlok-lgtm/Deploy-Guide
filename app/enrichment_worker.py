@@ -581,7 +581,16 @@ async def run_enrichment_pipeline() -> dict:
 
     async def _run_wallet_reindex():
         from app.indexer.pipeline import run_pipeline_batch
-        return await run_pipeline_batch(batch_size=5000)
+        # batch_size MUST fit in the 900s task budget. The scanner's planning
+        # assumption (see scanner.py:80-87) is ~1.7s per wallet at
+        # BLOCKSCOUT_CONCURRENCY=10 / EXPLORER_RATE_LIMIT_DELAY=0.22s, giving
+        # ~860s for 500 wallets — already at the edge. Calling with 5000 made
+        # every cycle TIMEOUT (cycle_errors 2026-05-11 — 5+ in one day) and
+        # left 848,947 wallets unindexed since 2026-05-01.
+        # Shrink to 400 so each cycle finishes well inside the budget; cadence
+        # (every enrichment cycle) drains the backlog. Lesson 9: a domain's
+        # cadence — not its per-call size — drains the queue.
+        return await run_pipeline_batch(batch_size=400)
 
     pipeline.add(EnrichmentTask(
         name="wallet_reindex", func=_run_wallet_reindex,
