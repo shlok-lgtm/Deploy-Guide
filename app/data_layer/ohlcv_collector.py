@@ -211,6 +211,18 @@ async def run_ohlcv_collection() -> dict:
 
     if all_pools == 0:
         logger.error("[dex_pool_ohlcv] ZERO pools found — liquidity_depth has no DEX rows. OHLCV depends on liquidity collector producing pool data first.")
+        # Attest the ran-but-empty state so the domain stays fresh and the
+        # reason for the absence is in the audit trail. Without this, an
+        # upstream liquidity_depth outage silently freezes dex_pool_ohlcv.
+        try:
+            from app.data_layer.provenance_scaling import attest_data_batch
+            await asyncio.to_thread(
+                attest_data_batch,
+                "dex_pool_ohlcv",
+                [{"records": 0, "pools": 0, "status": "no_upstream_pools"}],
+            )
+        except Exception as e:
+            logger.warning(f"[ohlcv_collector] no-pools attestation failed: {e}")
         return {"pools_found": 0, "records_stored": 0}
 
     total_records = 0
@@ -283,11 +295,21 @@ async def run_ohlcv_collection() -> dict:
                 except Exception:
                     pass
 
-    # Provenance
+    # Provenance — always attest, even when total_records=0. The previous
+    # `if total_records > 0` gate made the domain go silent whenever the
+    # collector ran against pools but received no bars (paywall, rate limit,
+    # geofenced response, empty pools). Attesting `records=0` is a valid
+    # statement: the cycle ran, this is what we got. link_batch_to_proof is
+    # still skipped on the zero-bars case because it correlates rows in
+    # liquidity_depth + dex_pool_ohlcv, which would be nonsensical with no
+    # rows on this side.
     try:
         from app.data_layer.provenance_scaling import attest_data_batch, link_batch_to_proof
+        payload = {"records": total_records, "pools": pools_processed}
+        if total_records == 0:
+            payload["status"] = "queried_no_bars"
+        await asyncio.to_thread(attest_data_batch, "dex_pool_ohlcv", [payload])
         if total_records > 0:
-            await asyncio.to_thread(attest_data_batch, "dex_pool_ohlcv", [{"records": total_records, "pools": pools_processed}])
             await link_batch_to_proof("dex_pool_ohlcv", "liquidity_depth")
     except asyncio.CancelledError:
         raise
