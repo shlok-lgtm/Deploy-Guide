@@ -278,26 +278,31 @@ async def _run_psi_expansion():
         "synced": synced, "discovered": discovered,
         "enriched": enriched, "promoted": promoted,
     }
-    # Attest PSI discovery state when new protocols discovered or promoted
-    if discovered or promoted:
+    # Attest PSI discovery state every cycle, even when discovered=0 and
+    # promoted=0. The protocol universe stabilizes — once the registry is
+    # full, new-discovery counts stay at 0 indefinitely. Gating on
+    # `discovered or promoted` made the domain go silent for 29 days
+    # (April 12 → May 11). An attestation of `{discovered: 0, promoted: 0}`
+    # is a valid statement: "I ran the discovery cycle, registry is steady."
+    # That keeps the domain fresh and proves the system is alive.
+    try:
+        from app.state_attestation import attest_state
+        await asyncio.to_thread(
+            attest_state,
+            "psi_discoveries",
+            [{"synced": synced, "discovered": discovered, "enriched": enriched, "promoted": promoted}],
+        )
+    except Exception as ae:
+        logger.error(f"[enrichment] psi_discoveries attestation failed: {ae}")
         try:
-            from app.state_attestation import attest_state
-            await asyncio.to_thread(
-                attest_state,
-                "psi_discoveries",
-                [{"synced": synced, "discovered": discovered, "enriched": enriched, "promoted": promoted}],
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="psi_discoveries_attestation_failure",
+                error_message=str(ae),
+                cycle_phase="psi_expansion",
             )
-        except Exception as ae:
-            logger.error(f"[enrichment] psi_discoveries attestation failed: {ae}")
-            try:
-                from app.worker import _record_cycle_error
-                _record_cycle_error(
-                    error_type="psi_discoveries_attestation_failure",
-                    error_message=str(ae),
-                    cycle_phase="psi_expansion",
-                )
-            except Exception:
-                pass
+        except Exception:
+            pass
     return result
 
 
