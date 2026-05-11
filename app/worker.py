@@ -1897,6 +1897,8 @@ async def run_slow_cycle():
     # -------------------------------------------------------------------------
     # Web research collection — daily gate (expensive Parallel API calls)
     # -------------------------------------------------------------------------
+    _wr_status = "skipped_unknown"
+    _wr_scored = 0
     try:
         last_research = await fetch_one_async(
             "SELECT MAX(computed_at) AS latest FROM generic_index_scores WHERE index_id LIKE 'web_research_%'"
@@ -1912,12 +1914,34 @@ async def run_slow_cycle():
             from app.collectors.web_research import run_web_research_collection
             logger.info("Running web research collection...")
             research_results = await run_web_research_collection()
-            scored = sum(1 for r in research_results if "score" in r)
-            logger.info(f"Web research complete: {scored} components collected")
+            _wr_scored = sum(1 for r in research_results if "score" in r)
+            _wr_status = "ran"
+            logger.info(f"Web research complete: {_wr_scored} components collected")
         else:
+            _wr_status = "skipped_fresh"
             logger.info(f"Web research skipped — last ran {research_age_hours:.1f}h ago")
     except Exception as e:
+        _wr_status = "error"
         logger.warning(f"Web research collection failed: {e}")
+
+    # Attest web_research from the worker side regardless of whether the
+    # 24h gate opened. The gate reads MAX(computed_at) across ALL
+    # web_research_* index_ids; if any single id (e.g. web_research_bridge)
+    # is fresher than 24h, the entire collector is skipped — even though
+    # web_research_protocol and web_research_exchange may be days stale.
+    # PR #143's attest inside run_web_research_collection() never fires
+    # when the gate skips. Heartbeat from the worker side decouples
+    # freshness from the gate.
+    try:
+        from app.state_attestation import attest_state
+        await asyncio.to_thread(attest_state, "web_research", [{
+            "status": _wr_status,
+            "gate_age_hours": round(research_age_hours, 2)
+                if isinstance(research_age_hours, (int, float)) else None,
+            "scored": _wr_scored,
+        }])
+    except Exception as _e_attest:
+        logger.warning(f"web_research worker attest failed: {_e_attest}")
 
     # -------------------------------------------------------------------------
     # Daily-gated: governance event collection (Snapshot/Tally)
