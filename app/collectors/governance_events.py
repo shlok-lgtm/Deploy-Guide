@@ -431,13 +431,25 @@ def run_governance_event_collection() -> dict:
         except Exception as e:
             logger.error(f"[gov_events] tally failed for {slug}: {e}")
 
-    # Attest governance events
+    # Attest governance events. When protocols_processed is empty the
+    # list-comprehension produces []; app/state_attestation.py::attest_state
+    # silently early-returns on empty list (line 63-64), so the domain
+    # would stay silent with no entry recorded. Pass a structured status
+    # payload in that case so coherence sees the cycle ran. Same pattern
+    # as the dohi_components else-branch and #146's ran_no_snapshots.
     try:
         from app.state_attestation import attest_state
-        attest_state("governance_events", [
-            {"protocol": slug, "new_events": total_new}
-            for slug in protocols_processed
-        ])
+        if protocols_processed:
+            attest_state("governance_events", [
+                {"protocol": slug, "new_events": total_new}
+                for slug in protocols_processed
+            ])
+        else:
+            attest_state("governance_events", [{
+                "status": "ran_no_protocols",
+                "total_new": total_new,
+                "total_skipped": total_skipped,
+            }])
     except Exception as e:
         logger.warning(f"Governance events attestation failed: {e}")
 
