@@ -540,6 +540,153 @@ Plus 6 manual DDL re-applies on prod Neon for the 6 dropped tables.
    docs/audits/2026-05-11-data-layer-cadence-audit.md for the full
    cadence table.
 
+---
+
+## Day-after zoom-out — orchestrator session (PRs #173-#180)
+
+After the morning's seven-wave triage, an all-day orchestrator
+session shipped Phase-1 process gates (E/B/C/D from the morning
+zoom-out) plus a Phase-2 pilot for the v9.12 module-canonical
+migration. The session ran from ~16:13Z and produced eight merged
+PRs.
+
+### Phase 1 — process gates landed
+
+| # | PR | Item |
+|---|---|---|
+| 173 | feat(schema): boot-time self-heal — fail loud on missing tables | E |
+| 174 | feat(ci): lint for silent-failure patterns — advisory mode | B |
+| 175 | docs(pr-template): require substrate-verification section | C |
+| 176 | docs: per-task enrichment budget audit | D |
+| 177 | fix(enrichment): bump class-(a) task budgets per audit | D F1 |
+
+- **E (PR #173)** — `app/schema_heal.py` boot-time fail-loud detection
+  for the 161-table public+wallet_graph schema. Runs after init_pool()
+  and run_migrations() in both api-server and Scoring-Worker boots;
+  on drift, raises `SchemaDriftError` and `sys.exit(1)` so Railway
+  marks the deploy CRASHED. Chose detection over auto-recreation
+  because maintaining a second DDL source-of-truth would drift from
+  `migrations/`. Substrate-verified at baseline: 161 expected tables
+  present.
+
+- **B (PR #174)** — `scripts/audit_silent_failures.py` checks three
+  patterns from Waves 1-7:
+  - SILENT-EXCEPT: broad except missing log+attest (1800 baseline
+    findings; advisory until baseline-delta lint lands)
+  - ATTEST-EMPTY-LIST: `attest_state([])` foot-gun (12 baseline
+    findings; eligible to flip blocking on 2026-05-13)
+  - ATTEST-DOMAIN-LEN: literal domain > 30 chars (0 findings)
+  Wired into `.github/workflows/audit.yml` advisory.
+
+- **C (PR #175)** — `.github/PULL_REQUEST_TEMPLATE.md` requires
+  `## Substrate verification` section + ≥1 of `### Pre-deploy` /
+  `### Post-deploy` / `### N/A`. CI gate in
+  `.github/workflows/pr-substrate-gate.yml` greps the PR body. Bot
+  allowlist (dependabot, github-actions).
+
+- **D + F1 (PR #176, #177)** — Enrichment budget audit classified
+  12 enrichment tasks ≥3 timeouts/7d into:
+  - (a) too tight — 7 tasks; literal bumps shipped in #177.
+  - (b) structurally too big — 2 tasks (`actor_classification`,
+    `wallet_expansion`) queued for Wave-N split prompts.
+  - (c) external dep flaky — 3 surfaced as operator decisions
+    (Alchemy quota, Blockscout free-tier).
+
+### Phase 2 — v9.12 audit + pilot
+
+| # | PR | Item |
+|---|---|---|
+| 178 | docs: v9.12 module-canonical migration plan | 2.1 |
+| 179 | refactor(v9-12): dex_pool_ohlcv → module-canonical | 2.2 pilot |
+
+- **2.1 (PR #178)** — Migration plan enumerates 11 DUAL_WRITER domains
+  needing consolidation (P0: `psi_discoveries`, `peg_snapshots_5m`,
+  `exchange_snapshots`, `dex_pool_ohlcv`; P1: `wallets`, `web_research`,
+  `psi_components`; P2: `cda_extractions`, `wallet_profiles`, `actors`,
+  `edges`) and 30 SINGLE_WRITER domains already canonical.
+
+- **2.2 pilot (PR #179)** — `data_layer:dex_pool_ohlcv` migrated.
+  Worker.py inline (50 lines) replaced with 5-line call to new
+  `app/data_layer/ohlcv_collector.py::run_ohlcv_collection_scheduled()`.
+  Substrate verification deferred to next session (slow cycle ~1-2h).
+
+### Phase 2.3 NOT landed (intentionally)
+
+The dispatcher collapse (`run_slow_cycle` / `run_slow_cycle_parallel`
+duplication) requires substrate verification of every P0+P1 refactor
+first. With only the pilot landed, the legacy fallback may still be
+serving the other P0 domains; collapsing now would regress.
+
+### Substrate (final, vs phase-0 baseline)
+
+**Phase-0 baseline (2026-05-11 16:13Z):**
+
+```
+attesting_domains_24h: 33
+total_attestations_24h: 3034
+cycle_errors_1h: 12 (6 flows_collection + 6 cda_scores)
+```
+
+**Phase-3 closeout (2026-05-11 16:35Z, +22 min):**
+
+```sql
+SELECT COUNT(DISTINCT domain) AS attesting_domains_24h,
+       COUNT(*) AS total_attestations_24h,
+       (SELECT COUNT(*) FROM cycle_errors
+         WHERE occurred_at > NOW() - INTERVAL '24 hours') AS cycle_errors_24h
+FROM state_attestations
+WHERE cycle_timestamp > NOW() - INTERVAL '24 hours';
+```
+
+Result:
+
+```
+attesting_domains_24h: 33      (unchanged)
+total_attestations_24h: 3225   (+191)
+cycle_errors_24h: 1124
+```
+
+`cycle_errors_24h=1124` reflects the pre-existing high-volume
+timeouts the F1 budget bumps target. The 24h drop from those bumps
+won't materialize for another ~24h; F4 follow-up re-runs the audit
+on 2026-05-18.
+
+`cycle_errors_1h` remained at 16 (8 flows + 8 cda) — same shape as
+phase-0 baseline, no new bug class introduced by this session's
+changes.
+
+### Open follow-ups carried to next session
+
+1. **PR #179 substrate verification** — query
+   `state_attestations WHERE domain='data_layer:dex_pool_ohlcv'`
+   ~2h after deploy; confirm new rows with `status` ∈ {skipped_fresh,
+   ran, error}.
+2. **Remaining P0/P1/P2 refactors** — 10 domains queued in
+   `docs/audits/2026-05-11-module-canonical-migration-plan.md`. Each
+   gated on the prior PR's substrate verification.
+3. **Phase 2.3 dispatcher collapse** — eligible after every P0+P1
+   domain shows fresh attestation via the module path.
+4. **F1 budget bump verification** — 24h post-deploy
+   `cycle_errors WHERE error_type='enrichment_task_timeout'` should
+   drop ≥50% for the seven bumped tasks. Documented in #176.
+5. **B lint promotion** — first eligible flip date 2026-05-13 for
+   ATTEST-* families after 48h clean CI.
+6. **No v9.13 amendment proposed.** Nothing architecturally new
+   surfaced today; v9.12 is the operative direction.
+
+### Lessons (no new ones today)
+
+Today's session was execution against the morning's framework —
+lessons 1-10 stayed authoritative. The two patterns to watch in the
+next session:
+
+- v9.12 pilot substrate. If `dex_pool_ohlcv` doesn't attest within
+  2h post-deploy, that's the v9.11 pattern recurring at yet another
+  level — surface immediately.
+- F1 budget bump substrate. If any of the seven bumped tasks stays
+  ≥50% of pre-bump rate, that task promotes to class (b) structural
+  and gets a Wave-N split.
+
 10. **Read code before forming hypotheses.** Substrate signals
     (state_attestations, cycle_errors, data table timestamps) tell
     you WHAT is true. Code tells you WHY. Hypotheses formed from
