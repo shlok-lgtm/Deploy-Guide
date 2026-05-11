@@ -144,6 +144,48 @@ deploy.
 
 ---
 
+## Wave 5 — Wave 3's outer conditionals (deferred verification revealed)
+
+Wave 3's verification claim "remaining 6 domains advancing within
+respective cadences" was wrong. ~40 minutes after the Wave-4 deploy
+(PR #160, dbf0722, the most recent Scoring-Worker rebuild),
+`state_attestations` showed 6 of the 7 Wave-3 domains had NOT
+advanced past their pre-fix timestamps. Only #154
+(`mempool_capture_status` → `emit_24h_summary`, unconditional) had
+landed.
+
+Why Wave 3 looked like it worked but didn't:
+
+- **#153 (peg + exchange + ohlcv)** — placed the attest_data_batch
+  call INSIDE the outer `try/except _e2: logger.error("=== X
+  FAILED")` of each sub-block. Any inner failure (most likely the
+  `fetch_one_async COUNT(*)` read at the end, or a transient
+  httpx error) was caught and the attest was skipped. Sibling
+  sub-blocks (`data_layer:liquidity_depth`, `data_layer:mint_burn_events`)
+  attested correctly because they didn't have the same buried failure
+  path.
+- **#155 / #156 / #157 (wallets, web_research, psi_discoveries) +
+  the ohlcv attest from #153** — added attests inside
+  `run_slow_cycle`, which is **dead code**. `run_scoring_cycle` calls
+  `run_slow_cycle_parallel`, which dispatches via
+  `run_enrichment_pipeline` and only falls through to
+  `run_slow_cycle` if the pipeline raises. Same v9.11 pattern as
+  Wave 3 itself, one level higher.
+
+| PR | Domain(s) | Fix |
+|---|---|---|
+| #162 | data_layer:peg_snapshots_5m, data_layer:exchange_snapshots | Hoist attest OUT of outer `try/except` via local error var; status payload carries `block_failed` when the outer try catches. |
+| #163 | data_layer:dex_pool_ohlcv, wallets, web_research, psi_discoveries | New `_emit_slow_cycle_heartbeats()` helper called from `run_slow_cycle_parallel`. Heartbeats fire on both happy path and pipeline-failure fallback. |
+
+**Architectural pattern again:** the v9.11 lesson recurses. Where
+Wave 3 found that `worker.py` inline ≠ canonical module is the live
+path, Wave 5 finds that `run_slow_cycle_parallel` ≠ `run_slow_cycle`
+is the same shape at the dispatcher level. The Wave-3 attests are
+still in `run_slow_cycle` but harmless — they'll fire if someone
+ever calls it directly.
+
+---
+
 ## Verification
 
 **cycle_errors — last hour:**
@@ -199,7 +241,7 @@ ORDER BY n DESC;
 
 ---
 
-## PRs landed today (22 code PRs + 6 manual DDL re-applies)
+## PRs landed today (24 code PRs + 6 manual DDL re-applies)
 
 | # | Title |
 |---|---|
@@ -228,6 +270,8 @@ ORDER BY n DESC;
 | 158 | docs: renumber pgbouncer amendment v9.9 → v9.10 |
 | 159 | docs: v9.11 amendment — worker-authoritative live path |
 | 160 | fix(wallet-scanner): use asyncio.gather so BlockscoutFetcher actually concurrent |
+| 162 | fix(wave5a): hoist peg + exchange attests outside outer try/except |
+| 163 | fix(wave5b): slow-cycle heartbeats for ohlcv/wallets/web_research/psi_discoveries |
 
 Plus 6 manual DDL re-applies on prod Neon for the 6 dropped tables.
 
@@ -251,3 +295,10 @@ Plus 6 manual DDL re-applies on prod Neon for the 6 dropped tables.
    codified in v9.11. When adding an attest call, start at
    app/worker.py and trace outward; do not start at the collector and
    trace inward.
+
+7. **Verification claims must cite substrate, not expectation.**
+   Wave 3's punchlist claimed "remaining 6 domains advancing within
+   respective cadences" based on cadence math. The substrate had
+   not advanced. Wave 5 had to add the missing diagnostic.
+   Future rule: any "verification" line in a punchlist or PR
+   description must quote the actual query result at write-time.
