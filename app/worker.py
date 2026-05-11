@@ -1985,6 +1985,8 @@ async def run_slow_cycle():
     # -------------------------------------------------------------------------
     # Wallet batch re-index — every cycle (500 stalest wallets)
     # -------------------------------------------------------------------------
+    reindex_result: dict | None = None
+    reindex_failure: str | None = None
     try:
         from app.indexer.pipeline import run_pipeline_batch
         logger.info("Running wallet batch re-index (500 stalest wallets)...")
@@ -1996,7 +1998,43 @@ async def run_slow_cycle():
             f"{reindex_result.get('remaining', '?')} remaining"
         )
     except Exception as e:
+        reindex_failure = f"{type(e).__name__}: {e}"
         logger.warning(f"Wallet batch re-index failed: {e}")
+
+    # Attest "wallets" domain from the worker side regardless of how
+    # run_pipeline_batch ended. PR #142 added attestation inside the
+    # function at pipeline.py:806, but the function has at least four
+    # early-return paths (missing ETHERSCAN_API_KEY, stale-wallets query
+    # failure, all-wallets-fresh, and silent timeouts when batch_scan
+    # hangs past the asyncio.wait_for budget) — none of which reach the
+    # attest block. cycle_errors shows 10 enrichment_wallet_reindex
+    # timeouts in the last 24h, which is why the domain has been silent
+    # since May 1. Decouple the freshness signal from the indexer's
+    # success by attesting from worker.py with whatever state we have.
+    try:
+        from app.state_attestation import attest_state
+        if reindex_result is not None:
+            payload = {
+                "cycle": "batch_reindex_worker",
+                "status": "ok",
+                "processed": reindex_result.get("processed", 0),
+                "scored": reindex_result.get("scored", 0),
+                "balances_updated": reindex_result.get("balances_updated", 0),
+                "errors": reindex_result.get("errors", 0),
+                "remaining": reindex_result.get("remaining"),
+            }
+            if reindex_result.get("error"):
+                payload["status"] = "early_return"
+                payload["error_message"] = str(reindex_result["error"])[:200]
+        else:
+            payload = {
+                "cycle": "batch_reindex_worker",
+                "status": "failed",
+                "error_message": (reindex_failure or "unknown")[:200],
+            }
+        await asyncio.to_thread(attest_state, "wallets", [payload])
+    except Exception as _e_attest:
+        logger.warning(f"wallets worker attest failed: {_e_attest}")
 
     # -------------------------------------------------------------------------
     # Wallet expansion + profile rebuild — daily gate via DB timestamp
