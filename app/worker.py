@@ -3190,6 +3190,17 @@ async def main():
     init_pool()
     logger.error("[startup] pool initialized — running schema fixes")
 
+    # Schema self-heal: confirm every expected table exists before any cycle
+    # work runs. See app/schema_heal.py and docs/basis_punchlist_2026_05_11.md
+    # Wave 2.5 (the 2026-05-10 partial-pg_dump incident). On drift, log and
+    # raise — Railway marks CRASHED and rolls back to the last good worker.
+    try:
+        from app.schema_heal import verify_schema as _verify_schema, SchemaDriftError as _SchemaDriftError
+        _verify_schema()
+    except _SchemaDriftError as _sde:
+        logger.critical("[startup] schema_heal: %s", _sde)
+        raise
+
     # Wire API call tracking via httpx monkey-patch
     try:
         import httpx as _httpx_mod

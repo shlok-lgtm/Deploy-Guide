@@ -19,6 +19,7 @@ import subprocess
 import uvicorn
 
 from app.database import init_pool, close_pool, health_check as db_health_check
+from app.schema_heal import verify_schema, SchemaDriftError
 from app.server import app
 
 # Module-level keeper process ref for watchdog access
@@ -800,6 +801,21 @@ def main():
         logger.info(f"Database ready: {db_status.get('stablecoin_count', 0)} stablecoins registered ✓")
     else:
         logger.warning(f"Database issue after migrations: {db_status}")
+
+    # 1c. Schema self-heal verification (after migrations, before worker boots).
+    # Fails loud if any expected table is missing — same exit-before-port-bind
+    # shape as init_pool(), so Railway marks the deploy CRASHED and rolls back.
+    # This is the 2026-05-10 lesson: a partial pg_dump can leave the migrations
+    # tracking table claiming success while the actual DDL is missing. See
+    # docs/basis_punchlist_2026_05_11.md Wave 2.5 and op-followup #5.
+    try:
+        verify_schema()
+    except SchemaDriftError as exc:
+        logger.critical(
+            "schema self-heal raised SchemaDriftError — exiting before port bind: %s",
+            exc,
+        )
+        sys.exit(1)
 
     # 2. Start worker thread
     worker_enabled = os.environ.get("WORKER_ENABLED", "true").lower() == "true"
