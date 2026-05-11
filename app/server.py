@@ -479,7 +479,17 @@ def _seed_cda_issuer_registry():
 
 @app.on_event("startup")
 async def startup():
-    init_pool()
+    # Fail loud if the pool can't come up. In Gunicorn/Uvicorn multi-worker
+    # setups main.py's pool init runs once in the parent; each worker also
+    # imports app.server and re-runs this startup hook. If the pool fails in a
+    # worker we want to crash that worker so Railway notices and rolls back —
+    # not silently serve 503s.
+    if not init_pool():
+        logger.critical("init_pool() failed in server startup hook — exiting worker")
+        # os._exit, not sys.exit, because we're inside an asyncio task and a
+        # plain SystemExit may be swallowed by the event loop / Uvicorn
+        # supervisor.
+        os._exit(1)
     # Seed CDA issuer registry from config
     try:
         await asyncio.to_thread(_seed_cda_issuer_registry)
@@ -1359,6 +1369,62 @@ async def playground_report(token: str):
 
     return HTMLResponse(content=html or "Report generation failed",
                         headers={"Cache-Control": "private, no-store"})
+
+
+# =============================================================================
+# 0. GET /healthz, /readyz — lightweight liveness / readiness probes
+# =============================================================================
+# These are short, uncached, and have no dependency on the integrity layer or
+# the response cache. Railway's healthcheck uses /healthz; orchestrators use
+# /readyz to gate traffic. Keep them cheap so they don't share a fate with
+# heavy API queries.
+
+def _probe_db_quick() -> tuple[bool, str]:
+    """Open a pool checkout and run SELECT 1. Returns (ok, reason)."""
+    from app.database import _pool as _db_pool, get_conn
+    if _db_pool is None:
+        return False, "pool not initialized"
+    try:
+        with get_conn() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT 1")
+            cur.fetchone()
+            cur.close()
+        return True, "ok"
+    except Exception as e:
+        return False, f"db ping failed: {type(e).__name__}: {e}"
+
+
+@app.get("/healthz")
+async def healthz():
+    """Liveness probe — pool initialized + SELECT 1. 200 healthy, 503 not."""
+    ok, reason = await asyncio.to_thread(_probe_db_quick)
+    payload = {"ok": ok, "reason": reason}
+    return JSONResponse(payload, status_code=200 if ok else 503)
+
+
+@app.get("/readyz")
+async def readyz():
+    """Readiness probe — healthz checks + migrations table populated."""
+    ok, reason = await asyncio.to_thread(_probe_db_quick)
+    if not ok:
+        return JSONResponse({"ok": False, "reason": reason}, status_code=503)
+
+    def _check_migrations() -> tuple[bool, str]:
+        try:
+            from app.database import fetch_one
+            row = fetch_one(
+                "SELECT 1 AS x FROM migrations WHERE name = '001_initial_schema'"
+            )
+            if row:
+                return True, "ok"
+            return False, "001_initial_schema not recorded in migrations table"
+        except Exception as e:
+            return False, f"migrations check failed: {type(e).__name__}: {e}"
+
+    mig_ok, mig_reason = await asyncio.to_thread(_check_migrations)
+    payload = {"ok": mig_ok, "reason": mig_reason}
+    return JSONResponse(payload, status_code=200 if mig_ok else 503)
 
 
 # =============================================================================

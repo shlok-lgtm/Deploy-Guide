@@ -6,6 +6,7 @@ Simple PostgreSQL connection management with connection pooling.
 import asyncio
 import os
 import logging
+import time
 import traceback
 from contextlib import contextmanager
 from typing import Optional, Any
@@ -53,36 +54,65 @@ _pool: Optional[ThreadedConnectionPool] = None
 _STATEMENT_TIMEOUT_MS = 120000  # 120 s query timeout
 
 
-def init_pool(database_url: Optional[str] = None, min_conn: int = 5, max_conn: int = 50):
-    """Initialize the connection pool. Call once at startup."""
+def init_pool(database_url: Optional[str] = None, min_conn: int = 5, max_conn: int = 50) -> bool:
+    """Initialize the connection pool. Call once at startup.
+
+    Returns True on success, False on failure. Retries up to 3 times with
+    exponential backoff (1s, 2s, 4s — ~7s total) to handle cold-start races
+    against the Neon pooler warming up.
+
+    On failure, leaves `_pool = None` and returns False so the caller can
+    decide whether to crash-loop (Railway will mark CRASHED and roll back) or
+    continue in a degraded mode.
+    """
     global _pool
     url = database_url or os.environ.get("DATABASE_URL", "")
     if not url:
         logger.error("DATABASE_URL not set — database unavailable")
-        return
-    logger.info(f"Database URL prefix: {url[:50]}...")
-    try:
-        # TCP keepalives: prevent the OS from silently dropping idle connections
-        # after PostgreSQL's idle-session timeout. Without this, connections that
-        # sit in the pool for >~30 min get closed server-side and the next caller
-        # gets a "connection already closed" error.
-        #
-        # NOTE: do NOT pass `options="-c statement_timeout=..."` here — Neon's
-        # -pooler endpoint (pgbouncer, transaction mode) rejects any libpq
-        # startup `options` parameter. Statement timeout is applied per
-        # transaction inside get_conn() via SET LOCAL.
-        _pool = ThreadedConnectionPool(
-            min_conn, max_conn, url,
-            keepalives=1,
-            keepalives_idle=30,     # start probing after 30 s idle
-            keepalives_interval=10, # retry probe every 10 s
-            keepalives_count=5,     # drop after 5 failed probes
-            connect_timeout=10,     # 10s connection timeout
-        )
-        logger.info(f"Database pool initialized (min={min_conn}, max={max_conn}, keepalives=on)")
-    except Exception as e:
-        logger.error(f"Failed to initialize database pool: {e}")
         _pool = None
+        return False
+    logger.info(f"Database URL prefix: {url[:50]}...")
+
+    last_err: Optional[Exception] = None
+    for attempt in range(1, 4):  # 1, 2, 3
+        try:
+            # TCP keepalives: prevent the OS from silently dropping idle connections
+            # after PostgreSQL's idle-session timeout. Without this, connections that
+            # sit in the pool for >~30 min get closed server-side and the next caller
+            # gets a "connection already closed" error.
+            #
+            # NOTE: do NOT pass `options="-c statement_timeout=..."` here — Neon's
+            # -pooler endpoint (pgbouncer, transaction mode) rejects any libpq
+            # startup `options` parameter. Statement timeout is applied per
+            # transaction inside get_conn() via SET LOCAL.
+            _pool = ThreadedConnectionPool(
+                min_conn, max_conn, url,
+                keepalives=1,
+                keepalives_idle=30,     # start probing after 30 s idle
+                keepalives_interval=10, # retry probe every 10 s
+                keepalives_count=5,     # drop after 5 failed probes
+                connect_timeout=10,     # 10s connection timeout
+            )
+            logger.info(
+                f"Database pool initialized (min={min_conn}, max={max_conn}, "
+                f"keepalives=on, attempt={attempt})"
+            )
+            return True
+        except Exception as e:
+            last_err = e
+            backoff = 2 ** (attempt - 1)  # 1s, 2s, 4s
+            logger.error(
+                f"Failed to initialize database pool (attempt {attempt}/3): {e}"
+            )
+            if attempt < 3:
+                logger.info(f"Retrying pool init in {backoff}s...")
+                time.sleep(backoff)
+
+    logger.critical(
+        f"Database pool initialization failed after 3 attempts. Last error: {last_err}"
+    )
+    _pool = None
+    return False
 
 
 def close_pool():
