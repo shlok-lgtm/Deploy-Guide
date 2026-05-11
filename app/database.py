@@ -47,6 +47,11 @@ def _warn_if_async_context(helper_name: str) -> None:
 
 _pool: Optional[ThreadedConnectionPool] = None
 
+# Neon's -pooler endpoint is pgbouncer in transaction mode and rejects libpq
+# startup `options` (incl. `-c statement_timeout=...`). We apply the timeout
+# per-transaction via SET LOCAL inside get_conn() instead.
+_STATEMENT_TIMEOUT_MS = 120000  # 120 s query timeout
+
 
 def init_pool(database_url: Optional[str] = None, min_conn: int = 5, max_conn: int = 50):
     """Initialize the connection pool. Call once at startup."""
@@ -61,6 +66,11 @@ def init_pool(database_url: Optional[str] = None, min_conn: int = 5, max_conn: i
         # after PostgreSQL's idle-session timeout. Without this, connections that
         # sit in the pool for >~30 min get closed server-side and the next caller
         # gets a "connection already closed" error.
+        #
+        # NOTE: do NOT pass `options="-c statement_timeout=..."` here — Neon's
+        # -pooler endpoint (pgbouncer, transaction mode) rejects any libpq
+        # startup `options` parameter. Statement timeout is applied per
+        # transaction inside get_conn() via SET LOCAL.
         _pool = ThreadedConnectionPool(
             min_conn, max_conn, url,
             keepalives=1,
@@ -68,7 +78,6 @@ def init_pool(database_url: Optional[str] = None, min_conn: int = 5, max_conn: i
             keepalives_interval=10, # retry probe every 10 s
             keepalives_count=5,     # drop after 5 failed probes
             connect_timeout=10,     # 10s connection timeout
-            options="-c statement_timeout=120000",  # 120 s query timeout
         )
         logger.info(f"Database pool initialized (min={min_conn}, max={max_conn}, keepalives=on)")
     except Exception as e:
@@ -149,6 +158,16 @@ def get_conn():
         raise psycopg2.OperationalError("Database connection unrecoverable after liveness ping failures")
 
     try:
+        # SET LOCAL is scoped to the current transaction, so it survives
+        # pgbouncer transaction-mode multiplexing (unlike a session-level SET).
+        # The liveness-ping SELECT above already opened an implicit transaction,
+        # so SET LOCAL applies for the rest of this checkout.
+        try:
+            _to_cur = conn.cursor()
+            _to_cur.execute("SET LOCAL statement_timeout = %s", (_STATEMENT_TIMEOUT_MS,))
+            _to_cur.close()
+        except Exception as _to_err:
+            logger.warning("Could not SET LOCAL statement_timeout: %s", _to_err)
         yield conn
         conn.commit()
     except Exception as exc:
