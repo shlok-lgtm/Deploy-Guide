@@ -43,7 +43,7 @@ async def log_requests(request, call_next):
     ua = request.headers.get("user-agent", "")[:500]
 
     INTERNAL_UA = ["python-httpx", "basis-keeper", "basis-worker",
-                   "uvicorn", "claudebot", "python-requests", "replit"]
+                   "uvicorn", "claudebot", "python-requests"]
     INTERNAL_IP = ["35.191.", "10.", "127.0.0."]
     is_internal = (
         any(pat in ua.lower() for pat in INTERNAL_UA)

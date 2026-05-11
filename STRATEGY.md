@@ -47,7 +47,7 @@ Chainlink delivers prices (point-in-time facts). ENS is a registry (accumulated 
 ## What's Live Today
 
 - **SII v1.0.0** scoring 10 stablecoins (USDC, USDT, DAI, FRAX, PYUSD, FDUSD, TUSD, USDD, USDe, USD1)
-- **Public dashboard** at basis-demo.replit.app
+- **Public dashboard** at basisprotocol.xyz
 - **REST API** with 18+ endpoints
 - **61 automated components** across peg stability, liquidity, flows, distribution, structural risk
 - **Neon Postgres** with daily scoring, history, provenance tracking

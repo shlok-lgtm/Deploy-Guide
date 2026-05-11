@@ -4,8 +4,9 @@
 **Depends on:** `docs/oracle_option_c_routing.md` (authoritative for
 lens scheme, entityId construction, collision analysis, read-path
 semantics). This runbook does NOT restate those; it cites them.
-**Scope:** everything a human operator needs to do in Replit to
-route Bucket A commits (track record, dispute, methodology) through
+**Scope:** everything a human operator needs to do on the Railway
+keeper service to route Bucket A commits (track record, dispute,
+methodology) through
 the existing deployed oracle at
 `0x1651d7b2e238a952167e51a1263ffe607584db83` on Base + Arbitrum.
 **No new contract. No address change.**
@@ -24,16 +25,18 @@ Before starting any step, confirm:
    (i.e. `track_record_commitments` rows exist with
    `committed_on_chain = false`). Verify with
    `SELECT COUNT(*) FROM track_record_commitments WHERE committed_on_chain = false;`.
-4. Keeper currently running on Replit uses commit `bef82a0` or later.
+4. Keeper service in Railway (`valiant-celebration` project) is at
+   commit `bef82a0` or later.
 
 If any of (1)–(4) is false, stop; fix that first.
 
 ---
 
-## 1. Replit Secrets
+## 1. Service Variables
 
-All values live in the Replit Secrets pane for the keeper Repl. None
-go in `.env` files, none are committed. Required:
+All values live as Railway service variables on the keeper service in
+the `valiant-celebration` project. None go in `.env` files, none are
+committed. Required:
 
 | Secret | Purpose | Notes |
 |---|---|---|
@@ -194,12 +197,13 @@ There is no Option C deployment on any testnet. The deployed oracle
 lives only on Base 8453 and Arbitrum 42161. Dry-run is therefore
 offline-only:
 
-1. Set Replit Secret `DRY_RUN=true`. The keeper's existing
-   `config.dryRun` path (publisher.ts:103, 202, 294) logs what
-   would be submitted without signing or broadcasting.
+1. Set the `DRY_RUN=true` service variable on the Railway keeper
+   service. The keeper's existing `config.dryRun` path
+   (publisher.ts:103, 202, 294) logs what would be submitted without
+   signing or broadcasting.
 2. Run `npm test` under `keeper/` — the hashing golden vectors
    from Section 3 must pass.
-3. Start the keeper in Replit with `DRY_RUN=true`. Let one cycle
+3. Redeploy the keeper service with `DRY_RUN=true`. Let one cycle
    complete. Inspect logs for:
    - one "DRY RUN — would publish report hashes" line per pending
      SII/PSI entity,
