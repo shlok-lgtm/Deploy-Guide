@@ -31,7 +31,7 @@ schedule the module from worker.py.
 | `psi_discoveries` | `worker.py:2548`, `main.py:262` | (none — enrichment task wraps `app/discovery.py`) | **P0** | 3-PR history (#137, #150, #157). Highest-friction case. |
 | `data_layer:peg_snapshots_5m` | `worker.py:1371`, also Wave 5b heartbeat at 2787 | `app/data_layer/peg_monitor.py:382` | **P0** | Wave 5a + 5b both touched it. |
 | `data_layer:exchange_snapshots` | `worker.py:1261` | `app/data_layer/exchange_collector.py:274` | **P0** | Wave 5a hoist. |
-| `data_layer:dex_pool_ohlcv` | `worker.py:2243`, also `worker.py:2778` (heartbeat), Wave 5b at 2787 | `app/data_layer/ohlcv_collector.py:220,311` | **P0** | Three attest sites + module. The clearest case for v9.12. |
+| ~~`data_layer:dex_pool_ohlcv`~~ ✅ | ~~worker.py inline~~ removed | `app/data_layer/ohlcv_collector.py::run_ohlcv_collection_scheduled` | **P0 → DONE** | Pilot landed this session; module-canonical via `run_ohlcv_collection_scheduled()`. Dispatcher heartbeat at worker.py:2778 left in place until Phase 2.3. |
 | `wallets` | `worker.py:2082`, also `worker.py:2787` (heartbeat) | — (driven by `app/indexer/pipeline.py`) | **P1** | Wave 1 + Wave 3 + Wave 5b. |
 | `web_research` | `worker.py:1960`, also 2787 | `app/collectors/web_research.py:563` | **P1** | Wave 1 + Wave 3 + Wave 5b. |
 | `psi_components` | `worker.py:1100`, `main.py:224` | (enrichment task) | **P1** | Two live paths post-Wave-1. |
