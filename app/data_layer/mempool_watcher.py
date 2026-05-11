@@ -457,6 +457,15 @@ async def _subscribe_and_consume(ws, watchlist: list[str]) -> int:
 
     event_count = 0
     _loop = asyncio.get_event_loop()
+    # Heartbeat: emit a 'running' state_attestation every ~1h so the
+    # mempool_capture_status domain stays fresh in steady state. The
+    # existing attestations only fire on pause/resume transitions; in
+    # the common case (Alchemy CU under budget, WS connection stable),
+    # neither transition happens for days and the domain looks dead
+    # even though capture is healthy. This was 14 days silent before
+    # the heartbeat.
+    last_heartbeat = time.time()
+    HEARTBEAT_INTERVAL_SEC = 3600
     async for raw in ws:
         try:
             msg = json.loads(raw)
@@ -476,6 +485,16 @@ async def _subscribe_and_consume(ws, watchlist: list[str]) -> int:
                         None, _attest_observation,
                         tx.get("hash", ""), int(time.time() * 1000),
                     )
+
+        # Heartbeat check after each frame — fires when wall-clock crosses
+        # the interval boundary, regardless of event volume.
+        now = time.time()
+        if now - last_heartbeat >= HEARTBEAT_INTERVAL_SEC:
+            await _attest_capture_status(
+                "running",
+                f"heartbeat events_observed={event_count} subscription={subscription_id}",
+            )
+            last_heartbeat = now
 
     return event_count
 
