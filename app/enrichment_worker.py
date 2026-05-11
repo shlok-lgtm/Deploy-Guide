@@ -417,7 +417,13 @@ async def run_enrichment_pipeline() -> dict:
         from app.rpi.scorer import run_rpi_scoring
         result = await asyncio.to_thread(run_rpi_scoring)
 
-        # Attest RPI component scores
+        # Attest RPI component scores — always, even when scoring returns
+        # no protocols. Previously gated on `if result:`, which silenced the
+        # domain whenever run_rpi_scoring() returned None/empty (cascading
+        # failure from the incident detector, no protocols configured,
+        # transient DB issue). Same family as #138 / #141 / #143: always
+        # attest with a structured status payload so coherence can
+        # distinguish "task ran with data" from "task never ran".
         try:
             from app.state_attestation import attest_state
             if result:
@@ -425,7 +431,11 @@ async def run_enrichment_pipeline() -> dict:
                     {"slug": r.get("protocol_slug", ""), "score": r.get("overall_score")}
                     for r in result if isinstance(r, dict)
                 ]
-                await asyncio.to_thread(attest_state, "rpi_components", records)
+                if not records:
+                    records = [{"status": "ran_no_dict_results", "result_count": len(result)}]
+            else:
+                records = [{"status": "ran_no_results", "result_count": 0}]
+            await asyncio.to_thread(attest_state, "rpi_components", records)
         except Exception as ae:
             logger.error(f"RPI components attestation failed: {ae}")
             try:
