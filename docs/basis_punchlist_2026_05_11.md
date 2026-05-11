@@ -539,3 +539,17 @@ Plus 6 manual DDL re-applies on prod Neon for the 6 dropped tables.
    query before substrate claim. See
    docs/audits/2026-05-11-data-layer-cadence-audit.md for the full
    cadence table.
+
+10. **Read code before forming hypotheses.** Substrate signals
+    (state_attestations, cycle_errors, data table timestamps) tell
+    you WHAT is true. Code tells you WHY. Hypotheses formed from
+    substrate alone — "the block was disabled on May 8" (Wave 6),
+    "the work stopped, needs diagnostic" (Wave 8), "the fix didn't
+    take at 1h" (Wave 5a) — were each overruled by reading the
+    live code path: COUNT(*)=3 means always-rare, LOOP_INTERVAL=
+    168*3600 means weekly cadence, peg_snapshots_5m's outer block
+    actually fires every 2h. The diagnostic loop's first action,
+    when proposing any fix, must be reading the writer's source.
+    Three Wave-N PRs were no-or-tiny-code corrections of upstream
+    hypotheses formed without this step. Substrate + code together
+    form a hypothesis; substrate alone is a guess.
