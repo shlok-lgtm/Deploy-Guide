@@ -895,6 +895,31 @@ async def emit_24h_summary() -> None:
         "alchemy_cu_rolling24h": cu_rolling,
     })
 
+    # mempool_capture_status heartbeat — fires from the worker cycle
+    # regardless of WS state. PR #140 added a heartbeat inside
+    # _subscribe_and_consume's frame loop, but that loop never runs
+    # when the WS connection itself is rejected. Today the watcher is
+    # disabled after 20 consecutive 429s from Alchemy (the same
+    # capacity issue tracked in the May 11 punchlist), so the inner
+    # heartbeat never fires and mempool_capture_status went 14 days
+    # silent. Emitting from emit_24h_summary, which is called from
+    # worker.py every fast cycle, decouples the freshness signal from
+    # the WS lifecycle.
+    #
+    # We classify "running" vs "stalled" on captured-rows in the last
+    # 24h. Non-zero means observations landed (either via WS or via
+    # whatever fallback path), so the watcher's net effect is alive.
+    try:
+        cap_24h = int(summary["captured"])
+        cap_status = "running" if cap_24h > 0 else "stalled"
+        await _attest_capture_status(
+            cap_status,
+            f"worker_heartbeat captured_24h={cap_24h} "
+            f"alchemy_cu_24h={cu_rolling}",
+        )
+    except Exception as e:
+        logger.warning(f"[mempool_capture_status] heartbeat skipped: {e}")
+
 
 # ---------------------------------------------------------------------------
 # Orchestration entry point
