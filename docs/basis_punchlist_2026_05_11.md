@@ -286,6 +286,105 @@ worker redeploy + slow-cycle elapse.
 
 ---
 
+## Wave 8 — diagnosis-only, no code change
+
+User flagged `wallet_holder_discovery` data table stopped writing on
+2026-05-08 05:52 UTC (3d 10h gap), with `state_attestations` count
+for the domain showing 0 rows ever. Hypothesized as a two-part bug:
+(a) work stopped, (b) missing attestation domain.
+
+Both parts of the hypothesis are wrong. Diagnostic:
+
+### (a) The "work stoppage" is by design
+
+`app/data_layer/holder_ingestion_collector.py:444` —
+`holder_ingestion_background_loop` is a **weekly** background task
+launched from worker.py:3741:
+
+```python
+LOOP_INTERVAL = 168 * 3600  # 168 hours = 1 week
+
+while True:
+    # gate check
+    age_h = (now - MAX(discovered_at)) / 3600
+    if age_h < 168:
+        # gate closed — sleep 1h and re-check
+    else:
+        run_holder_ingestion()
+        await asyncio.sleep(LOOP_INTERVAL)
+```
+
+Daily-count substrate:
+
+  Apr 22:      7 rows (initial seed)
+  Apr 23:    195
+  Apr 30:    464
+  May 7:  34,388 (start of last full run)
+  May 8: 100,639 (peak day — run completing)
+  May 9+:      0 (gate closed, weekly cadence)
+
+The May 8 "cliff" is the writer completing its weekly burst.
+**Next scheduled run: ~2026-05-15.** No code fix needed.
+
+`cycle_errors` substrate confirms: 0 errors for any
+`holder_ingestion%` cycle_phase since May 1. The loop has been
+ticking cleanly, just gated.
+
+### (b) The attest call exists; VARCHAR(30) was silently dropping it
+
+`holder_ingestion_collector.py:402`:
+
+```python
+await asyncio.to_thread(attest_data_batch, "wallet_holder_discovery",
+                        [dict(stats)])
+```
+
+`attest_data_batch` prepends `"data_layer:"`, so the actual stored
+domain is `data_layer:wallet_holder_discovery` — **31 characters**.
+`state_attestations.domain` was VARCHAR(30) until migration 107
+applied today at 15:40:54 UTC. Every write attempt silently
+truncated with `"value too long for type character varying(30)"`,
+matching the same pattern as `data_layer:entity_snapshots_hourly`
+(34), `data_layer:market_chart_history` (31), and
+`data_layer:wallet_chain_presence` (32) covered in op-followup #2.
+
+**Migration 107 fixed the truncation.** The next time the weekly
+loop fires (~May 15), the attest will land.
+
+### User's substrate read had a minor mismatch
+
+The diagnostic query `SELECT COUNT(*) WHERE domain =
+'wallet_holder_discovery'` returns 0 because the actual domain is
+prefixed `data_layer:wallet_holder_discovery`. Even with the prefix
+the count was 0 until migration 107, but the unprefixed query would
+have been 0 regardless. Two issues compounding.
+
+### Verification (per lessons 7 + 9)
+
+Substrate signals to watch over the next ~5 days:
+
+1. `SELECT MAX(discovered_at) FROM wallet_holder_discovery` should
+   advance past 2026-05-08 around 2026-05-15.
+2. `SELECT COUNT(*) FROM state_attestations WHERE domain =
+   'data_layer:wallet_holder_discovery'` should increment to >= 1
+   when (1) advances.
+3. `SELECT COUNT(*) FROM cycle_errors WHERE error_message LIKE
+   '%value too long%' AND occurred_at > NOW() - INTERVAL '7 days'`
+   should remain 0 (already verified for the 1h post-migration
+   window).
+
+Per lesson 7, no closure claim until all three signals confirm.
+
+### Why my Wave-5 cadence audit got this wrong
+
+`docs/audits/2026-05-11-data-layer-cadence-audit.md` noted
+wallet_holder_discovery as "COLLECTOR STALE (3d+)". That was wrong —
+the weekly cadence is correct. Audit will be amended after the May
+15 confirmation cycle to reflect the actual 168h cadence vs the
+implied "stale" reading.
+
+---
+
 ## Verification
 
 **cycle_errors — last hour:**
