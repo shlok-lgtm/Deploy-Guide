@@ -30,7 +30,7 @@ schedule the module from worker.py.
 |---|---|---|---|---|
 | `psi_discoveries` | `worker.py:2548`, `main.py:262` | (none — enrichment task wraps `app/discovery.py`) | **P0** | 3-PR history (#137, #150, #157). Highest-friction case. |
 | ~~`data_layer:peg_snapshots_5m` (+ `market_chart_history` + `volatility_surfaces`)~~ ✅ | ~~worker.py:1310-1373 inline~~ removed | `app/data_layer/peg_monitor.py::run_peg_monitoring_scheduled` | **P0 → DONE** | First v9.13 coupled-write refactor. #188 made the module canonical writer for all 3 domains; this PR adds the scheduled wrapper (freshness gate + 3-domain skip/error attest) and routes worker, enrichment_worker, and main.py through it. Dispatcher heartbeat at worker.py:2787 left in place until Phase 2.3. |
-| `data_layer:exchange_snapshots` | `worker.py:1261` | `app/data_layer/exchange_collector.py:274` | **P0** | Wave 5a hoist. |
+| ~~`data_layer:exchange_snapshots`~~ ✅ | ~~worker.py:1186-1246 inline~~ removed | `app/data_layer/exchange_collector.py::run_exchange_collection_scheduled` | **P0 → DONE** | Q1 answered by #197 (migration 109 — schema replay). Q2 answered: 15 exchanges (worker._EX list), `_EX_FIX` legacy-slug remap ported into module. 35 additional exchanges deferred to Q2-extension (see below). enrichment_worker.py task entry removed (was kept closed by inline; lesson 6 family). main.py daily lambda switched. Dispatcher heartbeat at worker.py:2787 left in place until Phase 2.3. |
 | ~~`data_layer:dex_pool_ohlcv`~~ ✅ | ~~worker.py inline~~ removed | `app/data_layer/ohlcv_collector.py::run_ohlcv_collection_scheduled` | **P0 → DONE** | Pilot landed this session; module-canonical via `run_ohlcv_collection_scheduled()`. Dispatcher heartbeat at worker.py:2778 left in place until Phase 2.3. |
 | `wallets` | `worker.py:2082`, also `worker.py:2787` (heartbeat) | — (driven by `app/indexer/pipeline.py`) | **P1** | Wave 1 + Wave 3 + Wave 5b. |
 | `web_research` | `worker.py:1960`, also 2787 | `app/collectors/web_research.py:563` | **P1** | Wave 1 + Wave 3 + Wave 5b. |
@@ -278,3 +278,52 @@ Phase 2.3 dispatcher collapse remains the last item in the queue;
 it is blocked on every P0+P1 domain reaching SINGLE_WRITER state.
 The shape of "what does SINGLE_WRITER mean for peg+mchart coupled-write?"
 is the unresolved design question gating the whole sweep.
+
+---
+
+## Blocker 2 / Q2-extension — additional 35 exchanges (deferred)
+
+The v9.12 exchange_snapshots refactor (#197 + the second-PR refactor)
+adopts the **15-exchange list** that matches worker.py's pre-v9.12
+`_EX` (binance, coinbase-exchange, okx, bybit_spot, kraken, kucoin,
+gate, bitget, htx, crypto_com, mexc, bitfinex, bitstamp, gemini,
+lbank). The module's original `TOP_EXCHANGES` had **50 ids** — the
+35 not in worker._EX are deferred from the live writer until an
+operator decision on coverage expansion.
+
+Deferred ids (35), grouped by region/tier as they appeared in the
+pre-refactor `TOP_EXCHANGES`:
+
+```
+# Tier-2 global volume (5):
+upbit, bithumb, whitebit, bitrue, poloniex
+
+# Specialty / derivatives (5):
+hashkey-exchange, bitmart, phemex, deribit, bitflyer
+
+# Regional KR/JP (5):
+indodax, korbit, exmo, btcturk, tidex
+
+# Regional KR/JP (5):
+coinone, probit-exchange, bitbank, zaif, coincheck
+
+# Tier-3 / legacy (5):
+okcoin, gopax, liquid, btcbox, bkex
+
+# Tier-3 / smaller (5):
+latoken, hotbit, coinex, bigone, digifinex
+
+# Newer / aggregators (5):
+xt, deepcoin, toobit, bingx, bitvenus
+```
+
+Re-enabling: add the ids back to `TOP_EXCHANGES` in
+`app/data_layer/exchange_collector.py`. No schema change needed —
+the schema (post-migration 109) already supports the richer
+column shape. If any of the deferred ids has a CG-legacy slug,
+add it to `_EX_FIX` at the same time.
+
+Cost: +35 `/exchanges/{id}` + `/exchanges/{id}/volume_chart/30`
+calls per fast cycle (~80 calls / cycle / hour). CG pro tier
+(500/min, 500k credits/month) has ample headroom. Worth a brief
+budget check against the daily usage tracker before flipping.

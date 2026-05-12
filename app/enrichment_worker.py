@@ -867,20 +867,14 @@ async def run_enrichment_pipeline() -> dict:
     # ---- Tier 4: Bridge flows — DEFERRED (constitution v9.3) ----
     # DeFiLlama paywalled all bridges endpoints. Deferred to Phase 2.
 
-    # ---- Tier 5: Exchange data ----
-
-    async def _run_exchange_collection():
-        from app.data_layer.exchange_collector import run_exchange_collection
-        return await run_exchange_collection()
-
-    pipeline.add(EnrichmentTask(
-        name="exchange_data", func=_run_exchange_collection,
-        timeout_seconds=600, group="data_layer", priority=3,
-        gate_check=_db_gate(
-            "SELECT MAX(snapshot_at) AS latest FROM exchange_snapshots",
-            min_hours=1,
-        ),
-    ))
+    # ---- Tier 5: Exchange data (v9.12 module-canonical — no enrichment task) ----
+    # The scheduled wrapper `run_exchange_collection_scheduled` owns the
+    # freshness gate (50min) inside the module; worker.py invokes it
+    # every fast cycle. No separate enrichment task needed — the wrapper
+    # is the single entry point. The previous `exchange_data` task here
+    # (min_hours=1 db_gate) was kept closed by worker.py's inline writes
+    # and never ran in steady state (lesson 6 family); removing it now
+    # that the inline is gone.
 
     # ---- Tier 6: Correlation matrices (computed, no API calls) ----
 
