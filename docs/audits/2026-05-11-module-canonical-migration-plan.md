@@ -29,7 +29,7 @@ schedule the module from worker.py.
 | domain | worker/main site | module site | priority¹ | notes |
 |---|---|---|---|---|
 | `psi_discoveries` | `worker.py:2548`, `main.py:262` | (none — enrichment task wraps `app/discovery.py`) | **P0** | 3-PR history (#137, #150, #157). Highest-friction case. |
-| `data_layer:peg_snapshots_5m` | `worker.py:1371`, also Wave 5b heartbeat at 2787 | `app/data_layer/peg_monitor.py:382` | **P0** | Wave 5a + 5b both touched it. |
+| ~~`data_layer:peg_snapshots_5m` (+ `market_chart_history` + `volatility_surfaces`)~~ ✅ | ~~worker.py:1310-1373 inline~~ removed | `app/data_layer/peg_monitor.py::run_peg_monitoring_scheduled` | **P0 → DONE** | First v9.13 coupled-write refactor. Module attests all 3 domains. Worker, enrichment_worker, and main.py all routed through the scheduled wrapper. Dispatcher heartbeat at worker.py:2787 left in place until Phase 2.3. |
 | `data_layer:exchange_snapshots` | `worker.py:1261` | `app/data_layer/exchange_collector.py:274` | **P0** | Wave 5a hoist. |
 | ~~`data_layer:dex_pool_ohlcv`~~ ✅ | ~~worker.py inline~~ removed | `app/data_layer/ohlcv_collector.py::run_ohlcv_collection_scheduled` | **P0 → DONE** | Pilot landed this session; module-canonical via `run_ohlcv_collection_scheduled()`. Dispatcher heartbeat at worker.py:2778 left in place until Phase 2.3. |
 | `wallets` | `worker.py:2082`, also `worker.py:2787` (heartbeat) | — (driven by `app/indexer/pipeline.py`) | **P1** | Wave 1 + Wave 3 + Wave 5b. |

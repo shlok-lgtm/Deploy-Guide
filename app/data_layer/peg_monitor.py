@@ -153,6 +153,51 @@ def _store_peg_snapshots(stablecoin_id: str, price_points: list[tuple]):
     logger.error(f"peg {stablecoin_id}: {stored} rows in {elapsed:.1f}s (skipped={skipped})")
 
 
+def _store_market_chart(stablecoin_id: str, coingecko_id: str, price_points: list[tuple]):
+    """Store same days=1 price points to market_chart_history (granularity='5min').
+
+    Coupled-write per v9.13: the /market_chart fetch in run_peg_monitoring
+    already produces this data; mirroring it to market_chart_history avoids
+    a duplicate fetch against CoinGecko.
+    """
+    if not price_points:
+        return 0
+
+    from app.database import get_cursor
+    rows = []
+    for ts_ms, price in price_points:
+        safe_price = _safe_float(price)
+        if safe_price is None:
+            continue
+        ts = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
+        rows.append((coingecko_id, stablecoin_id, ts, safe_price, "5min"))
+    if not rows:
+        return 0
+
+    try:
+        from psycopg2.extras import execute_values
+        with get_cursor() as cur:
+            execute_values(cur,
+                """INSERT INTO market_chart_history
+                   (coin_id, stablecoin_id, timestamp, price, granularity)
+                   VALUES %s ON CONFLICT DO NOTHING""",
+                rows, page_size=500,
+            )
+        return len(rows)
+    except Exception as e:
+        logger.warning(f"[peg_monitor] mchart batch insert failed for {stablecoin_id}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="data_layer__store_market_chart_insert_failure",
+                error_message=str(e)[:500],
+                cycle_phase="peg_monitor",
+            )
+        except Exception:
+            pass
+        return 0
+
+
 def _compute_volatility_surface(
     prices: list[float],
     asset_id: str,
@@ -290,6 +335,7 @@ async def run_peg_monitoring() -> dict:
         return {"error": "no stablecoins found"}
 
     total_snapshots = 0
+    mchart_rows = 0
     micro_depegs = []
     vol_surfaces = 0
 
@@ -309,9 +355,14 @@ async def run_peg_monitoring() -> dict:
                 if not prices_raw:
                     continue
 
-                # Store 5-minute snapshots
+                # Coupled-write per v9.13: same price points feed both
+                # peg_snapshots_5m and market_chart_history. One fetch,
+                # two domains.
                 await asyncio.to_thread(_store_peg_snapshots, stablecoin_id, prices_raw)
                 total_snapshots += len(prices_raw)
+                mchart_rows += await asyncio.to_thread(
+                    _store_market_chart, stablecoin_id, cg_id, prices_raw,
+                )
 
                 # Detect micro-depegs (>50bps deviation for 3+ consecutive points)
                 prices = [p[1] for p in prices_raw]
@@ -368,20 +419,34 @@ async def run_peg_monitoring() -> dict:
             except Exception as e:
                 logger.warning(f"Peg monitoring failed for {stablecoin_id}: {e}")
 
-    # Provenance — always attest, even when total_snapshots=0. Previously
-    # gated on `if total_snapshots > 0`, which let the domain go silent
-    # whenever the cycle ran but produced zero snapshots (CoinGecko 429,
-    # geofenced response, all stablecoins skipped). Same family as
-    # #141 (dex_pool_ohlcv). link_batch_to_proof is still conditional
-    # because there are no rows to correlate when snapshots=0.
+    # Provenance — coupled-write attestation per v9.13: this module owns
+    # all three write tables (peg_snapshots_5m, market_chart_history,
+    # volatility_surfaces) and must attest to one domain per table.
+    # Always attest, even on zero-write cycles (CoinGecko 429, geofence,
+    # all stablecoins skipped). link_batch_to_proof stays conditional
+    # because there are no rows to correlate when counts are zero.
     try:
         from app.data_layer.provenance_scaling import attest_data_batch, link_batch_to_proof
-        payload = {"snapshots": total_snapshots, "vol_surfaces": vol_surfaces}
+
+        peg_payload: dict = {"snapshots": total_snapshots, "vol_surfaces": vol_surfaces}
         if total_snapshots == 0:
-            payload["status"] = "ran_no_snapshots"
-        await asyncio.to_thread(attest_data_batch, "peg_snapshots_5m", [payload])
+            peg_payload["status"] = "ran_no_snapshots"
+        mchart_payload: dict = {"rows": mchart_rows, "granularity": "5min"}
+        if mchart_rows == 0:
+            mchart_payload["status"] = "ran_no_rows"
+        vs_payload: dict = {"surfaces": vol_surfaces}
+        if vol_surfaces == 0:
+            vs_payload["status"] = "ran_no_surfaces"
+
+        await asyncio.to_thread(attest_data_batch, "peg_snapshots_5m", [peg_payload])
+        await asyncio.to_thread(attest_data_batch, "market_chart_history", [mchart_payload])
+        await asyncio.to_thread(attest_data_batch, "volatility_surfaces", [vs_payload])
+
         if total_snapshots > 0:
             await link_batch_to_proof("peg_snapshots_5m", "peg_snapshots_5m")
+        if mchart_rows > 0:
+            await link_batch_to_proof("market_chart_history", "market_chart_history")
+        if vol_surfaces > 0:
             await link_batch_to_proof("volatility_surfaces", "volatility_surfaces")
     except asyncio.CancelledError:
         raise
@@ -424,7 +489,78 @@ async def run_peg_monitoring() -> dict:
     return {
         "stablecoins_monitored": len(rows),
         "total_5m_snapshots": total_snapshots,
+        "mchart_rows": mchart_rows,
         "micro_depegs_detected": len(micro_depegs),
         "micro_depegs": micro_depegs,
         "volatility_surfaces_computed": vol_surfaces,
     }
+
+
+_PEG_FRESHNESS_MINUTES = 50
+
+
+async def run_peg_monitoring_scheduled() -> dict:
+    """Module-canonical entry per v9.13: freshness gate + work + 3-domain attestation.
+
+    Mirrors the v9.12 ohlcv pattern (PR #179). Returns a status dict regardless
+    of branch:
+      - {"status": "skipped_fresh", "table_age_minutes": X}
+      - {"status": "ran", ...run_peg_monitoring() result}
+      - {"status": "error", "error": str}
+
+    The state_attestations rows fire inside this function (skipped/error
+    branches) or inside run_peg_monitoring() (work branch). Schedulers
+    (worker.py, enrichment_worker.py, main.py) MUST NOT re-attest.
+    """
+    from app.database import fetch_one
+    from app.data_layer.provenance_scaling import attest_data_batch
+
+    table_age_minutes: float = float(_PEG_FRESHNESS_MINUTES)
+    try:
+        latest = await asyncio.to_thread(
+            fetch_one, "SELECT MAX(timestamp) AS t FROM peg_snapshots_5m"
+        )
+        if latest and latest.get("t"):
+            _t = latest["t"]
+            if hasattr(_t, "tzinfo") and _t.tzinfo is None:
+                _t = _t.replace(tzinfo=timezone.utc)
+            if hasattr(_t, "timestamp"):
+                table_age_minutes = (
+                    datetime.now(timezone.utc) - _t
+                ).total_seconds() / 60
+    except Exception as e:
+        logger.warning(f"[peg_monitor] freshness check failed: {e}")
+        table_age_minutes = float(_PEG_FRESHNESS_MINUTES)
+
+    if table_age_minutes < _PEG_FRESHNESS_MINUTES:
+        skipped_payload = {
+            "status": "skipped_fresh",
+            "table_age_minutes": round(table_age_minutes, 2),
+        }
+        try:
+            for domain in ("peg_snapshots_5m", "market_chart_history", "volatility_surfaces"):
+                await asyncio.to_thread(attest_data_batch, domain, [skipped_payload])
+        except Exception as e:
+            logger.warning(f"[peg_monitor] skipped-fresh attest failed: {e}")
+        return skipped_payload
+
+    try:
+        result = await run_peg_monitoring()
+        return {
+            "status": "ran",
+            "table_age_minutes": round(table_age_minutes, 2),
+            **result,
+        }
+    except Exception as e:
+        logger.warning(f"[peg_monitor] scheduled run failed: {e}")
+        error_payload = {
+            "status": "error",
+            "table_age_minutes": round(table_age_minutes, 2),
+            "error": str(e)[:200],
+        }
+        try:
+            for domain in ("peg_snapshots_5m", "market_chart_history", "volatility_surfaces"):
+                await asyncio.to_thread(attest_data_batch, domain, [error_payload])
+        except Exception:
+            pass
+        return {"status": "error", "error": str(e)[:500]}
