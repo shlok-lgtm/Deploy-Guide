@@ -43,6 +43,13 @@ else
 fi
 echo "    using compose: $COMPOSE_CMD"
 
+# Persist the detected form so the Makefile and dev-reset-db.sh agree
+# with bootstrap. Single line, no trailing newline noise from echo -n
+# (since $(shell ...) in Make would strip newlines anyway, but this
+# keeps the file diff-clean for humans).
+printf '%s' "$COMPOSE_CMD" > .compose-cmd
+echo "    wrote .compose-cmd ($COMPOSE_CMD)"
+
 # Confirm Docker daemon is reachable.
 if ! docker info >/dev/null 2>&1; then
   echo "ERROR: Docker daemon is not reachable. Start Docker Desktop / dockerd and retry."

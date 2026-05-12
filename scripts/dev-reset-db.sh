@@ -77,9 +77,13 @@ fi
 
 # -----------------------------------------------------------------------------
 # Step 4: pick a compose command
+# Prefer .compose-cmd (written by dev-bootstrap.sh) so we agree with the
+# form detected there; fall back to probe order if it does not exist.
 # -----------------------------------------------------------------------------
 COMPOSE_CMD=""
-if command -v docker-compose >/dev/null 2>&1; then
+if [ -s .compose-cmd ]; then
+  COMPOSE_CMD="$(cat .compose-cmd)"
+elif command -v docker-compose >/dev/null 2>&1; then
   COMPOSE_CMD="docker-compose"
 elif docker compose version >/dev/null 2>&1; then
   COMPOSE_CMD="docker compose"

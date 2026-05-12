@@ -7,3 +7,5 @@ node_modules/
 
 # Phase A — local dev env file
 env.dev
+# Phase A — compose command detection cache (written by dev-bootstrap.sh)
+.compose-cmd

@@ -103,10 +103,16 @@ services:
     # Foundry's Anvil — local EVM node forked from Base mainnet so the
     # keeper hits realistic chain state without spending real gas.
     image: ghcr.io/foundry-rs/foundry:latest
-    # Override the upstream entrypoint (`anvil`) by passing args; the image
-    # uses `["anvil"]` as ENTRYPOINT so we pass flags through `command`.
+    # The foundry image has ENTRYPOINT ["anvil"] — we pass flags only,
+    # NOT the literal "anvil" again, and NOT a single shell string (which
+    # would arrive as one arg with embedded spaces and fail to parse).
     command:
-      - "anvil --host 0.0.0.0 --chain-id 8453 --fork-url ${BASE_FORK_URL:-https://mainnet.base.org}"
+      - "--host"
+      - "0.0.0.0"
+      - "--chain-id"
+      - "8453"
+      - "--fork-url"
+      - "${BASE_FORK_URL:-https://mainnet.base.org}"
     ports:
       - "8545:8545"
     networks:
