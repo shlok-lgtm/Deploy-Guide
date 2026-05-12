@@ -319,7 +319,7 @@ def run_worker_loop():
                 try:
                     from app.state_attestation import attest_state
                     if result.get('assessments', 0) > 0:
-                        attest_state("actors", [{"assessments": result.get('assessments', 0), "severities": result.get('severities', {})}])
+                        attest_state("assessments", [{"assessments": result.get('assessments', 0), "severities": result.get('severities', {})}])
                 except Exception as ae:
                     logger.debug(f"Actor attestation skipped: {ae}")
         except Exception as e:
