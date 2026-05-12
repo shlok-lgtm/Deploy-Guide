@@ -4,3 +4,8 @@ attached_assets/*.sql
 __pycache__/
 node_modules/
 .claude/worktrees/
+
+# Phase A — local dev env file
+env.dev
+# Phase A — compose command detection cache (written by dev-bootstrap.sh)
+.compose-cmd

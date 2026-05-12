@@ -1,0 +1,256 @@
+# docker-compose.dev.yml
+# Phase A2 of the local-dev-environment plan.
+#
+# Mirrors the Railway `valiant-celebration` project topology for local
+# development, minus the two sibling-repo services (basis-state,
+# basis-provenance) which the hub never calls inbound.
+#
+# Usage:
+#   cp env.dev.example env.dev   # fill in secrets
+#   docker compose -f docker-compose.dev.yml up api-server worker keeper anvil
+#   docker compose -f docker-compose.dev.yml --profile backfill run --rm backfill-psi
+#
+# See docs/development/compose-design-notes.md for rationale.
+
+networks:
+  basis:
+    driver: bridge
+
+services:
+  # ---------------------------------------------------------------------------
+  # Long-running services (api-server, worker, keeper, anvil)
+  # ---------------------------------------------------------------------------
+
+  api-server:
+    image: basis-hub-api-server:${BASIS_IMAGE_TAG:-dev}
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    command: ["python", "main.py"]
+    env_file: env.dev
+    environment:
+      WORKER_ENABLED: "false"
+      KEEPER_ENABLED: "false"
+      PORT: "8000"
+    ports:
+      - "8000:8000"
+    networks:
+      - basis
+    # Soft dependency on worker so api-server boots even if worker is slow;
+    # there is no Postgres container in this compose file — DATABASE_URL in
+    # env.dev points at Neon (per CLAUDE.md "Neon Postgres connection pool").
+    depends_on:
+      worker:
+        condition: service_started
+        required: false
+    healthcheck:
+      # Mirrors Railway healthcheck (GET /healthz, 300s timeout). Using
+      # start_period=60s + retries=5 gives the FastAPI app time to boot
+      # (server.py is 6,684 lines; cold start measured ~30-45s locally).
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+
+  worker:
+    image: basis-hub-worker:${BASIS_IMAGE_TAG:-dev}
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    # Inherits Dockerfile CMD: python -m app.worker --loop
+    env_file: env.dev
+    environment:
+      WORKER_ENABLED: "true"
+      COLLECTION_INTERVAL: "60"
+    networks:
+      - basis
+    # No healthcheck: worker is a background scoring loop, not an HTTP
+    # service. Adding an attestation-freshness probe via psql would be
+    # over-engineered for compose; rely on container exit + restart policy
+    # instead. Logs are the source of truth (see `docker compose logs -f worker`).
+    restart: unless-stopped
+
+  keeper:
+    image: basis-hub-keeper:${BASIS_IMAGE_TAG:-dev}
+    build:
+      context: .
+      dockerfile: Dockerfile.keeper
+    # Inherits Dockerfile CMD: npx tsx keeper/index.ts
+    env_file: env.dev
+    environment:
+      KEEPER_ENABLED: "true"
+      # Point the keeper at the local Anvil fork rather than mainnet Base.
+      # Operators can override by setting BASE_RPC_URL in env.dev.
+      BASE_RPC_URL: "http://anvil:8545"
+      # BASIS_API_URL: keeper reads scores from the hub's REST surface.
+      # Anvil-side ARBITRUM_RPC_URL is not forked here (single-chain dev fork);
+      # set ARBITRUM_RPC_URL in env.dev if testing Arbitrum publishing.
+      BASIS_API_URL: "http://api-server:8000"
+    networks:
+      - basis
+    depends_on:
+      anvil:
+        condition: service_healthy
+        required: true
+    # No healthcheck: keeper is a polling loop that submits transactions.
+    # If the RPC is wrong it will fail repeatedly in logs — easier to
+    # diagnose than a contrived probe.
+    restart: unless-stopped
+
+  anvil:
+    # Foundry's Anvil — local EVM node forked from Base mainnet so the
+    # keeper hits realistic chain state without spending real gas.
+    image: ghcr.io/foundry-rs/foundry:latest
+    # The foundry image has ENTRYPOINT ["anvil"] — we pass flags only,
+    # NOT the literal "anvil" again, and NOT a single shell string (which
+    # would arrive as one arg with embedded spaces and fail to parse).
+    command:
+      - "--host"
+      - "0.0.0.0"
+      - "--chain-id"
+      - "8453"
+      - "--fork-url"
+      - "${BASE_FORK_URL:-https://mainnet.base.org}"
+    ports:
+      - "8545:8545"
+    networks:
+      - basis
+    healthcheck:
+      # `cast` ships in the foundry image. A successful block-number RPC
+      # call proves the fork is live and accepting requests.
+      test: ["CMD-SHELL", "cast block-number --rpc-url http://localhost:8545 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # One-shot backfill jobs (profile: backfill).
+  #
+  # All eight share the same image as `worker` (Dockerfile.worker) and
+  # override CMD to invoke `python -m scripts.backfill.backfill_<family>`.
+  # `restart: "no"` mirrors Railway `restartPolicyType: NEVER`.
+  # `profiles: [backfill]` keeps them out of the default `up` set so
+  # `make dev` does not fire them on every boot.
+  #
+  # NOTE: Dockerfile.worker only COPYs `app/` — not `scripts/`. To run
+  # backfills against the same image without rebuilding/modifying that
+  # Dockerfile, we bind-mount `./scripts` into each backfill container.
+  # This is a dev-only convenience; in production each backfill service
+  # rebuilds the worker image with the scripts/ tree included.
+  # ---------------------------------------------------------------------------
+
+  backfill-tti:
+    image: basis-hub-worker:${BASIS_IMAGE_TAG:-dev}
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    command: ["python", "-m", "scripts.backfill.backfill_tti"]
+    env_file: env.dev
+    volumes:
+      - ./scripts:/app/scripts:ro
+    networks:
+      - basis
+    profiles: [backfill]
+    restart: "no"
+
+  backfill-cxri:
+    image: basis-hub-worker:${BASIS_IMAGE_TAG:-dev}
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    command: ["python", "-m", "scripts.backfill.backfill_cxri"]
+    env_file: env.dev
+    volumes:
+      - ./scripts:/app/scripts:ro
+    networks:
+      - basis
+    profiles: [backfill]
+    restart: "no"
+
+  backfill-vsri:
+    image: basis-hub-worker:${BASIS_IMAGE_TAG:-dev}
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    command: ["python", "-m", "scripts.backfill.backfill_vsri"]
+    env_file: env.dev
+    volumes:
+      - ./scripts:/app/scripts:ro
+    networks:
+      - basis
+    profiles: [backfill]
+    restart: "no"
+
+  backfill-dohi:
+    image: basis-hub-worker:${BASIS_IMAGE_TAG:-dev}
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    command: ["python", "-m", "scripts.backfill.backfill_dohi"]
+    env_file: env.dev
+    volumes:
+      - ./scripts:/app/scripts:ro
+    networks:
+      - basis
+    profiles: [backfill]
+    restart: "no"
+
+  backfill-bri:
+    image: basis-hub-worker:${BASIS_IMAGE_TAG:-dev}
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    command: ["python", "-m", "scripts.backfill.backfill_bri"]
+    env_file: env.dev
+    volumes:
+      - ./scripts:/app/scripts:ro
+    networks:
+      - basis
+    profiles: [backfill]
+    restart: "no"
+
+  backfill-lsti:
+    image: basis-hub-worker:${BASIS_IMAGE_TAG:-dev}
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    command: ["python", "-m", "scripts.backfill.backfill_lsti"]
+    env_file: env.dev
+    volumes:
+      - ./scripts:/app/scripts:ro
+    networks:
+      - basis
+    profiles: [backfill]
+    restart: "no"
+
+  backfill-rpi:
+    image: basis-hub-worker:${BASIS_IMAGE_TAG:-dev}
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    command: ["python", "-m", "scripts.backfill.backfill_rpi"]
+    env_file: env.dev
+    volumes:
+      - ./scripts:/app/scripts:ro
+    networks:
+      - basis
+    profiles: [backfill]
+    restart: "no"
+
+  backfill-psi:
+    image: basis-hub-worker:${BASIS_IMAGE_TAG:-dev}
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    command: ["python", "-m", "scripts.backfill.backfill_psi"]
+    env_file: env.dev
+    volumes:
+      - ./scripts:/app/scripts:ro
+    networks:
+      - basis
+    profiles: [backfill]
+    restart: "no"
