@@ -1291,18 +1291,18 @@ async def run_fast_cycle():
     # Table schema retained for future backfill. See basis_protocol_v9_3_constitution_amendment.md.
 
     # ==== 5. PEG 5-MIN + MARKET CHART + VOLATILITY SURFACES ====
-    # v9.13 coupled-write: app/data_layer/peg_monitor.run_peg_monitoring()
-    # is the canonical writer for all three domains (peg_snapshots_5m,
-    # market_chart_history, volatility_surfaces). Module attests each
-    # domain independently. Inline path retired per refactor PR; see
-    # docs/basis_protocol_v9_13_constitution_amendment.md.
+    # v9.13 coupled-write: app/data_layer/peg_monitor.run_peg_monitoring_scheduled()
+    # is the canonical scheduler entry for all three domains (peg_snapshots_5m,
+    # market_chart_history, volatility_surfaces). Module owns the freshness
+    # gate + 3-domain attestation. Worker is scheduler-only.
     _peg_coins = await fetch_all_async("SELECT id, coingecko_id FROM stablecoins WHERE scoring_enabled = TRUE AND coingecko_id IS NOT NULL") or []
     try:
         _peg_start = time.time()
-        from app.data_layer.peg_monitor import run_peg_monitoring
-        _peg_summary = await run_peg_monitoring()
+        from app.data_layer.peg_monitor import run_peg_monitoring_scheduled
+        _peg_summary = await run_peg_monitoring_scheduled()
         logger.error(
-            f"=== PEG_MONITOR: peg={_peg_summary.get('total_5m_snapshots', 0)}, "
+            f"=== PEG_MONITOR: status={_peg_summary.get('status')}, "
+            f"peg={_peg_summary.get('total_5m_snapshots', 0)}, "
             f"mchart={_peg_summary.get('total_mchart_rows', 0)}, "
             f"vs={_peg_summary.get('volatility_surfaces_computed', 0)}, "
             f"elapsed={time.time()-_peg_start:.1f}s ==="

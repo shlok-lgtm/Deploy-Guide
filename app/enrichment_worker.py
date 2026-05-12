@@ -900,8 +900,11 @@ async def run_enrichment_pipeline() -> dict:
     # ---- 5-minute peg monitoring + volatility surfaces ----
 
     async def _run_peg_monitoring():
-        from app.data_layer.peg_monitor import run_peg_monitoring
-        return await run_peg_monitoring()
+        # v9.13 module-canonical: scheduled wrapper owns freshness gate +
+        # 3-domain (peg/mchart/vol) attestation. Mirrors PR #182's
+        # dex_pool_ohlcv pattern.
+        from app.data_layer.peg_monitor import run_peg_monitoring_scheduled
+        return await run_peg_monitoring_scheduled()
 
     pipeline.add(EnrichmentTask(
         name="peg_5m_monitoring", func=_run_peg_monitoring,

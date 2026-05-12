@@ -352,7 +352,7 @@ def run_worker_loop():
                 ("bridge_flows", "SELECT MAX(snapshot_at) AS latest FROM bridge_flows",
                  lambda: __import__('app.data_layer.bridge_flow_collector', fromlist=['run_bridge_flow_collection']).run_bridge_flow_collection()),
                 ("peg_5m", "SELECT MAX(timestamp) AS latest FROM peg_snapshots_5m",
-                 lambda: __import__('app.data_layer.peg_monitor', fromlist=['run_peg_monitoring']).run_peg_monitoring()),
+                 lambda: __import__('app.data_layer.peg_monitor', fromlist=['run_peg_monitoring_scheduled']).run_peg_monitoring_scheduled()),
                 ("market_chart", "SELECT MAX(timestamp) AS latest FROM market_chart_history",
                  lambda: __import__('app.data_layer.market_chart_backfill', fromlist=['run_market_chart_backfill']).run_market_chart_backfill(backfill_days=90)),
                 ("governance", "SELECT MAX(collected_at) AS latest FROM governance_proposals WHERE source = 'snapshot'",
