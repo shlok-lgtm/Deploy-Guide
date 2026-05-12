@@ -76,13 +76,14 @@ echo "    $ENV_FILE exists."
 # Step 3: DATABASE_URL filled in?
 # -----------------------------------------------------------------------------
 echo "==> Validating DATABASE_URL in $ENV_FILE..."
-# Source env.dev in a subshell so we don't pollute this shell.
-set +u
-# shellcheck disable=SC1090
-. "./$ENV_FILE"
-set -u
-
-DB_URL="${DATABASE_URL:-}"
+# Do NOT `source` env.dev. Neon pooled URLs contain `&` (channel_binding=require),
+# which is a bash job-control separator when unquoted — sourcing silently
+# splits the URL and leaves DATABASE_URL empty (observed in the Codespace
+# boot on 2026-05-12). Parse the value out of the file instead. Strips
+# matching outer single/double quotes if present, takes the first match
+# if the key is duplicated.
+DB_URL=$(grep '^DATABASE_URL=' "$ENV_FILE" | head -1 | cut -d= -f2- \
+         | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
 if [ -z "$DB_URL" ] || [ "$DB_URL" = "REPLACE_ME_NEON_DEV_BRANCH_URL" ] || echo "$DB_URL" | grep -q "REPLACE_ME"; then
   cat <<EOF
 ERROR: DATABASE_URL in $ENV_FILE is unset or still contains a REPLACE_ME placeholder.
