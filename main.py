@@ -294,13 +294,18 @@ def run_worker_loop():
                     f"Profile rebuild complete: {profile_result.get('built', 0)} built, "
                     f"{profile_result.get('errors', 0)} errors out of {profile_result.get('total', 0)} addresses"
                 )
-                # Attest profiles
-                try:
-                    from app.state_attestation import attest_state
-                    if profile_result.get('built', 0) > 0:
-                        attest_state("wallet_profiles", [{"built": profile_result.get('built', 0), "total": profile_result.get('total', 0)}])
-                except Exception as ae:
-                    logger.debug(f"Profile attestation skipped: {ae}")
+                # v9.12 P2 hoist: wallet_profiles attestation moved into
+                # app/indexer/profiles.py::rebuild_all_profiles (terminal
+                # branches: built > 0 -> records, built == 0 ->
+                # ran_no_results, exception -> _record_cycle_error). The
+                # caller-side block previously here (`if built > 0 ->
+                # attest_state("wallet_profiles", ...)`) duplicated the
+                # module's attest. Module attest covers both gates, so
+                # caller-side is removed. See #198 / #193 for wrapper-
+                # shape precedent, and docs/audits/2026-05-12-p2-main-py-
+                # legacy-investigation.md for the multi-writer audit that
+                # scoped this PR down from the 4-domain bundle to
+                # wallet_profiles only.
             except Exception as e:
                 logger.warning(f"Profile rebuild failed: {e}")
 
