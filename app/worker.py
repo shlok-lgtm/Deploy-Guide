@@ -2357,29 +2357,27 @@ async def run_slow_cycle():
         _psi_status = "error"
         logger.warning(f"PSI expansion pipeline failed: {e}")
 
-    # Attest psi_discoveries from the live worker path. PR #137 patched
-    # the enrichment_worker task and PR #150 patched main.py:244, but
-    # this block at worker.py:2468 is the actual code that fires on
-    # every fast cycle. It runs `collect_collateral_exposure()` itself,
-    # which keeps protocol_collateral_exposure fresh, which closes the
-    # 24h db_gate on BOTH the enrichment task AND main.py's path —
-    # rendering both prior fixes dead code in practice.
-    #
-    # Heartbeat from here so freshness tracks the worker cycle, not the
-    # rare day when this block's own 24h gate happens to open.
+    # psi_discoveries attestation is owned by the module-canonical wrapper
+    # at app/data_layer/psi_discovery_monitor.py (v9.12 #198 / v9.13 #193
+    # pattern). The expansion workload above (depth ii) stays in this
+    # function; the wrapper consolidates the write path so paths B
+    # (main.py) and C (enrichment_worker.py) can be deleted without
+    # going silent. See docs/audits/2026-05-12-psi-discoveries-design-questions.md
+    # — operator sign-off issue #200, Q1=C / Q2=C / Q3=A / Q5=A.
     try:
-        from app.state_attestation import attest_state
-        await asyncio.to_thread(attest_state, "psi_discoveries", [{
-            "status": _psi_status,
-            "hours_since_last_expansion": round(_psi_hours_since, 2)
-                if isinstance(_psi_hours_since, (int, float)) else None,
-            "synced": _psi_synced,
-            "discovered": _psi_discovered,
-            "enriched": _psi_enriched,
-            "promoted": _psi_promoted,
-        }])
+        from app.data_layer.psi_discovery_monitor import (
+            run_psi_discovery_monitor_scheduled,
+        )
+        await run_psi_discovery_monitor_scheduled(
+            cycle_ts=datetime.now(timezone.utc),
+            status=_psi_status,
+            synced=_psi_synced,
+            discovered=_psi_discovered,
+            enriched=_psi_enriched,
+            promoted=_psi_promoted,
+        )
     except Exception as _e_attest:
-        logger.warning(f"psi_discoveries worker attest failed: {_e_attest}")
+        logger.warning(f"psi_discoveries wrapper call failed: {_e_attest}")
 
     # -------------------------------------------------------------------------
     # Pool wallet discovery — daily gate via DB timestamp
