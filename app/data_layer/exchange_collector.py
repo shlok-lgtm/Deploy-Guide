@@ -26,21 +26,28 @@ logger = logging.getLogger(__name__)
 API_KEY = os.environ.get("COINGECKO_API_KEY", "")
 CG_BASE = "https://pro-api.coingecko.com/api/v3" if API_KEY else "https://api.coingecko.com/api/v3"
 
-# Top 50 exchanges by volume (CoinGecko IDs)
+# The 15 exchanges here match worker.py's _EX (the pre-v9.12 inline list).
+# The module's original TOP_EXCHANGES had 50; the additional 35 (upbit,
+# bithumb, whitebit, etc.) are deferred per the Q2 design call (#195
+# findings). See docs/audits/2026-05-11-module-canonical-migration-plan.md
+# "Blocker 2 / Q2-extension" for the deferred list.
 TOP_EXCHANGES = [
     "binance", "coinbase-exchange", "okx", "bybit_spot",
     "kraken", "kucoin", "gate", "bitget",
     "htx", "crypto_com", "mexc", "bitfinex",
     "bitstamp", "gemini", "lbank",
-    # Extended to 50
-    "upbit", "bithumb", "whitebit", "bitrue", "poloniex",
-    "hashkey-exchange", "bitmart", "phemex", "deribit", "bitflyer",
-    "indodax", "korbit", "exmo", "btcturk", "tidex",
-    "coinone", "probit-exchange", "bitbank", "zaif", "coincheck",
-    "okcoin", "gopax", "liquid", "btcbox", "bkex",
-    "latoken", "hotbit", "coinex", "bigone", "digifinex",
-    "xt", "deepcoin", "toobit", "bingx", "bitvenus",
 ]
+
+# CoinGecko legacy-slug remap. The four ids on the left are the canonical
+# slugs in our `stablecoins.coingecko_id`-style registry, but
+# /exchanges/<id> on CG still requires the legacy form on the right.
+# Ported verbatim from worker.py's pre-v9.12 inline (`_EX_FIX`).
+_EX_FIX = {
+    "coinbase-exchange": "gdax",
+    "okx": "okex",
+    "htx": "huobi",
+    "mexc": "mxc",
+}
 
 
 def _headers() -> dict:
@@ -59,7 +66,8 @@ async def _fetch_exchange_data(
 
     await rate_limiter.acquire("coingecko")
 
-    url = f"{CG_BASE}/exchanges/{exchange_id}"
+    cg_slug = _EX_FIX.get(exchange_id, exchange_id)
+    url = f"{CG_BASE}/exchanges/{cg_slug}"
     start = time.time()
     try:
         resp = await client.get(url, headers=_headers(), timeout=15)
@@ -91,7 +99,8 @@ async def _fetch_exchange_volume_history(
 
     await rate_limiter.acquire("coingecko")
 
-    url = f"{CG_BASE}/exchanges/{exchange_id}/volume_chart/{days}"
+    cg_slug = _EX_FIX.get(exchange_id, exchange_id)
+    url = f"{CG_BASE}/exchanges/{cg_slug}/volume_chart/{days}"
     start = time.time()
     try:
         resp = await client.get(url, headers=_headers(), timeout=15)
@@ -297,3 +306,75 @@ async def run_exchange_collection() -> dict:
         "exchanges_processed": total_snapshots,
         "stablecoin_pairs": total_stablecoin_pairs,
     }
+
+
+_EXCHANGE_FRESHNESS_MINUTES = 50
+
+
+async def run_exchange_collection_scheduled() -> dict:
+    """Module-canonical scheduler entry per v9.12 (#179 / #193 pattern).
+
+    Returns a status dict regardless of branch:
+      - {"status": "skipped_fresh", "table_age_minutes": X}
+      - {"status": "ran", ...run_exchange_collection() result}
+      - {"status": "error", "error": str}
+
+    The state_attestations row for data_layer:exchange_snapshots fires
+    inside this function on the skipped_fresh / error branches; the work
+    branch lets run_exchange_collection do its own attest. Schedulers
+    (worker.py, main.py) MUST NOT re-attest.
+    """
+    from app.database import fetch_one
+    from app.data_layer.provenance_scaling import attest_data_batch
+
+    table_age_minutes: float = float(_EXCHANGE_FRESHNESS_MINUTES)
+    try:
+        latest = await asyncio.to_thread(
+            fetch_one, "SELECT MAX(snapshot_at) AS t FROM exchange_snapshots"
+        )
+        if latest and latest.get("t"):
+            _t = latest["t"]
+            if hasattr(_t, "tzinfo") and _t.tzinfo is None:
+                _t = _t.replace(tzinfo=timezone.utc)
+            if hasattr(_t, "timestamp"):
+                table_age_minutes = (
+                    datetime.now(timezone.utc) - _t
+                ).total_seconds() / 60
+    except Exception as e:
+        logger.warning(f"[exchange_collector] freshness check failed: {e}")
+        table_age_minutes = float(_EXCHANGE_FRESHNESS_MINUTES)
+
+    if table_age_minutes < _EXCHANGE_FRESHNESS_MINUTES:
+        skipped_payload = {
+            "status": "skipped_fresh",
+            "table_age_minutes": round(table_age_minutes, 2),
+        }
+        try:
+            await asyncio.to_thread(
+                attest_data_batch, "exchange_snapshots", [skipped_payload]
+            )
+        except Exception as e:
+            logger.warning(f"[exchange_collector] skipped-fresh attest failed: {e}")
+        return skipped_payload
+
+    try:
+        result = await run_exchange_collection()
+        return {
+            "status": "ran",
+            "table_age_minutes": round(table_age_minutes, 2),
+            **result,
+        }
+    except Exception as e:
+        logger.warning(f"[exchange_collector] scheduled run failed: {e}")
+        error_payload = {
+            "status": "error",
+            "table_age_minutes": round(table_age_minutes, 2),
+            "error": str(e)[:200],
+        }
+        try:
+            await asyncio.to_thread(
+                attest_data_batch, "exchange_snapshots", [error_payload]
+            )
+        except Exception:
+            pass
+        return {"status": "error", "error": str(e)[:500]}

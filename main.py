@@ -332,7 +332,7 @@ def run_worker_loop():
             # --- Every-cycle collectors (hourly) ---
             for name, coro_fn in [
                 ("liquidity_depth", lambda: __import__('app.data_layer.liquidity_collector', fromlist=['run_liquidity_collection']).run_liquidity_collection()),
-                ("exchange_snapshots", lambda: __import__('app.data_layer.exchange_collector', fromlist=['run_exchange_collection']).run_exchange_collection()),
+                ("exchange_snapshots", lambda: __import__('app.data_layer.exchange_collector', fromlist=['run_exchange_collection_scheduled']).run_exchange_collection_scheduled()),
                 ("entity_snapshots", lambda: __import__('app.data_layer.entity_snapshots', fromlist=['run_entity_snapshots']).run_entity_snapshots()),
             ]:
                 try:

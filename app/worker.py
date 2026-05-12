@@ -1183,67 +1183,25 @@ async def run_fast_cycle():
         logger.error(f"=== ENTITIES: {_es_ok} ok, {_es_err} err, total={_es_total} ===")
     except Exception as _e1: logger.error(f"=== ENTITIES FAILED: {_e1} ===")
 
-    # ==== 2. EXCHANGE SNAPSHOTS ====
-    _ex_ok, _ex_err = 0, 0
-    _ex_block_error: str | None = None
+    # ==== 2. EXCHANGE SNAPSHOTS (v9.12 module-canonical) ====
+    # Inline implementation removed — exchange_collector.run_exchange_collection_scheduled
+    # is the canonical writer for exchange_snapshots. Freshness gate +
+    # attestation (skipped_fresh / ran / error branches) all live inside
+    # the module. Worker is scheduler-only.
+    # The 15-id list and _EX_FIX legacy-slug remap moved with the inline
+    # into the module (per v9.12 P0 sweep + #195 Blocker 2 findings).
     try:
-        _EX = ["binance","coinbase-exchange","okx","bybit_spot","kraken","kucoin","gate",
-               "bitget","htx","crypto_com","mexc","bitfinex","bitstamp","gemini","lbank"]
-        # CoinGecko exchange ID corrections (IDs that 404)
-        _EX_FIX = {
-            "coinbase-exchange": "gdax",   # CoinGecko still uses legacy 'gdax' for Coinbase
-            "okx": "okex",                 # OKX listed as 'okex' on CoinGecko
-            "htx": "huobi",                # HTX rebranded from Huobi, CG still uses 'huobi'
-            "mexc": "mxc",                 # CoinGecko slug is 'mxc'
-        }
-        async with httpx.AsyncClient(timeout=30) as _xc:
-            for _xid in _EX:
-                _cg_xid = _EX_FIX.get(_xid, _xid)
-                try:
-                    _r = await _xc.get(f"{CG_BASE}/exchanges/{_cg_xid}", headers=CG_HDR)
-                    if _r.status_code != 200: continue
-                    _d = _r.json()
-                    await execute_async("""INSERT INTO exchange_snapshots
-                            (exchange_id,name,trust_score,trust_score_rank,trade_volume_24h_btc,
-                             year_established,country,trading_pairs,snapshot_at)
-                            VALUES(%s,%s,%s,%s,%s,%s,%s,%s,NOW())""",
-                            (_xid,_d.get("name"),_d.get("trust_score"),_d.get("trust_score_rank"),
-                             _sn(_d.get("trade_volume_24h_btc")),_d.get("year_established"),
-                             _d.get("country"),len(_d.get("tickers",[])) if _d.get("tickers") else None))
-                    _ex_ok += 1
-                except Exception as _e:
-                    _ex_err += 1
-                    if _ex_err <= 3: logger.error(f"exchange fail {_xid}: {_e}")
-                await asyncio.sleep(0.15)
-        _ex_total = await fetch_one_async("SELECT COUNT(*) as c FROM exchange_snapshots")
-        logger.error(f"=== EXCHANGES: {_ex_ok} ok, {_ex_err} err, total={_ex_total} ===")
+        _ex_start = time.time()
+        from app.data_layer.exchange_collector import run_exchange_collection_scheduled
+        _ex_summary = await run_exchange_collection_scheduled()
+        logger.error(
+            f"=== EXCHANGE_COLLECTOR: status={_ex_summary.get('status')}, "
+            f"exchanges_processed={_ex_summary.get('exchanges_processed', 0)}, "
+            f"stablecoin_pairs={_ex_summary.get('stablecoin_pairs', 0)}, "
+            f"elapsed={time.time()-_ex_start:.1f}s ==="
+        )
     except Exception as _e2:
-        _ex_block_error = f"{type(_e2).__name__}: {_e2}"[:200]
-        logger.error(f"=== EXCHANGES FAILED: {_e2} ===")
-
-    # Attest from the live worker.py path. Lives OUTSIDE the outer try
-    # because the Wave 3 #153 placement inside the try meant any failure
-    # of fetch_one_async/COUNT(*) or other inner step swallowed the attest
-    # too. Wave 5a moves it out so freshness signal advances independently
-    # of the block's success/failure. Status carries the block outcome.
-    try:
-        from app.data_layer.provenance_scaling import attest_data_batch
-        if _ex_block_error:
-            _ex_status = "block_failed"
-        elif _ex_ok:
-            _ex_status = "ok"
-        else:
-            _ex_status = "ran_no_inserts"
-        _ex_payload: dict = {
-            "status": _ex_status,
-            "exchanges_ok": _ex_ok,
-            "exchanges_err": _ex_err,
-        }
-        if _ex_block_error:
-            _ex_payload["error"] = _ex_block_error
-        await asyncio.to_thread(attest_data_batch, "exchange_snapshots", [_ex_payload])
-    except Exception as _e_attest:
-        logger.warning(f"exchange_snapshots worker attest failed: {_e_attest}")
+        logger.error(f"=== EXCHANGE_COLLECTOR SCHEDULED FAILED: {_e2} ===")
 
     # ==== 3. YIELD SNAPSHOTS (DeFiLlama) ====
     try:
