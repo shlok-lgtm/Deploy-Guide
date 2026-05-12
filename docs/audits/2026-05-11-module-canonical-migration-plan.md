@@ -283,7 +283,7 @@ is the unresolved design question gating the whole sweep.
 
 ### `market_chart_backfill.py` — attestation lineage drift
 
-**Surfaced:** 2026-05-12 #193 v9.13 pilot verification window.
+**Surfaced:** 2026-05-12 #196 v9.13 pilot verification window.
 
 **Substrate cite:** Over the 7.7h post-deploy window, peg_snapshots_5m and
 volatility_surfaces each attested 5 times via run_peg_monitoring_scheduled
@@ -306,4 +306,3 @@ affected. Defer until v9.12 sweep formally hits backfill paths.
 **When picked up:** Code-read market_chart_backfill.py first (lesson 10),
 then design call: should backfill follow v9.13 coupled-write (write all 3
 domains, attest all 3) or is backfill a different class entirely?
-
