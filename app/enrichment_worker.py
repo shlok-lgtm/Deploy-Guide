@@ -517,19 +517,22 @@ async def run_enrichment_pipeline() -> dict:
         timeout_seconds=600, group="data_collection", priority=3,
     ))
 
-    # ---- Web research ----
+    # ---- Web research (v9.12 module-canonical) ----
+    # The scheduled wrapper `run_web_research_scheduled` owns the 24h
+    # freshness gate (MAX(computed_at) across web_research_* index_ids)
+    # inside the module. Worker.py invokes it every slow cycle. The
+    # enrichment task here also routes through the wrapper — the
+    # external _db_gate is removed because the wrapper's internal gate
+    # is authoritative; an external gate would suppress the wrapper's
+    # skipped_fresh attest entirely.
 
     async def _run_web_research():
-        from app.collectors.web_research import run_web_research_collection
-        return await run_web_research_collection()
+        from app.collectors.web_research import run_web_research_scheduled
+        return await run_web_research_scheduled()
 
     pipeline.add(EnrichmentTask(
         name="web_research", func=_run_web_research,
         timeout_seconds=600, group="data_collection", priority=4,
-        gate_check=_db_gate(
-            "SELECT MAX(computed_at) AS latest FROM generic_index_scores WHERE index_id LIKE 'web_research_%'",
-            min_hours=24,
-        ),
     ))
 
     # ---- Governance events ----

@@ -576,3 +576,87 @@ async def run_web_research_collection() -> list[dict]:
             pass
 
     return results
+
+
+# =============================================================================
+# Module-canonical scheduled entry per v9.12 (#179 / #193 / #198 pattern)
+# =============================================================================
+
+_WEB_RESEARCH_FRESHNESS_HOURS = 24
+
+
+async def run_web_research_scheduled() -> dict:
+    """Module-canonical scheduler entry per v9.12.
+
+    Replaces the inline gate-plus-attest block previously at
+    worker.py:1816-1863. The scheduler (worker.py) calls this on its
+    cadence; the module decides whether to fire actual work and attests
+    its decision in either branch.
+
+    Returns a status dict regardless of branch:
+      - {"status": "skipped_fresh", "gate_age_hours": X}
+      - {"status": "ran", ...run_web_research_collection() result summary}
+      - {"status": "error", "error": str}
+
+    The state_attestations row for `web_research` fires inside this
+    function (skipped_fresh / error branches) or inside
+    run_web_research_collection() (ran branch, existing attest at the
+    bottom of that function). Schedulers MUST NOT re-attest.
+
+    The 24h gate reads MAX(computed_at) across ALL web_research_*
+    index_ids (see #156 / Wave-5b notes in punchlist); the gate
+    semantics are preserved exactly from the prior worker.py inline.
+    """
+    from app.database import fetch_one_async
+    from app.state_attestation import attest_state
+
+    gate_age_hours: float = float(_WEB_RESEARCH_FRESHNESS_HOURS) + 1
+    try:
+        latest = await fetch_one_async(
+            "SELECT MAX(computed_at) AS latest FROM generic_index_scores "
+            "WHERE index_id LIKE 'web_research_%'"
+        )
+        if latest and latest.get("latest"):
+            _t = latest["latest"]
+            if hasattr(_t, "tzinfo") and _t.tzinfo is None:
+                _t = _t.replace(tzinfo=timezone.utc)
+            if hasattr(_t, "timestamp"):
+                gate_age_hours = (
+                    datetime.now(timezone.utc) - _t
+                ).total_seconds() / 3600
+    except Exception as e:
+        logger.warning(f"[web_research] freshness check failed: {e}")
+        gate_age_hours = float(_WEB_RESEARCH_FRESHNESS_HOURS) + 1
+
+    if gate_age_hours < _WEB_RESEARCH_FRESHNESS_HOURS:
+        skipped_payload = {
+            "status": "skipped_fresh",
+            "gate_age_hours": round(gate_age_hours, 2),
+        }
+        try:
+            await asyncio.to_thread(attest_state, "web_research", [skipped_payload])
+        except Exception as e:
+            logger.warning(f"[web_research] skipped-fresh attest failed: {e}")
+        return skipped_payload
+
+    try:
+        results = await run_web_research_collection()
+        scored = sum(1 for r in results if "score" in r)
+        return {
+            "status": "ran",
+            "gate_age_hours": round(gate_age_hours, 2),
+            "scored": scored,
+            "results_count": len(results),
+        }
+    except Exception as e:
+        logger.warning(f"[web_research] scheduled run failed: {e}")
+        error_payload = {
+            "status": "error",
+            "gate_age_hours": round(gate_age_hours, 2),
+            "error": str(e)[:200],
+        }
+        try:
+            await asyncio.to_thread(attest_state, "web_research", [error_payload])
+        except Exception:
+            pass
+        return {"status": "error", "error": str(e)[:500]}
