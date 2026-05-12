@@ -506,3 +506,74 @@ async def run_peg_monitoring() -> dict:
         "micro_depegs": micro_depegs,
         "volatility_surfaces_computed": vol_surfaces,
     }
+
+
+_PEG_FRESHNESS_MINUTES = 50
+
+
+async def run_peg_monitoring_scheduled() -> dict:
+    """Module-canonical scheduler entry per v9.13: freshness gate + work + attestation.
+
+    Mirrors the v9.12 ohlcv pattern (PR #179). Returns a status dict
+    regardless of branch:
+      - {"status": "skipped_fresh", "table_age_minutes": X}
+      - {"status": "ran", ...run_peg_monitoring() result}
+      - {"status": "error", "error": str}
+
+    The state_attestations rows for all three coupled-write domains
+    (peg_snapshots_5m, market_chart_history, volatility_surfaces) fire
+    inside this function (skipped/error branches) or inside
+    run_peg_monitoring() (work branch). Schedulers MUST NOT re-attest.
+    """
+    from app.database import fetch_one
+    from app.data_layer.provenance_scaling import attest_data_batch
+
+    table_age_minutes: float = float(_PEG_FRESHNESS_MINUTES)
+    try:
+        latest = await asyncio.to_thread(
+            fetch_one, "SELECT MAX(timestamp) AS t FROM peg_snapshots_5m"
+        )
+        if latest and latest.get("t"):
+            _t = latest["t"]
+            if hasattr(_t, "tzinfo") and _t.tzinfo is None:
+                _t = _t.replace(tzinfo=timezone.utc)
+            if hasattr(_t, "timestamp"):
+                table_age_minutes = (
+                    datetime.now(timezone.utc) - _t
+                ).total_seconds() / 60
+    except Exception as e:
+        logger.warning(f"[peg_monitor] freshness check failed: {e}")
+        table_age_minutes = float(_PEG_FRESHNESS_MINUTES)
+
+    if table_age_minutes < _PEG_FRESHNESS_MINUTES:
+        skipped_payload = {
+            "status": "skipped_fresh",
+            "table_age_minutes": round(table_age_minutes, 2),
+        }
+        try:
+            for domain in ("peg_snapshots_5m", "market_chart_history", "volatility_surfaces"):
+                await asyncio.to_thread(attest_data_batch, domain, [skipped_payload])
+        except Exception as e:
+            logger.warning(f"[peg_monitor] skipped-fresh attest failed: {e}")
+        return skipped_payload
+
+    try:
+        result = await run_peg_monitoring()
+        return {
+            "status": "ran",
+            "table_age_minutes": round(table_age_minutes, 2),
+            **result,
+        }
+    except Exception as e:
+        logger.warning(f"[peg_monitor] scheduled run failed: {e}")
+        error_payload = {
+            "status": "error",
+            "table_age_minutes": round(table_age_minutes, 2),
+            "error": str(e)[:200],
+        }
+        try:
+            for domain in ("peg_snapshots_5m", "market_chart_history", "volatility_surfaces"):
+                await asyncio.to_thread(attest_data_batch, domain, [error_payload])
+        except Exception:
+            pass
+        return {"status": "error", "error": str(e)[:500]}
