@@ -167,3 +167,114 @@ cycle elapse (30 min – 2h per domain).
 - `docs/basis_punchlist_2026_05_11.md` Waves 1-7 + lessons 1-10
 - `docs/audits/2026-05-11-data-layer-cadence-audit.md`
 - `docs/audits/2026-05-11-enrichment-task-budget-audit.md`
+
+---
+
+## P0 sweep blockers — lesson 10 findings (2026-05-11 21:20Z)
+
+After PR #179 (`dex_pool_ohlcv`) verified clean, an attempted
+continuation of the P0 sweep (peg_snapshots_5m / exchange_snapshots /
+psi_discoveries) was halted before any refactor code was written.
+Reading each module first (lesson 10) surfaced per-domain
+architectural decisions that the v9.12 pattern from #179 does NOT
+generalize over. Each blocker is an operator decision, not a coding
+question.
+
+### Blocker 1 — `data_layer:peg_snapshots_5m` (also implicates `data_layer:market_chart_history`)
+
+**Live path** (worker.py:1310-1373, ~60 lines): one `await
+client.get(/coins/{cg}/market_chart, days=1)` per stablecoin → writes
+to BOTH `peg_snapshots_5m` AND `market_chart_history` in the same
+loop via `_bulk_insert_peg_and_mchart()`. Wave 5a attest hoisted out
+of the outer try (#162). No volatility surfaces.
+
+**Module path** (`app/data_layer/peg_monitor.py::run_peg_monitoring`):
+fetches `/market_chart` days=1 AND days=90 per stablecoin → writes
+`peg_snapshots_5m` and `volatility_surfaces` (1d + 90d). Does **not**
+write `market_chart_history`. Attests `peg_snapshots_5m`.
+
+Symmetric difference (what each path uniquely does):
+- worker.py only: writes `market_chart_history` (~13k rows/cycle)
+- module only: fetches days=90, writes `volatility_surfaces`
+
+Decision needed: should the v9.12 module own BOTH `peg_snapshots_5m`
+and `market_chart_history` (coupled-write via one fetch, what the
+worker.py inline already does), or should `market_chart_history` get
+a separate module/scheduler entry that does its own fetch (clean
+separation, double the CG /market_chart calls)?
+
+Risk: peg is the 30% weight component of SII. A botched refactor
+regresses peg freshness and silently corrupts the score. **Highest
+blast radius of any v9.12 candidate.**
+
+### Blocker 2 — `data_layer:exchange_snapshots`
+
+**Live path** (worker.py:1203-1263, ~60 lines): hardcoded 15-exchange
+list with `_EX_FIX` corrections (coinbase→gdax, htx→huobi, okx→okex,
+mexc→mxc). Stores 8 columns: `exchange_id, name, trust_score,
+trust_score_rank, trade_volume_24h_btc, year_established, country,
+trading_pairs (count)`.
+
+**Module path** (`app/data_layer/exchange_collector.py::run_exchange_collection`):
+iterates a `TOP_EXCHANGES` constant (not verified to match the
+worker.py list). Stores richer rows including
+`trade_volume_24h_usd` (estimated from BTC × 65000), `stablecoin_pairs`
+(top 50 pairs as JSON), `raw_data` jsonb with public_notice /
+alert_notice / status_updates, plus a 30d volume history call per
+exchange.
+
+Decision needed: (a) is the `exchange_snapshots` table schema
+prepared for `raw_data` jsonb and `stablecoin_pairs`?
+(b) does the operator want the richer data shape on prod? (c) does
+`TOP_EXCHANGES` match the hardcoded worker.py list (same coverage)
+or differ (silent coverage change)?
+
+Risk: silent data-shape change at the storage layer; some
+downstream consumers may rely on the 8-column shape.
+
+### Blocker 3 — `psi_discoveries`
+
+Three live paths (per #137 / #150 / #157 history):
+- `app/discovery.py` enrichment task
+- `main.py:262` legacy block
+- `app/worker.py:2548` inline (the actual live path per Wave 3)
+
+Each was patched in a separate wave. Their semantic equivalence has
+never been verified — each may produce subtly different `payload`
+shapes or different sets of discoveries.
+
+Decision needed: which of the three is the source of truth for
+"what counts as a psi_discovery"? The refactor cannot be a
+mechanical merge without resolving this.
+
+Risk: silent semantic drift in the discovery feed. Lower blast
+radius than peg (psi_discoveries doesn't gate SII), but high
+correctness sensitivity (discovery is a publication signal).
+
+### Recommendation
+
+These three are NOT v9.12 mechanical refactors; they are design
+decisions that change what data lands in prod. Do not proceed in
+the same shape as #179.
+
+Suggested per-domain path:
+- **peg/mchart:** propose a v9.13 micro-amendment that codifies
+  "coupled-write modules are allowed when they share a single
+  upstream fetch; the module owns both attestation domains." Then
+  refactor peg_monitor to also write market_chart_history.
+- **exchange_snapshots:** start by reconciling `TOP_EXCHANGES` ↔
+  worker.py's hardcoded list and confirming schema acceptance of
+  the module's richer rows. Then refactor.
+- **psi_discoveries:** diagnostic pass first — compare the three
+  paths' actual outputs over the next 24h of substrate. Then pick
+  one as canonical and retire the other two.
+
+The remaining P1/P2 domains (`wallets`, `web_research`,
+`psi_components`, `cda_extractions`, `wallet_profiles`, `actors`,
+`edges`) are likely each their own variant of the same problem.
+Each needs the lesson-10 reading before any refactor commit lands.
+
+Phase 2.3 dispatcher collapse remains the last item in the queue;
+it is blocked on every P0+P1 domain reaching SINGLE_WRITER state.
+The shape of "what does SINGLE_WRITER mean for peg+mchart coupled-write?"
+is the unresolved design question gating the whole sweep.
