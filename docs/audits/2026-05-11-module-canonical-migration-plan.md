@@ -28,7 +28,7 @@ schedule the module from worker.py.
 
 | domain | worker/main site | module site | priority¹ | notes |
 |---|---|---|---|---|
-| `psi_discoveries` | `worker.py:2548`, `main.py:262` | (none — enrichment task wraps `app/discovery.py`) | **P0** | 3-PR history (#137, #150, #157). Highest-friction case. |
+| `psi_discoveries` | `worker.py:2548`, `main.py:262` | `app/enrichment_worker.py::_run_psi_expansion` (lines 263-306, registered at 774-781) | **P0** | 3-PR history (#137, #150, #157). Highest-friction case. |
 | ~~`data_layer:peg_snapshots_5m` (+ `market_chart_history` + `volatility_surfaces`)~~ ✅ | ~~worker.py:1310-1373 inline~~ removed | `app/data_layer/peg_monitor.py::run_peg_monitoring_scheduled` | **P0 → DONE** | First v9.13 coupled-write refactor. #188 made the module canonical writer for all 3 domains; this PR adds the scheduled wrapper (freshness gate + 3-domain skip/error attest) and routes worker, enrichment_worker, and main.py through it. Dispatcher heartbeat at worker.py:2787 left in place until Phase 2.3. |
 | ~~`data_layer:exchange_snapshots`~~ ✅ | ~~worker.py:1186-1246 inline~~ removed | `app/data_layer/exchange_collector.py::run_exchange_collection_scheduled` | **P0 → DONE** | Q1 answered by #197 (migration 109 — schema replay). Q2 answered: 15 exchanges (worker._EX list), `_EX_FIX` legacy-slug remap ported into module. 35 additional exchanges deferred to Q2-extension (see below). enrichment_worker.py task entry removed (was kept closed by inline; lesson 6 family). main.py daily lambda switched. Dispatcher heartbeat at worker.py:2787 left in place until Phase 2.3. |
 | ~~`data_layer:dex_pool_ohlcv`~~ ✅ | ~~worker.py inline~~ removed | `app/data_layer/ohlcv_collector.py::run_ohlcv_collection_scheduled` | **P0 → DONE** | Pilot landed this session; module-canonical via `run_ohlcv_collection_scheduled()`. Dispatcher heartbeat at worker.py:2778 left in place until Phase 2.3. |
@@ -118,8 +118,8 @@ Halt conditions:
 3. `data_layer:exchange_snapshots` — module is `exchange_collector.py`;
    similar shape.
 4. `psi_discoveries` — three live paths (worker.py:2548, main.py:262,
-   and the enrichment task at app/discovery.py). Highest historical
-   friction. Coordinate carefully — verify all three retire.
+   and the enrichment task at app/enrichment_worker.py::_run_psi_expansion).
+   Highest historical friction. Coordinate carefully — verify all three retire.
 5. `wallets` — driven by pipeline; the worker.py attest is the
    wave-3 + wave-5b heartbeat. Move into the pipeline's own status
    surface.
@@ -235,7 +235,7 @@ downstream consumers may rely on the 8-column shape.
 ### Blocker 3 — `psi_discoveries`
 
 Three live paths (per #137 / #150 / #157 history):
-- `app/discovery.py` enrichment task
+- `app/enrichment_worker.py::_run_psi_expansion` enrichment task (lines 263-306, registered at 774-781)
 - `main.py:262` legacy block
 - `app/worker.py:2548` inline (the actual live path per Wave 3)
 
