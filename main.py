@@ -189,23 +189,9 @@ def run_worker_loop():
                 f"{reindex_result.get('errors', 0)} errors, "
                 f"{reindex_result.get('remaining', '?')} remaining"
             )
-            # Attest wallet batch — always, even when processed=0.
-            # run_pipeline_batch internally attests via pipeline.py:806, but
-            # we keep this caller-side attestation for the main-thread path
-            # (different methodology context). Gate removed for the same
-            # reason as the inner site.
-            try:
-                from app.state_attestation import attest_state
-                attest_state(
-                    "wallets",
-                    [{
-                        "cycle": "batch_reindex",
-                        "processed": reindex_result.get('processed', 0),
-                        "scored": reindex_result.get('scored', 0),
-                    }],
-                )
-            except Exception as ae:
-                logger.debug(f"Wallet attestation skipped: {ae}")
+            # Caller-side wallets attestation removed — was structurally dead
+            # (coroutine-never-awaited on run_pipeline_batch, see #202 §F1).
+            # Inner attestation in app/indexer/pipeline.py covers this domain.
         except Exception as e:
             logger.warning(f"Wallet batch re-index failed: {e}")
 
