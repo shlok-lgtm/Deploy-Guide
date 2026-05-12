@@ -291,4 +291,11 @@ Spokes never import from `app/`. They never touch the database directly.
 - Install heavy dependencies without asking first
 - Use `sudo` for anything
 - Hardcode stablecoin lists — the registry is dynamic
+- Access, read, clone, or fetch `basis-protocol/scenarios` from any
+  basis-hub session. That repo is the holdout eval test set for CC
+  itself; touching it from a basis-hub session burns scenarios.
+  Do not extend MCP allowlists to include it. Do not link to
+  scenario folders from basis-hub issues, PRs, or docs. Do not paste
+  scenario content into any basis-hub-facing surface. See
+  `docs/development/phase-b-isolation.md` for full rationale.
 - Create arrays/lists like `['usdc', 'usdt', 'dai', ...]` — always query
