@@ -278,3 +278,32 @@ Phase 2.3 dispatcher collapse remains the last item in the queue;
 it is blocked on every P0+P1 domain reaching SINGLE_WRITER state.
 The shape of "what does SINGLE_WRITER mean for peg+mchart coupled-write?"
 is the unresolved design question gating the whole sweep.
+
+## Wave-N candidates
+
+### `market_chart_backfill.py` — attestation lineage drift
+
+**Surfaced:** 2026-05-12 #193 v9.13 pilot verification window.
+
+**Substrate cite:** Over the 7.7h post-deploy window, peg_snapshots_5m and
+volatility_surfaces each attested 5 times via run_peg_monitoring_scheduled
+(50-min gate). market_chart_history attested 6 times — one extra at 09:04
+UTC without peg/vs companions.
+
+**Hypothesis (per lesson 10, NOT verified by code-read):** The third writer
+is app/data_layer/market_chart_backfill.py (writes to both mchart and vs
+per the v9.13 design grep). Possible explanations:
+  (a) backfill attests to mchart but not vs (lineage drift, v9.11-class)
+  (b) backfill writes mchart unconditionally, vs conditionally
+  (c) a fourth writer touches mchart only
+
+**Class:** v9.11-style live-path drift. Same shape v9.13 was designed to
+fix, applied to backfill rather than scheduled-work path.
+
+**Priority:** P2. No functional harm — mchart fresh, vs fresh, no consumer
+affected. Defer until v9.12 sweep formally hits backfill paths.
+
+**When picked up:** Code-read market_chart_backfill.py first (lesson 10),
+then design call: should backfill follow v9.13 coupled-write (write all 3
+domains, attest all 3) or is backfill a different class entirely?
+
