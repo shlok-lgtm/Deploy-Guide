@@ -154,19 +154,15 @@ def run_worker_loop():
         if hours_since_cda >= cda_interval_hours:
             try:
                 logger.info("Running CDA collection pipeline...")
-                from app.services.cda_collector import run_collection
-                asyncio.run(run_collection())
+                # v9.12 module-canonical: scheduler wrapper attests
+                # skipped_fresh / ran / error inline. Replaces the
+                # post-hoc 2h SELECT attest that left
+                # state_attestations.domain='cda_extractions' empty for
+                # 30+ days (#207). Do NOT re-attest here.
+                from app.services.cda_collector import run_collection_scheduled
+                cda_result = asyncio.run(run_collection_scheduled())
                 last_cda_at = time.time()
-                logger.info("CDA collection complete")
-                # Attest CDA extractions
-                try:
-                    from app.state_attestation import attest_state
-                    from app.database import fetch_all as _fa
-                    cda_rows = _fa("SELECT asset_symbol, field_name, extracted_value, source_url FROM cda_vendor_extractions WHERE extracted_at > NOW() - INTERVAL '2 hours'")
-                    if cda_rows:
-                        attest_state("cda_extractions", [dict(r) for r in cda_rows])
-                except Exception as ae:
-                    logger.debug(f"CDA attestation skipped: {ae}")
+                logger.info(f"CDA collection complete: {cda_result.get('status')}")
             except Exception as e:
                 logger.warning(f"CDA collection failed: {e}")
 
