@@ -471,22 +471,19 @@ def run_worker_loop():
         hours_since_edge_build = (time.time() - last_edge_build_at) / 3600
         edge_stale = hours_since_edge_build >= 10
         if edge_stale:
+            # v9.12 #209: module-canonical wrapper owns attestation
+            # (Bug A: gate moved into wrapper; attest ALWAYS in `ran` branch.
+            #  Bug B: chain inside payload, entity_id stays NULL for consumers.)
             for edge_chain in ["ethereum", "base", "arbitrum", "solana"]:
                 try:
-                    from app.indexer.edges import run_edge_builder
+                    from app.indexer.edges import run_edge_builder_scheduled
                     logger.info(f"Running edge builder for {edge_chain} (top 200 unbuilt wallets by value)...")
-                    edge_result = asyncio.run(run_edge_builder(max_wallets=200, priority="value", chain=edge_chain))
+                    edge_outcome = asyncio.run(run_edge_builder_scheduled(edge_chain, time.time()))
                     logger.info(
-                        f"Edge builder ({edge_chain}) complete: {edge_result.get('wallets_processed', 0)} wallets, "
-                        f"{edge_result.get('total_edges_created', 0)} edges"
+                        f"Edge builder ({edge_chain}) {edge_outcome.get('status', 'unknown')}: "
+                        f"wallets={edge_outcome.get('wallets_processed', 0)}, "
+                        f"edges={edge_outcome.get('edges_upserted', 0)}"
                     )
-                    # Attest edges for this chain
-                    try:
-                        from app.state_attestation import attest_state
-                        if edge_result.get('total_edges_created', 0) > 0:
-                            attest_state("edges", [{"chain": edge_chain, "wallets": edge_result.get('wallets_processed', 0), "edges": edge_result.get('total_edges_created', 0)}])
-                    except Exception as ae:
-                        logger.debug(f"Edge attestation skipped for {edge_chain}: {ae}")
                 except Exception as e:
                     logger.warning(f"Edge building failed for {edge_chain}: {e}")
 

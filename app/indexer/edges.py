@@ -444,24 +444,10 @@ async def run_edge_builder(
         f"new_edges={total_edges}, transfers={total_transfers}"
     )
 
-    # Attest edges for this chain
-    try:
-        from app.state_attestation import attest_state
-        if total_edges > 0:
-            await asyncio.to_thread(attest_state, "edges", [{"chain": chain, "wallets": wallets_processed, "edges": total_edges}], chain)
-    except asyncio.CancelledError:
-        raise
-    except Exception as ae:
-        logger.warning(f"Edge attestation skipped for {chain}: {ae}")
-        try:
-            from app.worker import _record_cycle_error
-            _record_cycle_error(
-                error_type="indexer_run_edge_builder_attestation_failure",
-                error_message=str(ae)[:500],
-                cycle_phase="wallet_edges",
-            )
-        except Exception:
-            pass
+    # Attestation moved to run_edge_builder_scheduled wrapper (v9.12 #209).
+    # See app/data_layer/exchange_collector.py::run_exchange_collection_scheduled
+    # for the #198 pattern precedent. Schedulers MUST call the wrapper, NOT
+    # this function directly, so attestation fires once per scheduled call.
 
     return {
         "chain": chain,
@@ -469,6 +455,102 @@ async def run_edge_builder(
         "total_edges_created": total_edges,
         "total_transfers": total_transfers,
     }
+
+
+# =============================================================================
+# Scheduled wrapper — v9.12 module-canonical entry per #198 / #209
+# =============================================================================
+
+# Freshness gate: matches the pre-v9.12 main.py:471 10h cadence (Q4 doc).
+_EDGE_BUILDER_FRESHNESS_HOURS = 10
+
+
+async def run_edge_builder_scheduled(chain: str, cycle_ts=None) -> dict:
+    """Module-canonical scheduler entry for edge building (v9.12 #209).
+
+    Per-chain wrapper. Returns a status dict regardless of branch:
+      - {"status": "skipped_fresh", "chain": chain, "table_age_hours": X}
+      - {"status": "ran", "chain": chain, ...run_edge_builder() result}
+      - {"status": "error", "chain": chain, "error": str}
+
+    Attestation ALWAYS fires in the `ran` branch (Bug A fix from #209 doc:
+    the prior `total_edges > 0` gate rarely opened because ON CONFLICT
+    DO UPDATE inflates edges_upserted with steady-state UPDATEs).
+
+    `chain` lives INSIDE the payload dict (Bug B fix). The attest_state
+    call passes NO 3rd positional, so entity_id stays NULL — matching
+    consumer convention (coherence.py:159 filters `entity_id IS NULL`;
+    report.py:327 + pulse_generator.py:260 call get_latest_attestation
+    without entity_id, which filters IS NULL via state_attestation.py:84).
+
+    Q5 (true inserted count via `RETURNING (xmax = 0)`) is deferred.
+    """
+    from app.state_attestation import attest_state
+
+    # Per-chain freshness check via wallet_graph.wallet_edges MAX(updated_at).
+    # Preserves the pre-v9.12 main.py:471 10h cadence (Q4 unanswered in doc).
+    table_age_hours: float = float(_EDGE_BUILDER_FRESHNESS_HOURS)
+    try:
+        latest = await fetch_one_async(
+            "SELECT MAX(updated_at) AS t FROM wallet_graph.wallet_edges WHERE chain = %s",
+            (chain,),
+        )
+        if latest and latest.get("t"):
+            _t = latest["t"]
+            if hasattr(_t, "tzinfo") and _t.tzinfo is None:
+                _t = _t.replace(tzinfo=timezone.utc)
+            table_age_hours = (
+                datetime.now(timezone.utc) - _t
+            ).total_seconds() / 3600
+    except Exception as e:
+        logger.warning(f"[edge_builder_scheduled] {chain} freshness check failed: {e}")
+
+    if table_age_hours < _EDGE_BUILDER_FRESHNESS_HOURS:
+        payload = {
+            "status": "skipped_fresh",
+            "chain": chain,
+            "table_age_hours": round(table_age_hours, 2),
+        }
+        try:
+            await asyncio.to_thread(attest_state, "edges", [payload])
+        except Exception as e:
+            logger.warning(f"[edge_builder_scheduled] {chain} skipped-fresh attest failed: {e}")
+        return payload
+
+    try:
+        result = await run_edge_builder(max_wallets=200, priority="value", chain=chain)
+        payload = {
+            "status": "ran",
+            "chain": chain,
+            "wallets_processed": result.get("wallets_processed", 0),
+            "edges_upserted": result.get("total_edges_created", 0),
+            "transfers_processed": result.get("total_transfers", 0),
+            "table_age_hours": round(table_age_hours, 2),
+        }
+        # Bug A fix: attest ALWAYS in `ran` branch.
+        # Bug B fix: NO 3rd positional — entity_id stays NULL.
+        try:
+            await asyncio.to_thread(attest_state, "edges", [payload])
+        except Exception as e:
+            logger.warning(f"[edge_builder_scheduled] {chain} ran-attest failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="indexer_run_edge_builder_attestation_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="wallet_edges",
+                )
+            except Exception:
+                pass
+        return payload
+    except Exception as e:
+        logger.warning(f"[edge_builder_scheduled] {chain} run failed: {e}")
+        payload = {"status": "error", "chain": chain, "error": str(e)[:200]}
+        try:
+            await asyncio.to_thread(attest_state, "edges", [payload])
+        except Exception:
+            pass
+        return payload
 
 
 # =============================================================================
