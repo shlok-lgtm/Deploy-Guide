@@ -278,3 +278,257 @@ Phase 2.3 dispatcher collapse remains the last item in the queue;
 it is blocked on every P0+P1 domain reaching SINGLE_WRITER state.
 The shape of "what does SINGLE_WRITER mean for peg+mchart coupled-write?"
 is the unresolved design question gating the whole sweep.
+
+---
+
+## Blocker 2 — `exchange_snapshots`: investigation findings (2026-05-12)
+
+Diagnostic pass per the P0 sweep continuation. **No refactor**; this
+section reframes the design questions surfaced in #185 based on actual
+substrate. The original Blocker 2 hypothesis ("module writes richer
+rows than worker") is half-correct — it's also writing rows to a
+schema that no longer has the matching columns.
+
+### 1. Live paths — column-by-column write comparison
+
+**worker.py:1186-1222** (`run_fast_cycle`, lines 1186-1212 is the
+write block):
+
+  - Hardcoded list `_EX` (15 ids), `_EX_FIX` remap for the four CG
+    legacy slugs (`coinbase-exchange→gdax`, `okx→okex`, `htx→huobi`,
+    `mexc→mxc`).
+  - INSERT at worker.py:1206-1212 writes **8 data columns**:
+    `(exchange_id, name, trust_score, trust_score_rank,
+    trade_volume_24h_btc, year_established, country, trading_pairs,
+    snapshot_at NOW())`.
+  - No `ON CONFLICT` clause; relies on `snapshot_at NOW()` for
+    unique-constraint avoidance.
+  - Attest fires from worker.py:1244 unconditionally outside the
+    outer try (Wave 5a hoist).
+
+**app/data_layer/exchange_collector.py** (`run_exchange_collection`,
+lines 182-298):
+
+  - `TOP_EXCHANGES` constant at line 30 — **50 ids**, first 15 are
+    a strict superset of worker's `_EX` (identical order), then 35
+    additions (`upbit, bithumb, whitebit, … bitvenus`).
+  - **No `_EX_FIX` remap** — the module calls `/exchanges/{cg_id}`
+    directly. For `coinbase-exchange`, `okx`, `htx`, `mexc` the CG
+    legacy-slug endpoints would 404 (the `_fetch_exchange_data`
+    helper handles that as empty-dict, continues silently — see
+    line 70-82 + 200-201).
+  - INSERT at exchange_collector.py:153-171 writes **12 data
+    columns**: worker's 8 PLUS `trade_volume_24h_usd`,
+    `has_trading_incentive`, `stablecoin_pairs` (jsonb),
+    `raw_data` (jsonb).
+  - `ON CONFLICT (exchange_id, snapshot_at) DO UPDATE`.
+  - Attest fires from exchange_collector.py:274.
+
+### 2. Schema — substrate cite
+
+```sql
+SELECT column_name, data_type FROM information_schema.columns
+WHERE table_name='exchange_snapshots' AND table_schema='public'
+ORDER BY ordinal_position;
+```
+
+Result (11 columns total):
+
+  id, exchange_id, name, trust_score, trust_score_rank,
+  trade_volume_24h_btc, year_established, country, trading_pairs,
+  snapshot_at, provenance_proof_id
+
+**Migration 058** (`058_universal_data_layer.sql:208-224`) declares
+14 columns — the actual schema is **missing 4**:
+
+  - `trade_volume_24h_usd` NUMERIC          ← module writes this
+  - `has_trading_incentive` BOOLEAN         ← module writes this
+  - `stablecoin_pairs` JSONB                ← module writes this
+  - `raw_data` JSONB                        ← module writes this
+
+`migrations` table records 058 as applied on 2026-04-13. This is
+the **same pg_dump silent-drift pattern as Wave 2.5 / Wave 9c**:
+migration recorded as applied, table created, but partial DDL
+content lost across the dump/restore.
+
+`provenance_proof_id` (from migration 059) is present in schema
+but written by neither writer path — it's back-filled by
+`link_batch_to_proof` from the attestation pipeline.
+
+### 3. Substrate — what's actually in the table (lesson 8: COUNT before MAX)
+
+```sql
+SELECT COUNT(*),
+       COUNT(DISTINCT exchange_id) AS distinct_ex,
+       COUNT(*) FILTER (WHERE provenance_proof_id IS NOT NULL) AS prov_populated,
+       COUNT(*) FILTER (WHERE trade_volume_24h_btc IS NOT NULL) AS btc_vol_populated,
+       COUNT(*) FILTER (WHERE trading_pairs IS NOT NULL) AS trading_pairs_populated,
+       COUNT(*) FILTER (WHERE name IS NOT NULL) AS name_populated,
+       MIN(snapshot_at) AS earliest,
+       MAX(snapshot_at) AS latest,
+       NOW() - MAX(snapshot_at) AS staleness
+FROM exchange_snapshots;
+```
+
+Result (2026-05-12 09:15 UTC):
+
+```
+total_rows:                   2099
+distinct_ex:                    15      ← worker._EX, not module.TOP_EXCHANGES
+btc_vol_populated:            2099 / 2099
+trading_pairs_populated:      2099 / 2099
+name_populated:               2099 / 2099
+prov_populated:               1545 / 2099   (73.6%)
+earliest:        2026-04-21 09:17 UTC
+latest:          2026-05-12 08:53 UTC
+staleness:       ~25 min
+```
+
+`distinct_ex = 15` is the definitive evidence: **the module path
+has never successfully inserted a row.** Worker.py inline is the
+only writer.
+
+### 4. Consumers — `FROM exchange_snapshots` grep
+
+| file:line | reads | works on current schema? |
+|---|---|---|
+| `app/server.py:7876` | `SELECT *` (detail endpoint) | ✅ returns 11 columns |
+| `app/server.py:7886` | `SELECT … trade_volume_24h_usd … ORDER BY trade_volume_24h_usd` | ❌ **raises `column does not exist`** |
+| `app/data_layer/coherence_guards.py:334` | `trust_score` | ✅ |
+| `app/data_layer/state_growth.py:167` | `COUNT(*)` | ✅ |
+| `app/data_layer/index_simulator.py:348` | `DISTINCT exchange_id` | ✅ |
+| `app/enrichment_worker.py:880` | `MAX(snapshot_at)` (gate check) | ✅ |
+| `app/worker.py:1218` | `COUNT(*)` (logging) | ✅ |
+
+**Verified by running the actual query against prod Neon:**
+`SELECT … trade_volume_24h_usd … FROM exchange_snapshots …`
+returned `NeonDbError: column "trade_volume_24h_usd" does not
+exist`. The `/api/data/exchanges` endpoint in list mode (when
+called without an `exchange_id` query param) is broken and has
+been since the Neon migration's silent column loss.
+
+### 5. Why the module path's failures aren't in cycle_errors
+
+```sql
+SELECT COUNT(*) FROM cycle_errors
+WHERE occurred_at > NOW() - INTERVAL '24 hours'
+  AND (cycle_phase ILIKE '%exchange%' OR error_message ILIKE '%exchange_snapshots%');
+```
+
+Result: **0 rows.**
+
+Three reasons the broken module path doesn't surface as cycle errors:
+
+  - `main.py:335` calls `run_exchange_collection()` every fast cycle
+    inside a `try/except Exception as e: logger.error(…); results[name]
+    = {"error": str(e)}` block at main.py:342-344 — failure is logged
+    to stdout but **not recorded via `_record_cycle_error`**.
+  - `enrichment_worker.py:872` registers the module call gated on
+    `SELECT MAX(snapshot_at) AS latest FROM exchange_snapshots` with
+    `min_hours=1`. Worker.py keeps the table fresh hourly, so this
+    gate **always skips** in steady state. Same lesson-6 pattern as
+    psi_discoveries / peg pre-Wave-5.
+  - The module's `_store_exchange_snapshots` at exchange_collector.py:174-176
+    catches `Exception` per-row and logs the first 3 — those go to
+    stdout only.
+
+So in steady state every fast cycle has both a successful worker.py
+inline write of 15 rows AND a silent failure of the module path's
+12-column INSERT against the 8-column schema, but only the success
+is visible in substrate.
+
+### 6. Exchange list reconciliation
+
+  worker._EX  (15):   binance, coinbase-exchange, okx, bybit_spot,
+                      kraken, kucoin, gate, bitget, htx, crypto_com,
+                      mexc, bitfinex, bitstamp, gemini, lbank
+
+  module.TOP_EXCHANGES (50): worker._EX + 35 more
+                      (upbit, bithumb, whitebit, bitrue, poloniex,
+                      hashkey-exchange, bitmart, phemex, deribit,
+                      bitflyer, indodax, korbit, exmo, btcturk,
+                      tidex, coinone, probit-exchange, bitbank,
+                      zaif, coincheck, okcoin, gopax, liquid,
+                      btcbox, bkex, latoken, hotbit, coinex, bigone,
+                      digifinex, xt, deepcoin, toobit, bingx,
+                      bitvenus)
+
+Module is a strict superset; first 15 entries match worker's order
+exactly. **But** module lacks `_EX_FIX` so the four CG-legacy ids
+(`coinbase-exchange, okx, htx, mexc`) would 404 if the module ever
+got past its broken INSERT.
+
+### 7. Halt-condition assessment vs the briefing
+
+| condition | met? |
+|---|---|
+| Schema has >11 columns (drift since #185) | No — schema has exactly 11, but migration 058 declared 14. Drift is in the OTHER direction (schema is shorter than the migrations table claims). |
+| Consumer grep surfaces heavy reader on `raw_data` | Not on `raw_data`. But `server.py:7886` is a heavy reader on `trade_volume_24h_usd` — different column, same family of missing data. |
+| Paths writing to DIFFERENT TABLES (v9.11-style drift) | No — both target `exchange_snapshots`. The drift is column-shape, not table-shape. |
+
+### 8. Reframed design questions (operator decides)
+
+The pre-investigation questions assumed the schema was prepared for
+the module's richer rows and the design question was about
+"acceptance." Substrate says otherwise:
+
+**Q1 — schema replay or schema trim?**
+   Migration 058 was supposed to give us 14 columns. We have 11.
+   Two paths forward:
+   - (a) **Replay missing DDL** for the 4 missing columns (same
+     pattern as Wave 9c's migration 108 for the 3 pg-dump-drift
+     tables). Then the module's INSERT and `server.py:7886` both
+     start working. This restores the originally-intended schema.
+   - (b) **Trim the module** to match the current (8-col) schema.
+     Cheaper but loses `stablecoin_pairs` + `raw_data` data
+     forever (and quietly fixes `server.py:7886` by removing the
+     broken column reference).
+
+   Recommendation hint: (a) — three downstream consumers in
+   migration 058's design (the original schema declared the four
+   columns for a reason, and `server.py:7886` is one consumer).
+   But the operator owns this call.
+
+**Q2 — 15 exchanges or 50?**
+   Module's `TOP_EXCHANGES` is the worker's `_EX` + 35 more. If we
+   adopt the module path:
+   - The 4 CG-legacy ids (`coinbase-exchange, okx, htx, mexc`)
+     need `_EX_FIX` ported over or the slugs corrected in
+     `TOP_EXCHANGES` (so 11 of the original 15 keep working).
+   - 35 additional /exchanges/{id} + /exchanges/{id}/volume_chart/30
+     calls per cycle. CG pro paid tier (500/min, 500k credits/month)
+     handles this comfortably.
+
+**Q3 — provenance_proof_id schema-only column.**
+   Already documented: populated by `link_batch_to_proof` after
+   the attest batch is written. Not a writer-path question. No
+   action needed.
+
+**Q4 — silently-broken `server.py:7886` endpoint.**
+   Independent of the refactor decision. Either (a) restoring the
+   missing column or (b) editing the query to use
+   `trade_volume_24h_btc` fixes it. Best handled in whichever
+   PR implements Q1.
+
+### 9. What this means for the v9.12 sweep order
+
+`data_layer:exchange_snapshots` is **not** "module-canonical
+refactor blocked on a design question." It's "module path silently
+broken on a schema drift; ALSO refactor needs design call."
+
+The schema decision (Q1) has to land before the v9.12 module-
+canonical refactor here. Recommendation: split into two PRs:
+
+  1. **Schema replay PR** (migration 109, mirrors 108) — adds the
+     4 missing columns idempotently. Verifies `server.py:7886`
+     unbroken. No refactor.
+  2. **Module-canonical refactor PR** — once schema is restored,
+     follows the #193 / v9.13 pilot pattern: scheduler wrapper +
+     `_EX_FIX` ported + worker.py inline removed.
+
+PR #1 is safe to land before answering Q2 because it only restores
+columns to migration-058 state; nothing's writing those columns
+yet so the additions are harmless.
+
+PR #2 stays blocked on Q2 (list reconciliation).
+
