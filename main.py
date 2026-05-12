@@ -339,9 +339,35 @@ def run_worker_loop():
                     r = await coro_fn()
                     results[name] = r
                     logger.error(f"=== {name} COMPLETE: {r} ===")
+                except asyncio.CancelledError:
+                    raise
                 except Exception as e:
-                    logger.error(f"=== {name} FAILED: {type(e).__name__}: {e} ===")
+                    # #195 followup: surface failures into cycle_errors +
+                    # state_attestations. Inner wrappers attest only the
+                    # paths they cover (provenance, lookups); a top-level
+                    # raise from coro_fn (e.g. schema-drift INSERT, import
+                    # failure) used to be log-only here, never landing in
+                    # cycle_errors. The catch stays broad-but-loud so the
+                    # other every-cycle collectors in this loop still run.
+                    logger.exception(f"=== {name} FAILED: {type(e).__name__}: {e} ===")
                     results[name] = {"error": str(e)}
+                    try:
+                        from app.worker import _record_cycle_error
+                        _record_cycle_error(
+                            error_type=f"data_layer_{name}_every_cycle_failure",
+                            error_message=f"{type(e).__name__}: {e}"[:500],
+                            cycle_phase=f"data_layer:{name}",
+                        )
+                    except Exception:  # silenced-by-design: cycle_errors insert must not abort the loop
+                        pass
+                    try:
+                        from app.state_attestation import attest_state
+                        attest_state(
+                            f"data_layer:{name}",
+                            [{"status": "error", "error_type": type(e).__name__, "error": str(e)[:200]}],
+                        )
+                    except Exception:  # silenced-by-design: attest must not abort the loop
+                        pass
 
             # --- Daily-gated collectors ---
             from app.database import fetch_one as _dl_fetch
