@@ -14,6 +14,7 @@ Crypto-backed / algorithmic assets skip the waterfall (on-chain only).
 import re
 import json
 import asyncio
+import contextvars
 import logging
 import time
 from datetime import datetime, timezone, date
@@ -27,6 +28,13 @@ logger = logging.getLogger(__name__)
 PDF_URL_PATTERN = re.compile(r'https?://[^\s\)\"\'<>]+\.pdf', re.IGNORECASE)
 
 ON_CHAIN_CATEGORIES = ("crypto-backed", "algorithmic")
+
+# Per-run insert counter — set by run_collection() so we count inserts as they
+# happen inside _store_extraction (no post-hoc SELECT). Fixes #207: the
+# previous 2h SELECT window race left state_attestations empty for 30+ days.
+_run_insert_count: contextvars.ContextVar[list[int] | None] = contextvars.ContextVar(
+    "cda_run_insert_count", default=None
+)
 
 
 # =============================================================================
@@ -93,6 +101,12 @@ def _store_extraction(
             warnings,
         ),
     )
+    # Increment per-run counter if set by run_collection(). Mutates a
+    # single-element list so the ContextVar binding stays stable across
+    # asyncio.to_thread hops.
+    _counter = _run_insert_count.get()
+    if _counter is not None:
+        _counter[0] += 1
 
 
 def _update_registry(
@@ -1228,85 +1242,184 @@ async def collect_issuer(issuer: dict, index: int, total: int) -> bool:
     return result["status"] in ("success", "partial", "on_chain_only", "already_collected")
 
 
-async def run_collection():
-    """Run the full CDA collection pipeline across all active issuers."""
+async def run_collection() -> dict:
+    """Run the full CDA collection pipeline across all active issuers.
+
+    Returns a summary dict including insert_count (number of rows pushed
+    into cda_vendor_extractions during this run). The count is threaded
+    from _store_extraction via a ContextVar so we never need a post-hoc
+    SELECT window — that race was the root cause of #207 (30+ days of
+    empty state_attestations.domain='cda_extractions').
+    """
     logger.info("=== CDA Collection Pipeline Starting (Adaptive Waterfall) ===")
 
-    issuers = await asyncio.to_thread(fetch_all,
-        """
-        SELECT asset_symbol, issuer_name, transparency_url,
-               collection_method, asset_category, consecutive_failures,
-               disclosure_type, expected_fields, verification_rules, source_urls
-        FROM cda_issuer_registry
-        WHERE is_active = TRUE
-        ORDER BY asset_symbol
-        """
-    )
+    # Bind a fresh per-run counter. _store_extraction increments [0] on every
+    # successful INSERT.
+    _counter = [0]
+    _token = _run_insert_count.set(_counter)
 
-    if not issuers:
-        logger.error("[cda_vendor] no active issuers in registry")
-        return
+    try:
+        issuers = await asyncio.to_thread(fetch_all,
+            """
+            SELECT asset_symbol, issuer_name, transparency_url,
+                   collection_method, asset_category, consecutive_failures,
+                   disclosure_type, expected_fields, verification_rules, source_urls
+            FROM cda_issuer_registry
+            WHERE is_active = TRUE
+            ORDER BY asset_symbol
+            """
+        )
 
-    total = len(issuers)
-    logger.error(f"[cda_vendor] starting: {total} issuers to scan")
+        if not issuers:
+            logger.error("[cda_vendor] no active issuers in registry")
+            return {
+                "issuers_scanned": 0,
+                "insert_count": 0,
+                "success": 0, "partial": 0, "failed": 0, "skipped": 0,
+            }
 
-    results = {"success": 0, "partial": 0, "failed": 0, "skipped": 0}
+        total = len(issuers)
+        logger.error(f"[cda_vendor] starting: {total} issuers to scan")
 
-    for i, issuer in enumerate(issuers, 1):
-        try:
-            result = await collect_issuer_adaptive(
-                issuer, f"[{i}/{total}] {issuer['asset_symbol']}"
-            )
-            status = result.get("status", "failed")
-            method = result.get("method", "none")
+        results = {"success": 0, "partial": 0, "failed": 0, "skipped": 0}
 
-            if status in ("success", "partial"):
-                results["success" if status == "success" else "partial"] += 1
-            elif status in ("on_chain_only", "already_collected"):
-                results["skipped"] += 1
-            else:
+        for i, issuer in enumerate(issuers, 1):
+            try:
+                result = await collect_issuer_adaptive(
+                    issuer, f"[{i}/{total}] {issuer['asset_symbol']}"
+                )
+                status = result.get("status", "failed")
+                method = result.get("method", "none")
+
+                if status in ("success", "partial"):
+                    results["success" if status == "success" else "partial"] += 1
+                elif status in ("on_chain_only", "already_collected"):
+                    results["skipped"] += 1
+                else:
+                    results["failed"] += 1
+
+                logger.info(
+                    f"[{i}/{total}] {issuer['asset_symbol']} -> "
+                    f"{status} via {method}"
+                )
+            except Exception as e:
+                logger.error(
+                    f"[{i}/{total}] {issuer['asset_symbol']} — unhandled error: {e}"
+                )
                 results["failed"] += 1
 
-            logger.info(
-                f"[{i}/{total}] {issuer['asset_symbol']} -> "
-                f"{status} via {method}"
+            # Rate limit between issuers
+            if i < total:
+                await asyncio.sleep(2)
+
+        insert_count = _counter[0]
+        logger.error(
+            f"[cda_vendor] SUMMARY: scanned={total}, inserts={insert_count}, "
+            f"success={results['success']}, partial={results['partial']}, "
+            f"failed={results['failed']}, skipped={results['skipped']}"
+        )
+
+        return {
+            "issuers_scanned": total,
+            "insert_count": insert_count,
+            **results,
+        }
+    finally:
+        _run_insert_count.reset(_token)
+
+
+# Freshness gate for cda_extractions — matches main.py's CDA_COLLECTION_INTERVAL_HOURS
+# default (24h) and the coherence cadence in coherence.py:69. Slightly under
+# 24h (23h) to avoid the run-vs-gate boundary race when the scheduler fires
+# on a regular cadence.
+_CDA_FRESHNESS_HOURS = 23
+
+
+async def run_collection_scheduled(cycle_ts=None) -> dict:
+    """Module-canonical scheduler entry per v9.12 (#179 / #193 / #198 pattern).
+
+    Always writes a state_attestations row for domain='cda_extractions',
+    regardless of branch:
+      - {"status": "skipped_fresh", "table_age_hours": X}
+      - {"status": "ran", "insert_count": N, ...run_collection() result}
+      - {"status": "error", "error": str}
+
+    cycle_ts is accepted for caller-compat with main.py's loop but is not
+    consumed — attest_state stamps NOW() server-side. Schedulers
+    (main.py) MUST NOT re-attest.
+    """
+    from app.state_attestation import attest_state
+
+    # Freshness gate — read MAX(extracted_at) and skip if the table was
+    # touched recently. Preserves main.py:135 CDA_COLLECTION_INTERVAL_HOURS
+    # semantics without depending on a caller-side timestamp.
+    table_age_hours: float = float(_CDA_FRESHNESS_HOURS) + 1.0
+    try:
+        latest = await asyncio.to_thread(
+            fetch_one,
+            "SELECT MAX(extracted_at) AS t FROM cda_vendor_extractions",
+        )
+        if latest and latest.get("t"):
+            _t = latest["t"]
+            if hasattr(_t, "tzinfo") and _t.tzinfo is None:
+                _t = _t.replace(tzinfo=timezone.utc)
+            table_age_hours = (
+                datetime.now(timezone.utc) - _t
+            ).total_seconds() / 3600
+    except Exception as e:
+        logger.warning(f"[cda_collector] freshness check failed: {e}")
+
+    if table_age_hours < _CDA_FRESHNESS_HOURS:
+        skipped_payload = {
+            "status": "skipped_fresh",
+            "table_age_hours": round(table_age_hours, 2),
+        }
+        try:
+            await asyncio.to_thread(
+                attest_state, "cda_extractions", [skipped_payload]
             )
         except Exception as e:
-            logger.error(
-                f"[{i}/{total}] {issuer['asset_symbol']} — unhandled error: {e}"
-            )
-            results["failed"] += 1
+            logger.warning(f"[cda_collector] skipped-fresh attest failed: {e}")
+        return skipped_payload
 
-        # Rate limit between issuers
-        if i < total:
-            await asyncio.sleep(2)
-
-    logger.error(
-        f"[cda_vendor] SUMMARY: scanned={total}, success={results['success']}, "
-        f"partial={results['partial']}, failed={results['failed']}, skipped={results['skipped']}"
-    )
-
-    # Attest CDA extractions from this run
     try:
-        from app.state_attestation import attest_state
-        recent = await asyncio.to_thread(fetch_all,
-            "SELECT asset_symbol, field_name, extracted_value, source_url FROM cda_vendor_extractions WHERE extracted_at > NOW() - INTERVAL '2 hours'"
-        )
-        if recent:
-            await asyncio.to_thread(attest_state, "cda_extractions", [dict(r) for r in recent])
-    except asyncio.CancelledError:
-        raise
-    except Exception as ae:
-        logger.warning(f"CDA attestation skipped: {ae}")
+        result = await run_collection()
+        ran_payload = {
+            "status": "ran",
+            "table_age_hours": round(table_age_hours, 2),
+            **result,
+        }
         try:
-            from app.worker import _record_cycle_error
-            _record_cycle_error(
-                error_type="services_run_collection_cda_attestation_failure",
-                error_message=str(ae)[:500],
-                cycle_phase="cda_collector",
+            await asyncio.to_thread(
+                attest_state, "cda_extractions", [ran_payload]
+            )
+        except Exception as e:
+            logger.warning(f"[cda_collector] ran-branch attest failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="services_run_collection_scheduled_attest_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="cda_collector",
+                )
+            except Exception:
+                pass
+        return ran_payload
+    except Exception as e:
+        logger.warning(f"[cda_collector] scheduled run failed: {e}")
+        error_payload = {
+            "status": "error",
+            "table_age_hours": round(table_age_hours, 2),
+            "error_type": type(e).__name__,
+            "error": str(e)[:500],
+        }
+        try:
+            await asyncio.to_thread(
+                attest_state, "cda_extractions", [error_payload]
             )
         except Exception:
             pass
+        return error_payload
 
 
 async def collect_single_issuer(asset_symbol: str):
