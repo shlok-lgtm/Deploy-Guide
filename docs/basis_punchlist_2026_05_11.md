@@ -771,3 +771,24 @@ next session:
     Three Wave-N PRs were no-or-tiny-code corrections of upstream
     hypotheses formed without this step. Substrate + code together
     form a hypothesis; substrate alone is a guess.
+
+11. **Closure criteria expressed as `=0` confuse "fix didn't work"
+    with "fix has tail."** Wave 9's stated criterion was
+    `open_failures (last 2h) = 0`. Post-merge substrate showed
+    `open_failures = 2` — one wallet_reindex timeout (23:48:29)
+    and one dex_pool_ohlcv timeout (23:49:01) — with successful
+    cycles immediately before and after each (newest_wallet
+    23:48:29.036 in the same second; ohlcv attest at 00:13:30,
+    24m later). Pre-merge baseline was *every cycle* timing out
+    on these two domains; post-merge was 1 timeout each in 4h with
+    work otherwise progressing. That is a ~95% reduction, not a
+    failure — but the literal `=0` criterion read as failure and
+    forced HALT under the escape hatch. Future closure criteria
+    must be written as **deltas vs. baseline** ("post < 10% of
+    pre", "no consecutive-cycle failures") or **asymptotic bounds**
+    ("≤ 1 timeout per 4h per domain"), and verification must read
+    the time-series shape (consecutive vs. isolated, before-and-
+    after-success), not just the count. A hard `=0` criterion is
+    only honest when the bug is a constant — eg. "every invocation
+    raises" — not when the bug is a tail-distribution overrun.
+    Distinguish the two before writing the closure check.
