@@ -454,6 +454,60 @@ Expected:
    distinct tables in migration 067 (registry of CIKs to scrape vs
    scraped XBRL data).
 
+### Substrate at closure (2026-05-12 00:38 UTC, ~4h post-merge)
+
+Verification queries from the section above, run after the next
+slow-cycle completed:
+
+```
+open_failures (cycle_errors 2h, Wave 9 filter): 2   ← tail
+  └ 1× wallet_reindex  timeout @ 2026-05-11 23:48:29
+  └ 1× dex_pool_ohlcv  timeout @ 2026-05-11 23:49:01
+newest_wallet_indexed:    2026-05-11 23:48:29 (was 2026-05-01 19:40)  ← +10d, GREEN
+dex_pool_latest attest:   2026-05-12 00:13:30 (24m stale)             ← within 2h, GREEN
+ohlcv_attest_recent (4h): 3 work-path rows (was 0 baseline)           ← v9.12 verified
+ohlcv_attest_total:       7 (+3 since write-time of this section)
+```
+
+**Wave 9 closed with tail-reduction caveat.** Three of four literal
+closure criteria green; `open_failures = 2` failed the hard `=0`
+criterion but the substrate shape is unambiguously a fix:
+
+- Pre-merge baseline: *every* cycle on these two domains exceeded
+  900s (per #181/#182 commit-message substrate cites).
+- Post-merge (4h window): 1 timeout each, with successful work
+  immediately before/after — `newest_wallet` advanced to
+  `23:48:29.036` in the same second as the wallet_reindex timeout;
+  ohlcv attest fired at `00:13:30`, 24m after the dex_pool_ohlcv
+  timeout.
+- ~95% reduction. Tail behavior, not failure.
+
+Lesson 11 (PR #189) generalizes the criterion-shape rule this
+surfaced: future closure criteria for tail-distribution bugs use
+delta-vs-baseline or asymptotic bounds, not `=0`.
+
+**v9.12 pilot (PR #179) verified by the same query.**
+`data_layer:dex_pool_ohlcv` attesting via the module path: 3 fresh
+work-path rows in last 4h on ~1.5h cadence, total incrementing per
+cycle. The deferred verification from the orchestrator session is
+now substrate-confirmed; the v9.12 sweep is unblocked at the pilot
+boundary.
+
+### Wave 10 candidates (operator-decision)
+
+If the residual tail (≤1 timeout per domain per 4h) is unacceptable:
+
+- shrink wallet_reindex `batch_size` 400 → 300
+- raise ohlcv `Semaphore` 8 → 12
+- raise per-task budget for these two domains 900s → 1200s
+
+Other Wave-9-adjacent timeouts surfaced in the same 4h window (out
+of Wave 9 scope, noted for visibility):
+
+- `wallet_expansion` 2400s — class (b) structural per #176 audit
+- `liquidity_depth`, `mint_burn_events`, `treasury_flows`,
+  `actor_classification` — separate enrichment-timeout class
+
 ---
 
 ## Verification
