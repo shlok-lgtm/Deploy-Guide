@@ -32,13 +32,13 @@ schedule the module from worker.py.
 | ~~`data_layer:peg_snapshots_5m` (+ `market_chart_history` + `volatility_surfaces`)~~ ✅ | ~~worker.py:1310-1373 inline~~ removed | `app/data_layer/peg_monitor.py::run_peg_monitoring_scheduled` | **P0 → DONE** | First v9.13 coupled-write refactor. #188 made the module canonical writer for all 3 domains; this PR adds the scheduled wrapper (freshness gate + 3-domain skip/error attest) and routes worker, enrichment_worker, and main.py through it. Dispatcher heartbeat at worker.py:2787 left in place until Phase 2.3. |
 | ~~`data_layer:exchange_snapshots`~~ ✅ | ~~worker.py:1186-1246 inline~~ removed | `app/data_layer/exchange_collector.py::run_exchange_collection_scheduled` | **P0 → DONE** | Q1 answered by #197 (migration 109 — schema replay). Q2 answered: 15 exchanges (worker._EX list), `_EX_FIX` legacy-slug remap ported into module. 35 additional exchanges deferred to Q2-extension (see below). enrichment_worker.py task entry removed (was kept closed by inline; lesson 6 family). main.py daily lambda switched. Dispatcher heartbeat at worker.py:2787 left in place until Phase 2.3. |
 | ~~`data_layer:dex_pool_ohlcv`~~ ✅ | ~~worker.py inline~~ removed | `app/data_layer/ohlcv_collector.py::run_ohlcv_collection_scheduled` | **P0 → DONE** | Pilot landed this session; module-canonical via `run_ohlcv_collection_scheduled()`. Dispatcher heartbeat at worker.py:2778 left in place until Phase 2.3. |
-| `wallets` | `worker.py:2082`, also `worker.py:2787` (heartbeat) | — (driven by `app/indexer/pipeline.py`) | **P1** | Wave 1 + Wave 3 + Wave 5b. |
+| `wallets` | `worker.py:2082`, also `worker.py:2787` (heartbeat) | — (driven by `app/indexer/pipeline.py`) | **P1** | Wave 1 + Wave 3 + Wave 5b. Consider v9.12 N/A — layered defense intentional (see #202). |
 | `web_research` | `worker.py:1960`, also 2787 | `app/collectors/web_research.py:563` | **P1** | Wave 1 + Wave 3 + Wave 5b. |
 | `psi_components` | `worker.py:1100`, `main.py:224` | (enrichment task) | **P1** | Two live paths post-Wave-1. |
-| `cda_extractions` | `main.py:167` | (enrichment task wraps `app/services/cda_collector.py`) | **P2** | Single legacy main.py site; module exists. |
+| `cda_extractions` | `main.py:167` | (enrichment task wraps `app/services/cda_collector.py`) | **P0** | Reclassified from P2 — coherence gap: 0 attestations despite vendor churn (see #207). |
 | `wallet_profiles` | `main.py:301` | (`app/wallet_profile.py`) | **P2** | |
-| `actors` | `main.py:317` | (`app/agent/`) | **P2** | |
-| `edges` | `main.py:456` | (`app/indexer/edges.py`) | **P2** | |
+| `actors` | `main.py:317` | (`app/agent/`) | **P1** | Reclassified from P2 — multi-writer triangle: main.py + actor_classification.py write same domain with semantically different payloads (see #208). |
+| `edges` | `main.py:456` | (`app/indexer/edges.py`) | **P0** | Reclassified from P2 — coherence gap: 0 attestations despite 348k edge updates in 7d (see #209). |
 
 ¹ Priority key:
 - **P0** — most-fraught, multiple PRs in flight on 2026-05-11; should
