@@ -40,6 +40,11 @@ def _safe_float(val):
 API_KEY = os.environ.get("COINGECKO_API_KEY", "")
 CG_BASE = "https://pro-api.coingecko.com/api/v3" if API_KEY else "https://api.coingecko.com/api/v3"
 
+# CoinGecko id remaps (mirrors the pre-v9.13 worker.py inline path; needed
+# because a few stablecoins.coingecko_id values diverge from CG's canonical
+# id for the /market_chart endpoint).
+_CG_ID_REMAP = {"susd": "nusd", "spark": "spark-protocol"}
+
 
 def _headers() -> dict:
     h = {"Accept": "application/json"}
@@ -151,6 +156,43 @@ def _store_peg_snapshots(stablecoin_id: str, price_points: list[tuple]):
 
     elapsed = _t.monotonic() - _start
     logger.error(f"peg {stablecoin_id}: {stored} rows in {elapsed:.1f}s (skipped={skipped})")
+
+
+def _store_market_chart_history(coin_id: str, stablecoin_id: str, price_points: list[tuple]):
+    """Store 5-min market_chart_history rows — batched into one transaction.
+
+    Mirrors the pre-v9.13 worker.py inline path: same coin_id/stablecoin_id/
+    timestamp/price/granularity columns, ON CONFLICT DO NOTHING semantics.
+    """
+    if not price_points:
+        return 0
+
+    from psycopg2.extras import execute_values
+    from app.database import get_cursor
+
+    rows = []
+    for ts_ms, price in price_points:
+        safe_price = _safe_float(price)
+        if safe_price is None:
+            continue
+        ts = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
+        rows.append((coin_id, stablecoin_id, ts, safe_price, "5min"))
+
+    if not rows:
+        return 0
+
+    try:
+        with get_cursor() as cur:
+            execute_values(cur,
+                "INSERT INTO market_chart_history "
+                "(coin_id, stablecoin_id, timestamp, price, granularity) "
+                "VALUES %s ON CONFLICT DO NOTHING",
+                rows, page_size=500,
+            )
+        return len(rows)
+    except Exception as e:
+        logger.warning(f"[peg_monitor] mchart insert failed for {stablecoin_id}: {e}")
+        return 0
 
 
 def _compute_volatility_surface(
@@ -290,98 +332,132 @@ async def run_peg_monitoring() -> dict:
         return {"error": "no stablecoins found"}
 
     total_snapshots = 0
+    total_mchart_rows = 0
     micro_depegs = []
     vol_surfaces = 0
+    block_error: Optional[str] = None
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        for row in rows:
-            cg_id = row.get("coingecko_id")
-            stablecoin_id = row["id"]
-            symbol = row.get("symbol", "").upper()
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            for row in rows:
+                cg_id_raw = row.get("coingecko_id")
+                stablecoin_id = row["id"]
+                symbol = row.get("symbol", "").upper()
 
-            if not cg_id:
-                continue
-
-            try:
-                data = await _fetch_market_chart(client, cg_id, days=1)
-                prices_raw = data.get("prices", [])
-
-                if not prices_raw:
+                if not cg_id_raw:
                     continue
 
-                # Store 5-minute snapshots
-                await asyncio.to_thread(_store_peg_snapshots, stablecoin_id, prices_raw)
-                total_snapshots += len(prices_raw)
+                cg_id = _CG_ID_REMAP.get(cg_id_raw, cg_id_raw)
 
-                # Detect micro-depegs (>50bps deviation for 3+ consecutive points)
-                prices = [p[1] for p in prices_raw]
-                consecutive_depeg = 0
-                max_deviation = 0
-
-                for price in prices:
-                    deviation_bps = abs(price - 1.0) * 10000
-                    if deviation_bps > 50:  # >0.5% from peg
-                        consecutive_depeg += 1
-                        max_deviation = max(max_deviation, deviation_bps)
-                    else:
-                        if consecutive_depeg >= 3:
-                            micro_depegs.append({
-                                "stablecoin": symbol,
-                                "stablecoin_id": stablecoin_id,
-                                "consecutive_5m_intervals": consecutive_depeg,
-                                "max_deviation_bps": round(max_deviation, 2),
-                                "duration_minutes": consecutive_depeg * 5,
-                            })
-                        consecutive_depeg = 0
-                        max_deviation = 0
-
-                # Compute volatility surface from 1-day data
-                vol = _compute_volatility_surface(prices, stablecoin_id)
-                if vol:
-                    await asyncio.to_thread(_store_volatility_surface, vol)
-                    vol_surfaces += 1
-
-                # Also fetch 90-day data for deep volatility surfaces
                 try:
-                    data_90d = await _fetch_market_chart(client, cg_id, days=90)
-                    prices_90d = [p[1] for p in data_90d.get("prices", [])]
-                    if len(prices_90d) > 50:
-                        vol_90d = _compute_volatility_surface(prices_90d, stablecoin_id)
-                        if vol_90d:
-                            await asyncio.to_thread(
-                                _store_volatility_surface_90d_sync, stablecoin_id, vol_90d
-                            )
-                except asyncio.CancelledError:
-                    raise
-                except Exception as e:
-                    logger.warning(f"90d vol surface failed for {stablecoin_id}: {e}")
+                    data = await _fetch_market_chart(client, cg_id, days=1)
+                    prices_raw = data.get("prices", [])
+
+                    if not prices_raw:
+                        continue
+
+                    # Store 5-minute snapshots + market_chart_history (coupled
+                    # write per v9.13: both derive from the same days=1 fetch).
+                    await asyncio.to_thread(_store_peg_snapshots, stablecoin_id, prices_raw)
+                    total_snapshots += len(prices_raw)
+                    mchart_written = await asyncio.to_thread(
+                        _store_market_chart_history, cg_id_raw, stablecoin_id, prices_raw,
+                    )
+                    total_mchart_rows += mchart_written
+
+                    # Detect micro-depegs (>50bps deviation for 3+ consecutive points)
+                    prices = [p[1] for p in prices_raw]
+                    consecutive_depeg = 0
+                    max_deviation = 0
+
+                    for price in prices:
+                        deviation_bps = abs(price - 1.0) * 10000
+                        if deviation_bps > 50:  # >0.5% from peg
+                            consecutive_depeg += 1
+                            max_deviation = max(max_deviation, deviation_bps)
+                        else:
+                            if consecutive_depeg >= 3:
+                                micro_depegs.append({
+                                    "stablecoin": symbol,
+                                    "stablecoin_id": stablecoin_id,
+                                    "consecutive_5m_intervals": consecutive_depeg,
+                                    "max_deviation_bps": round(max_deviation, 2),
+                                    "duration_minutes": consecutive_depeg * 5,
+                                })
+                            consecutive_depeg = 0
+                            max_deviation = 0
+
+                    # Compute volatility surface from 1-day data
+                    vol = _compute_volatility_surface(prices, stablecoin_id)
+                    if vol:
+                        await asyncio.to_thread(_store_volatility_surface, vol)
+                        vol_surfaces += 1
+
+                    # Also fetch 90-day data for deep volatility surfaces
                     try:
-                        from app.worker import _record_cycle_error
-                        _record_cycle_error(
-                            error_type="data_layer_run_peg_monitoring_vol_90d_failure",
-                            error_message=str(e)[:500],
-                            cycle_phase="peg_monitor",
-                        )
-                    except Exception:
-                        pass
+                        data_90d = await _fetch_market_chart(client, cg_id, days=90)
+                        prices_90d = [p[1] for p in data_90d.get("prices", [])]
+                        if len(prices_90d) > 50:
+                            vol_90d = _compute_volatility_surface(prices_90d, stablecoin_id)
+                            if vol_90d:
+                                await asyncio.to_thread(
+                                    _store_volatility_surface_90d_sync, stablecoin_id, vol_90d
+                                )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        logger.warning(f"90d vol surface failed for {stablecoin_id}: {e}")
+                        try:
+                            from app.worker import _record_cycle_error
+                            _record_cycle_error(
+                                error_type="data_layer_run_peg_monitoring_vol_90d_failure",
+                                error_message=str(e)[:500],
+                                cycle_phase="peg_monitor",
+                            )
+                        except Exception:
+                            pass
 
-            except Exception as e:
-                logger.warning(f"Peg monitoring failed for {stablecoin_id}: {e}")
+                except Exception as e:
+                    logger.warning(f"Peg monitoring failed for {stablecoin_id}: {e}")
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        # Block-level failure (e.g. AsyncClient setup, DB connection
+        # mid-loop). Per v9.13, every owned domain attests with the same
+        # block_failed status so monitors flag all three together.
+        block_error = f"{type(e).__name__}: {e}"[:200]
+        logger.error(f"peg_monitor block-level failure: {block_error}")
 
-    # Provenance — always attest, even when total_snapshots=0. Previously
-    # gated on `if total_snapshots > 0`, which let the domain go silent
-    # whenever the cycle ran but produced zero snapshots (CoinGecko 429,
-    # geofenced response, all stablecoins skipped). Same family as
-    # #141 (dex_pool_ohlcv). link_batch_to_proof is still conditional
-    # because there are no rows to correlate when snapshots=0.
+    # Provenance — coupled-write per v9.13: this module owns three live
+    # data-layer domains (peg_snapshots_5m, market_chart_history,
+    # volatility_surfaces), all derived from the shared /market_chart fetch.
+    # Attest each independently with its own status payload, so a partial
+    # failure in one write doesn't silence the others.
     try:
         from app.data_layer.provenance_scaling import attest_data_batch, link_batch_to_proof
-        payload = {"snapshots": total_snapshots, "vol_surfaces": vol_surfaces}
-        if total_snapshots == 0:
-            payload["status"] = "ran_no_snapshots"
-        await asyncio.to_thread(attest_data_batch, "peg_snapshots_5m", [payload])
+
+        def _status(rows_written: int) -> str:
+            if block_error:
+                return "block_failed"
+            return "ok" if rows_written > 0 else "ran_no_inserts"
+
+        peg_payload: dict = {"status": _status(total_snapshots), "rows": total_snapshots}
+        mchart_payload: dict = {"status": _status(total_mchart_rows), "rows": total_mchart_rows}
+        vs_payload: dict = {"status": _status(vol_surfaces), "rows": vol_surfaces}
+        if block_error:
+            peg_payload["error"] = block_error
+            mchart_payload["error"] = block_error
+            vs_payload["error"] = block_error
+
+        await asyncio.to_thread(attest_data_batch, "peg_snapshots_5m", [peg_payload])
+        await asyncio.to_thread(attest_data_batch, "market_chart_history", [mchart_payload])
+        await asyncio.to_thread(attest_data_batch, "volatility_surfaces", [vs_payload])
+
         if total_snapshots > 0:
             await link_batch_to_proof("peg_snapshots_5m", "peg_snapshots_5m")
+        if total_mchart_rows > 0:
+            await link_batch_to_proof("market_chart_history", "market_chart_history")
+        if vol_surfaces > 0:
             await link_batch_to_proof("volatility_surfaces", "volatility_surfaces")
     except asyncio.CancelledError:
         raise
@@ -398,7 +474,8 @@ async def run_peg_monitoring() -> dict:
             pass
 
     logger.info(
-        f"Peg monitoring complete: {total_snapshots} snapshots, "
+        f"Peg monitoring complete: {total_snapshots} peg snapshots, "
+        f"{total_mchart_rows} mchart rows, "
         f"{len(micro_depegs)} micro-depegs detected, "
         f"{vol_surfaces} volatility surfaces computed"
     )
@@ -424,6 +501,7 @@ async def run_peg_monitoring() -> dict:
     return {
         "stablecoins_monitored": len(rows),
         "total_5m_snapshots": total_snapshots,
+        "total_mchart_rows": total_mchart_rows,
         "micro_depegs_detected": len(micro_depegs),
         "micro_depegs": micro_depegs,
         "volatility_surfaces_computed": vol_surfaces,

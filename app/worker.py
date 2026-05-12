@@ -968,23 +968,6 @@ def _bulk_insert_yield_snapshots(rows_with_ts):
         )
 
 
-def _bulk_insert_peg_and_mchart(peg_rows, mc_rows):
-    """Sync helper: bulk insert peg snapshots and market chart history (called via to_thread)."""
-    from psycopg2.extras import execute_values as _ev
-    from app.database import get_cursor as _gc
-    with _gc() as _c:
-        _ev(_c,
-            "INSERT INTO peg_snapshots_5m(stablecoin_id,price,timestamp,deviation_bps) "
-            "VALUES %s ON CONFLICT DO NOTHING",
-            peg_rows, page_size=500,
-        )
-        _ev(_c,
-            "INSERT INTO market_chart_history(coin_id,stablecoin_id,timestamp,price,granularity) "
-            "VALUES %s ON CONFLICT DO NOTHING",
-            [r + ('5min',) for r in mc_rows], page_size=500,
-        )
-
-
 # =============================================================================
 # Orchestrator: Fast cycle — critical scoring + lightweight tasks (<15 min)
 # =============================================================================
@@ -1307,70 +1290,25 @@ async def run_fast_cycle():
     # Deferred to Phase 2: direct contract monitoring using existing Etherscan quota.
     # Table schema retained for future backfill. See basis_protocol_v9_3_constitution_amendment.md.
 
-    # ==== 5. PEG 5-MIN + MARKET CHART ====
-    _pg_ok, _mc_ok = 0, 0
-    _peg_block_error: str | None = None
+    # ==== 5. PEG 5-MIN + MARKET CHART + VOLATILITY SURFACES ====
+    # v9.13 coupled-write: app/data_layer/peg_monitor.run_peg_monitoring()
+    # is the canonical writer for all three domains (peg_snapshots_5m,
+    # market_chart_history, volatility_surfaces). Module attests each
+    # domain independently. Inline path retired per refactor PR; see
+    # docs/basis_protocol_v9_13_constitution_amendment.md.
+    _peg_coins = await fetch_all_async("SELECT id, coingecko_id FROM stablecoins WHERE scoring_enabled = TRUE AND coingecko_id IS NOT NULL") or []
     try:
-        _mc_start = time.time()
-        _peg_coins = await fetch_all_async("SELECT id, coingecko_id FROM stablecoins WHERE scoring_enabled = TRUE AND coingecko_id IS NOT NULL") or []
-        _cg_fix_mc = {"susd": "nusd", "spark": "spark-protocol"}
-        async with httpx.AsyncClient(timeout=30) as _pc:
-            for _sc in _peg_coins:
-                _coin_start = time.time()
-                _cg = _cg_fix_mc.get(_sc["coingecko_id"], _sc["coingecko_id"])
-                try:
-                    _r = await _pc.get(f"{CG_BASE}/coins/{_cg}/market_chart",
-                        params={"vs_currency":"usd","days":1}, headers=CG_HDR)
-                    if _r.status_code != 200:
-                        await asyncio.sleep(0.15)
-                        continue
-                    from datetime import datetime as _pdt
-                    _peg_rows = []
-                    _mc_rows = []
-                    for _pt in _r.json().get("prices",[]):
-                        _ts = _pdt.fromtimestamp(_pt[0]/1000, tz=timezone.utc)
-                        _peg_rows.append((_sc["id"], _pt[1], _ts, round(abs(_pt[1]-1.0)*10000, 2)))
-                        _mc_rows.append((_sc["coingecko_id"], _sc["id"], _ts, _pt[1]))
-                    if _peg_rows:
-                        try:
-                            await asyncio.to_thread(
-                                _bulk_insert_peg_and_mchart, _peg_rows, _mc_rows,
-                            )
-                            _pg_ok += len(_peg_rows)
-                            _mc_ok += len(_mc_rows)
-                        except Exception as _ei:
-                            logger.error(f"peg/mchart bulk insert fail {_sc['id']}: {_ei}")
-                    logger.error(f"peg/mchart {_sc['id']}: {len(_peg_rows)} rows in {time.time()-_coin_start:.1f}s")
-                except Exception as _e: logger.error(f"peg fail {_sc['id']}: {_e}")
-                await asyncio.sleep(0.15)
-        logger.error(f"=== PEG: {_pg_ok}, MCHART: {_mc_ok}, elapsed={time.time()-_mc_start:.1f}s ===")
+        _peg_start = time.time()
+        from app.data_layer.peg_monitor import run_peg_monitoring
+        _peg_summary = await run_peg_monitoring()
+        logger.error(
+            f"=== PEG_MONITOR: peg={_peg_summary.get('total_5m_snapshots', 0)}, "
+            f"mchart={_peg_summary.get('total_mchart_rows', 0)}, "
+            f"vs={_peg_summary.get('volatility_surfaces_computed', 0)}, "
+            f"elapsed={time.time()-_peg_start:.1f}s ==="
+        )
     except Exception as _e5:
-        _peg_block_error = f"{type(_e5).__name__}: {_e5}"[:200]
-        logger.error(f"=== PEG FAILED: {_e5} ===")
-
-    # Attest from the live worker.py path. Lives OUTSIDE the outer try
-    # (Wave 5a fix): Wave 3 #153 placed this inside the try, so any
-    # failure of the per-coin loop or the bulk-insert wrapper swallowed
-    # the attest too — domain went 2.7d stale despite the table being
-    # written every cycle. Status carries the block outcome.
-    try:
-        from app.data_layer.provenance_scaling import attest_data_batch
-        if _peg_block_error:
-            _peg_status = "block_failed"
-        elif _pg_ok:
-            _peg_status = "ok"
-        else:
-            _peg_status = "ran_no_inserts"
-        _peg_payload: dict = {
-            "status": _peg_status,
-            "peg_rows": _pg_ok,
-            "mchart_rows": _mc_ok,
-        }
-        if _peg_block_error:
-            _peg_payload["error"] = _peg_block_error
-        await asyncio.to_thread(attest_data_batch, "peg_snapshots_5m", [_peg_payload])
-    except Exception as _e_attest:
-        logger.warning(f"peg_snapshots_5m worker attest failed: {_e_attest}")
+        logger.error(f"=== PEG_MONITOR FAILED: {_e5} ===")
 
     # ==== 6. LIQUIDITY DEPTH (CEX tickers) ====
     try:
