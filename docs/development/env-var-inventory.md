@@ -41,7 +41,7 @@ Complete record of all environment variables that basis-hub reads at runtime. Th
 | CORS_ORIGINS | METADATA | No | `*` | CORS allowed origins (comma-separated) |
 | CDP_API_KEY_ID | SECRET | No | `""` | Coinbase Developer Platform API key ID |
 | CDP_API_KEY_SECRET | SECRET | No | `""` | Coinbase Developer Platform API secret |
-| DATABASE_URL | INFRASTRUCTURE | No | `""` | PostgreSQL connection string |
+| DATABASE_URL | INFRASTRUCTURE | No | `""` | PostgreSQL connection string. **Always wrap the value in double quotes in `env.dev` / `env.dev.example`** — Neon pooled URLs contain `&` (e.g. `channel_binding=require`), and an unquoted `&` is a bash job-control separator that silently truncates the value when downstream tools run `source env.dev` / `. ./env.dev`. |
 | DWELLIR_API_KEY | SECRET | No | `""` | Dwellir RPC provider API key |
 | DWELLIR_ETH_URL | SECRET | No | none | Full Dwellir Ethereum RPC URL (overrides API key) |
 | DWELLIR_BASE_URL | SECRET | No | none | Full Dwellir Base RPC URL (overrides API key) |

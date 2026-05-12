@@ -39,6 +39,15 @@ Chain ID is pinned to 8453 so the keeper's chain-id assertions pass.
 Arbitrum is not forked — single-fork keeps RAM use bounded; operators
 testing Arbitrum-specific paths should override `ARBITRUM_RPC_URL`.
 
+**Entrypoint override.** Empirically, `ghcr.io/foundry-rs/foundry:latest`
+ships with an sh-based entrypoint rather than `["anvil"]`. Passing a list
+`command:` of anvil flags without an explicit `entrypoint:` override sends
+those flags through sh and produces `/bin/sh: 0: Illegal option --` at
+container start (caught during Codespace boot on 2026-05-12). The compose
+file therefore pins `entrypoint: ["anvil"]` on the anvil service. If a
+future foundry release breaks the override, fall back to a single
+string-form `command:` (shell form) and re-document here.
+
 ## Backfills: why a profile
 
 The eight backfill services on Railway have `restartPolicyType: NEVER` —
