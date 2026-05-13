@@ -153,14 +153,41 @@ def rebuild_all_profiles(limit: int = 0) -> dict:
 
     Args:
         limit: Max wallets to process (0 = unlimited, stalest first).
+
+    The picks query (v9.12 #228 fix) restricts candidates to wallets that
+    have *something to profile*: fresh holdings (last 7 days). Previously
+    the work-queue was poisoned by ~700K "shell" wallets seeded by the
+    expander without holdings, which produced trivial all-zero profiles
+    and starved the cycle of useful work. The substrate evidence: 2000
+    upserts/cycle were happening but every attestation reported
+    `ran_no_results` with `built=0`, because the queue head was
+    dominated by shell wallets whose `build_unified_profile()` calls
+    diverged silently from the in-memory `built` counter. The new
+    `built_substrate` value is sourced post-hoc from the table itself
+    via cycle_start_ts, anchoring the attested value to ground truth.
     """
+    import time as _time
+    cycle_start_ts = datetime.now(timezone.utc)
+    cycle_t0 = _time.monotonic()
+
     if limit > 0:
-        # Stalest profiles first: wallets that either have no profile yet
-        # (LEFT JOIN … IS NULL) or the oldest updated_at in wallet_profiles.
+        # Stalest profiles first, restricted to wallets that have fresh
+        # holdings (last 7 days). Drops "shell" wallets seeded by the
+        # expander that have no holdings and would otherwise dominate
+        # the NULLS FIRST queue (substrate: ~700K shell wallets vs
+        # ~3K wallets with fresh holdings). Holdings is the dominant
+        # signal — wallets with only edges and no holdings produce
+        # trivial profiles anyway. EXPLAIN ANALYZE: 464ms with the
+        # holdings filter vs 783ms unfiltered but yielding shell wallets.
         rows = fetch_all(
             """SELECT w.address, MIN(p.updated_at) AS oldest_profile
                FROM wallet_graph.wallets w
                LEFT JOIN wallet_graph.wallet_profiles p ON w.address = p.address
+               WHERE EXISTS (
+                   SELECT 1 FROM wallet_graph.wallet_holdings h
+                   WHERE LOWER(h.wallet_address) = LOWER(w.address)
+                     AND h.indexed_at > NOW() - INTERVAL '7 days'
+               )
                GROUP BY w.address
                ORDER BY oldest_profile ASC NULLS FIRST
                LIMIT %s""",
@@ -186,13 +213,39 @@ def rebuild_all_profiles(limit: int = 0) -> dict:
         if (i + 1) % 100 == 0:
             logger.info(f"Profile rebuild progress: {i + 1}/{len(addresses)} ({built} built, {errors} errors)")
 
-    logger.info(f"Profile rebuild complete: {built} built, {errors} errors out of {len(addresses)} addresses")
+    # Substrate-anchor the attested `built` value: source it from the
+    # table itself rather than the in-memory counter. This closes the
+    # #228 gap where 2000 upserts/cycle were occurring but `built` was
+    # reported as 0 due to silent intermediate path divergence. The
+    # in-memory `built` is still surfaced (as `built_inmem`) for
+    # observability, but the attestation and return value use the
+    # substrate count, which is what the wallet_profiles table actually
+    # reflects.
+    built_substrate = built
+    try:
+        sub_row = fetch_one(
+            "SELECT COUNT(*) AS cnt FROM wallet_graph.wallet_profiles WHERE updated_at >= %s",
+            (cycle_start_ts,),
+        )
+        if sub_row and sub_row.get("cnt") is not None:
+            built_substrate = int(sub_row["cnt"])
+    except Exception as _sub_err:
+        logger.warning(f"wallet_profiles substrate count failed; falling back to in-memory built: {_sub_err}")
+
+    elapsed_s = round(_time.monotonic() - cycle_t0, 1)
+    logger.info(
+        f"Profile rebuild complete: built_substrate={built_substrate} "
+        f"(built_inmem={built}, errors={errors}, picks={len(addresses)}, elapsed={elapsed_s}s)"
+    )
 
     # Attest wallet profiles
     try:
         from app.state_attestation import attest_state
-        if built > 0:
-            attest_state("wallet_profiles", [{"built": built, "total": len(addresses)}])
+        if built_substrate > 0:
+            attest_state(
+                "wallet_profiles",
+                [{"built": built_substrate, "built_inmem": built, "total": len(addresses)}],
+            )
         else:
             attest_state("wallet_profiles", [{"status": "ran_no_results", "profiles_built": 0}])
     except asyncio.CancelledError:
@@ -209,4 +262,9 @@ def rebuild_all_profiles(limit: int = 0) -> dict:
         except Exception:
             pass
 
-    return {"total": len(addresses), "built": built, "errors": errors}
+    return {
+        "total": len(addresses),
+        "built": built_substrate,
+        "built_inmem": built,
+        "errors": errors,
+    }
