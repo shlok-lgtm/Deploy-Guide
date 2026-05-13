@@ -1882,9 +1882,16 @@ async def run_slow_cycle():
 
         if cda_age_hours >= cda_interval_hours:
             logger.info("Running CDA collection pipeline...")
-            from app.services.cda_collector import run_collection
-            await run_collection()
-            logger.info("CDA collection complete")
+            # v9.12 module-canonical: scheduler wrapper attests
+            # skipped_fresh / ran / error inline. Hoisted here from the
+            # LEGACY-DEAD-CODE site in main.py:163 per #225 Phase 0
+            # classification — Dockerfile.worker runs app.worker directly,
+            # so this is the LIVE-PATH scheduler. Fixes #220 regression
+            # introduced by #212 (wrapper added but never on the live
+            # writer path). Do NOT re-attest here.
+            from app.services.cda_collector import run_collection_scheduled
+            cda_result = await run_collection_scheduled()
+            logger.info(f"CDA collection complete: {cda_result.get('status')}")
         else:
             logger.info(f"CDA collection skipped — last ran {cda_age_hours:.1f}h ago")
     except Exception as e:
