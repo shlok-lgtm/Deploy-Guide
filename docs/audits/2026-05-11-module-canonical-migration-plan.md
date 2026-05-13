@@ -172,6 +172,36 @@ Per orchestrator: do NOT collapse until every P0 + P1 + (most) P2
 domain in §Refactor sweep order shows fresh attestations within
 expected cadence. The legacy fallback may still be serving them.
 
+**Staging requirement (added 2026-05-13 post-#201 review).** The
+dispatcher heartbeat at `worker.py:2650`
+(`for _domain in ("wallets","web_research","rpi_components")`)
+currently writes the same domains that the new module-canonical
+wrappers also write. Until we can definitively distinguish
+wrapper-vs-heartbeat row provenance for each of these three
+domains (e.g., a `payload_size_signature` column or a `writer_id`
+discriminator on `state_attestations` — see follow-up issue), the
+collapse cannot remove all three at once: a silent wrapper failure
+would be masked by the heartbeat right up until the heartbeat
+itself is deleted.
+
+**Phase 2.3 must stage the heartbeat dissolution. Remove one
+domain from the heartbeat list per PR; verify
+`state_attestations` continues firing for that domain post-removal
+(at least one full slow cycle elapsed, fresh row from the
+wrapper's distinct payload shape); only then proceed to the next.**
+Order of removal — least-risky first (most-confident wrapper
+behavior in substrate):
+
+1. `rpi_components` — daily-gated, low blast radius.
+2. `web_research` — daily-gated, well-exercised wrapper (#201).
+3. `wallets` — last; v9.12-exempt layered-defense path, see #202.
+
+Each removal PR must include: (a) a 24-48h substrate query showing
+the wrapper has fired for that domain independently of the
+heartbeat (distinct `batch_hash` from the heartbeat's
+`base_payload` shape), and (b) the rollback plan if cadence
+regresses.
+
 ## Session scope note
 
 This audit lists the entire v9.12 migration surface but the
