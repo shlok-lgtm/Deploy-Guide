@@ -1068,21 +1068,20 @@ async def run_fast_cycle():
     logger.error(f"[fc-end] cycle complete: {successes}/{len(stablecoins)} scored in {sii_elapsed:.0f}s")
 
     # -------------------------------------------------------------------------
-    # PSI scoring — runs after SII, uses DeFiLlama (no explorer budget)
+    # PSI scoring (v9.12 module-canonical) — runs after SII, uses DeFiLlama
+    # (no explorer budget). Inline implementation removed —
+    # psi_collector.run_psi_scoring_scheduled is the canonical writer for
+    # psi_components. Freshness gate + attestation (skipped_fresh / ran /
+    # error branches) all live inside the module. Worker is scheduler-only.
     # -------------------------------------------------------------------------
     try:
-        from app.collectors.psi_collector import run_psi_scoring
-        logger.info("Running PSI scoring cycle...")
-        psi_results = await asyncio.to_thread(run_psi_scoring)
-        logger.info(f"PSI scoring complete: {len(psi_results)} protocols scored")
-        # Attest PSI scores
-        try:
-            from app.state_attestation import attest_state
-            if psi_results:
-                _psi_attest = [{"slug": r.get("protocol_slug", ""), "score": r.get("overall_score")} for r in psi_results if isinstance(r, dict)]
-                await _fc_loop.run_in_executor(None, attest_state, "psi_components", _psi_attest)
-        except Exception as ae:
-            logger.debug(f"PSI attestation skipped: {ae}")
+        from app.collectors.psi_collector import run_psi_scoring_scheduled
+        logger.info("Running PSI scoring cycle (module-canonical)...")
+        _psi_summary = await run_psi_scoring_scheduled()
+        logger.info(
+            f"PSI scoring: status={_psi_summary.get('status')}, "
+            f"protocols_scored={_psi_summary.get('protocols_scored', 0)}"
+        )
     except Exception as e:
         logger.warning(f"PSI scoring failed: {e}")
 
