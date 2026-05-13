@@ -2031,14 +2031,20 @@ async def run_slow_cycle():
         if edge_age_hours >= 10:
             for edge_chain in ["ethereum", "base", "arbitrum", "solana"]:
                 try:
-                    from app.indexer.edges import run_edge_builder
-                    logger.info(f"Running edge builder for {edge_chain} (top 100 unbuilt wallets by value, 15-min timeout)...")
-                    edge_result = await asyncio.wait_for(run_edge_builder(max_wallets=500, priority="value", chain=edge_chain),
+                    # v9.12 F3 (#224): hoist to module-canonical wrapper so
+                    # state_attestations for domain='edges' fires regardless
+                    # of which sibling scheduler wins the race. Wrapper owns
+                    # its own freshness gate, so repeated calls are safe.
+                    from app.indexer.edges import run_edge_builder_scheduled
+                    logger.info(f"Running edge builder for {edge_chain} (top 200 unbuilt wallets by value, 15-min timeout)...")
+                    edge_outcome = await asyncio.wait_for(
+                        run_edge_builder_scheduled(edge_chain),
                         timeout=900,
                     )
                     logger.info(
-                        f"Edge builder ({edge_chain}) complete: {edge_result.get('wallets_processed', 0)} wallets, "
-                        f"{edge_result.get('total_edges_created', 0)} edges"
+                        f"Edge builder ({edge_chain}) {edge_outcome.get('status', 'unknown')}: "
+                        f"wallets={edge_outcome.get('wallets_processed', 0)}, "
+                        f"edges={edge_outcome.get('edges_upserted', 0)}"
                     )
                 except asyncio.TimeoutError:
                     logger.warning(f"Edge building for {edge_chain} hit 15-minute timeout — moving to next chain")
