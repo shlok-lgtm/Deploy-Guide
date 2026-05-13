@@ -3813,6 +3813,21 @@ async def handle_monitor_alert(request: Request):
     return {"status": "unknown_monitor", "monitor_id": monitor_id}
 
 
+@app.post("/api/webhooks/coingecko")
+async def handle_coingecko_webhook(request: Request):
+    """
+    CoinGecko `cg.coin.info.updated` subscriber.
+
+    Captures constituent metadata mutations (contract migrations,
+    symbol/logo/name changes, platform additions) on the SII + PSI
+    slugs into coingecko_metadata_events for audit + alerting. The
+    handler does not write to stablecoins or rpi_protocol_config —
+    operator review is required before any registry edit.
+    """
+    from app.webhooks.coingecko import handle_webhook
+    return await handle_webhook(request)
+
+
 # =============================================================================
 # CDA Public Evidence Layer API
 # =============================================================================
