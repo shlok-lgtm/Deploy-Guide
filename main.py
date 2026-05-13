@@ -292,18 +292,22 @@ def run_worker_loop():
                 logger.warning(f"Profile rebuild failed: {e}")
 
         # Verification agent cycle — runs after every scoring cycle
+        # F2 (#221): the attest_state("assessments", ...) call previously
+        # here is dead — run_agent_cycle() is async (app/agent/watcher.py:
+        # 259) but this site calls it without `await`, so `result` is a
+        # coroutine and `.get(...)` raises AttributeError which the broad
+        # except below swallows. Net: 0 rows in state_attestations for
+        # 'assessments' over 19.4h despite 125+ watcher events. The
+        # attest has been moved to app/worker.py's awaited live-path
+        # caller (see comment there). The coroutine bug at the next line
+        # is intentionally left in place — same bug class N cleaned up
+        # for wallets in PR #214, separate cleanup sweep tracked
+        # outside F2's scope.
         try:
             from app.agent.watcher import run_agent_cycle
             result = run_agent_cycle()
             if result:
                 logger.info(f"Agent cycle: {result.get('assessments', 0)} assessments")
-                # Attest actor classifications
-                try:
-                    from app.state_attestation import attest_state
-                    if result.get('assessments', 0) > 0:
-                        attest_state("assessments", [{"assessments": result.get('assessments', 0), "severities": result.get('severities', {})}])
-                except Exception as ae:
-                    logger.debug(f"Actor attestation skipped: {ae}")
         except Exception as e:
             logger.error(f"Agent cycle error: {e}")
 

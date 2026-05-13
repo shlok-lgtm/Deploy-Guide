@@ -1442,11 +1442,31 @@ async def run_fast_cycle():
     # -------------------------------------------------------------------------
     # Verification agent cycle — every cycle
     # -------------------------------------------------------------------------
+    # F2 (#221): assessments attest moved here from main.py:322. main.py:296
+    # calls run_agent_cycle() without `await` and the broad except at
+    # main.py:307-308 swallows the resulting AttributeError when `.get(...)`
+    # is invoked on a coroutine — so the main.py attest never executed
+    # (state_attestations.domain='assessments' had 0 rows over 19.4h
+    # despite 125+ watcher events). This call site awaits correctly and
+    # the result dict already exposes the assessments count + severities
+    # — exactly the wrapper-shape payload M's PR #213 intended. The
+    # coroutine bug at main.py:296 is left in place; same bug class N
+    # cleaned up for wallets in PR #214 — out of scope for F2 (separate
+    # cleanup sweep). #225 classification + #221.
     try:
         from app.agent.watcher import run_agent_cycle
         result = await run_agent_cycle()
         if result:
             logger.info(f"Agent cycle: {result.get('assessments', 0)} assessments")
+            try:
+                from app.state_attestation import attest_state
+                if result.get("assessments", 0) > 0:
+                    attest_state("assessments", [{
+                        "assessments": result.get("assessments", 0),
+                        "severities": result.get("severities", {}),
+                    }])
+            except Exception as ae:
+                logger.debug(f"Assessments attestation skipped: {ae}")
     except Exception as e:
         logger.warning(f"Agent cycle error: {e}")
 
