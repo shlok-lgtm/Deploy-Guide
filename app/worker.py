@@ -2604,7 +2604,17 @@ async def _emit_slow_cycle_heartbeats(
 
     try:
         from app.state_attestation import attest_state
-        for _domain in ("wallets", "web_research", "psi_discoveries", "rpi_components"):
+        # psi_discoveries is owned by the module-canonical wrapper
+        # (`run_psi_discovery_monitor_scheduled`). Routing the heartbeat
+        # through it preserves cadence while letting the wrapper own the
+        # payload shape + freshness gate. Q4 closure for v9.12 #198 / #223:
+        # heartbeat previously wrote a generic `{status: ok|..., via, ...}`
+        # placeholder via attest_state directly — produced 1 row/cycle
+        # with the wrapper's `ran` branch never reached because Path A in
+        # run_slow_cycle is dead in steady state. The wrapper handles the
+        # `SELECT MAX(snapshot_date) FROM protocol_collateral_exposure`
+        # gate internally and emits skipped_fresh|ran|error payloads.
+        for _domain in ("wallets", "web_research", "rpi_components"):
             try:
                 await asyncio.to_thread(attest_state, _domain, [base_payload])
             except Exception as e:
@@ -2613,6 +2623,32 @@ async def _emit_slow_cycle_heartbeats(
                 )
     except Exception as e:
         logger.warning(f"slow-cycle heartbeat import failed: {e}")
+
+    # Route psi_discoveries through the module-canonical wrapper. Map the
+    # heartbeat's pipeline outcome to the wrapper's status vocabulary:
+    #   pipeline_failed -> error  (preserves "ran but errored" signal)
+    #   ok | ran_no_result -> skipped_unknown  (wrapper checks the gate
+    #     and emits skipped_fresh when protocol_collateral_exposure is
+    #     <24h old, or ran with zero counts when the gate is open)
+    # Counts are zero from the heartbeat path — when Path C runs and
+    # produces discoveries, it has its own attest. The wrapper's job
+    # here is keeping the domain fresh with the correct payload shape.
+    try:
+        from app.data_layer.psi_discovery_monitor import (
+            run_psi_discovery_monitor_scheduled,
+        )
+        if pipeline_error:
+            _wrapper_status = "error"
+        else:
+            _wrapper_status = "skipped_unknown"
+        await run_psi_discovery_monitor_scheduled(
+            cycle_ts=datetime.now(timezone.utc),
+            status=_wrapper_status,
+        )
+    except Exception as e:
+        logger.warning(
+            f"slow-cycle heartbeat psi_discoveries wrapper call failed: {e}"
+        )
 
 
 async def run_slow_cycle_parallel():
