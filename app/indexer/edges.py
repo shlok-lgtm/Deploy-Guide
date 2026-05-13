@@ -542,6 +542,22 @@ async def run_edge_builder_scheduled(chain: str, cycle_ts=None) -> dict:
                 )
             except Exception:
                 pass
+
+        # v9.12 F3 (#224): coherence assertion. After a `ran` cycle attests,
+        # the latest state_attestations.cycle_timestamp for domain='edges'
+        # and wallet_graph.edge_build_status.MAX(last_built_at) should be
+        # close together (build_edges_for_wallet upserts last_built_at=NOW(),
+        # then we attest immediately). A wide gap means one of two things:
+        #   (a) some other scheduler is writing edge_build_status without
+        #       calling the wrapper (i.e. another bare run_edge_builder
+        #       caller we missed), OR
+        #   (b) attestation succeeded but edge_build_status didn't advance
+        #       (no wallets processed this cycle).
+        # Either case is a coherence violation worth surfacing.
+        try:
+            await _assert_edges_coherence(chain)
+        except Exception as e:
+            logger.warning(f"[edge_builder_scheduled] {chain} coherence check raised: {e}")
         return payload
     except Exception as e:
         logger.warning(f"[edge_builder_scheduled] {chain} run failed: {e}")
@@ -551,6 +567,86 @@ async def run_edge_builder_scheduled(chain: str, cycle_ts=None) -> dict:
         except Exception:
             pass
         return payload
+
+
+# =============================================================================
+# Coherence assertion — v9.12 F3 (#224)
+# =============================================================================
+
+# Tolerance: the wrapper attests within seconds of the final upsert in
+# build_edges_for_wallet, so anything beyond 5 minutes is suspicious.
+_EDGES_COHERENCE_TOLERANCE_SECONDS = 300
+
+
+async def _assert_edges_coherence(chain: str) -> None:
+    """Coherence check: latest state_attestations.cycle_timestamp for
+    domain='edges' must be within 5 minutes of MAX(last_built_at) in
+    wallet_graph.edge_build_status. Mismatch implies a sibling scheduler
+    is bypassing the wrapper or attestation/upsert went out of sync.
+
+    Records a cycle_error with cycle_phase='edges_coherence' on mismatch.
+    Never raises.
+    """
+    try:
+        attest_row = await fetch_one_async(
+            """
+            SELECT cycle_timestamp
+            FROM state_attestations
+            WHERE domain = 'edges' AND entity_id IS NULL
+            ORDER BY cycle_timestamp DESC
+            LIMIT 1
+            """
+        )
+        build_row = await fetch_one_async(
+            "SELECT MAX(last_built_at) AS latest FROM wallet_graph.edge_build_status"
+        )
+    except Exception as e:
+        logger.warning(f"[edges_coherence] {chain} query failed: {e}")
+        return
+
+    attest_ts = attest_row.get("cycle_timestamp") if attest_row else None
+    build_ts = build_row.get("latest") if build_row else None
+
+    if attest_ts is None or build_ts is None:
+        # Either side empty — not a coherence violation per se, but worth
+        # noting once at info level. The post-deploy halt criteria is
+        # explicitly checking that attest_ts becomes non-null within 24h.
+        logger.info(
+            f"[edges_coherence] {chain} skipped: "
+            f"attest_ts={attest_ts!r} build_ts={build_ts!r}"
+        )
+        return
+
+    # Normalize to aware UTC for safe subtraction.
+    if hasattr(attest_ts, "tzinfo") and attest_ts.tzinfo is None:
+        attest_ts = attest_ts.replace(tzinfo=timezone.utc)
+    if hasattr(build_ts, "tzinfo") and build_ts.tzinfo is None:
+        build_ts = build_ts.replace(tzinfo=timezone.utc)
+
+    delta = abs((attest_ts - build_ts).total_seconds())
+    if delta > _EDGES_COHERENCE_TOLERANCE_SECONDS:
+        msg = (
+            f"edges coherence drift: chain={chain} "
+            f"attest_ts={attest_ts.isoformat()} "
+            f"build_ts={build_ts.isoformat()} "
+            f"delta_seconds={delta:.0f} "
+            f"tolerance={_EDGES_COHERENCE_TOLERANCE_SECONDS}"
+        )
+        logger.warning(f"[edges_coherence] {msg}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="edges_coherence_drift",
+                error_message=msg[:500],
+                cycle_phase="edges_coherence",
+            )
+        except Exception as e:
+            logger.warning(f"[edges_coherence] {chain} cycle_error record failed: {e}")
+    else:
+        logger.info(
+            f"[edges_coherence] {chain} OK: delta_seconds={delta:.0f} "
+            f"(tolerance={_EDGES_COHERENCE_TOLERANCE_SECONDS})"
+        )
 
 
 # =============================================================================
@@ -699,18 +795,24 @@ async def edge_builder_background_loop():
             batch = min(EDGE_BUILDER_BATCH_SIZE, scannable_count)
             logger.error(f"[edge_builder_bg] {scannable_count} wallets need scanning, running batch of {batch}")
 
-            result = await run_edge_builder(
-                max_wallets=batch,
-                max_pages_per_wallet=10,
-                priority="value",
-                chain="ethereum",
-            )
+            # v9.12 F3 (#224): hoist sibling scheduler to module-canonical wrapper.
+            # The wrapper's freshness gate (10h via MAX(updated_at) on wallet_edges)
+            # may short-circuit to skipped_fresh; that's fine — the loop already
+            # tolerates idle cycles. The win is that state_attestations for
+            # domain='edges' now fires from whichever sibling wins the race.
+            #
+            # NOTE: the batch-size hint (EDGE_BUILDER_BATCH_SIZE=2000) is dropped
+            # in favor of the wrapper's internal max_wallets=200. The loop's
+            # `scannable` guard is preserved upstream so we still bail when
+            # there's nothing to do.
+            result = await run_edge_builder_scheduled("ethereum")
 
             logger.error(
                 f"[edge_builder_bg] BATCH SUMMARY: "
+                f"status={result.get('status', 'unknown')}, "
                 f"wallets={result.get('wallets_processed', 0)}, "
-                f"new_edges={result.get('total_edges_created', 0)}, "
-                f"transfers={result.get('total_transfers', 0)}"
+                f"new_edges={result.get('edges_upserted', 0)}, "
+                f"transfers={result.get('transfers_processed', 0)}"
             )
 
             # Short sleep before next batch — continuous while there are wallets to scan

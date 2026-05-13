@@ -704,14 +704,20 @@ async def run_enrichment_pipeline() -> dict:
         results = {}
         for chain in ["ethereum", "base", "arbitrum", "solana"]:
             try:
-                from app.indexer.edges import run_edge_builder
+                # v9.12 F3 (#224): hoist to module-canonical wrapper.
+                # Wrapper's freshness gate handles the skip-when-fresh case,
+                # so calling it from sibling schedulers is idempotent.
+                from app.indexer.edges import run_edge_builder_scheduled
                 logger.error(f"=== [edge_building] starting chain={chain} ===")
                 result = await asyncio.wait_for(
-                    run_edge_builder(max_wallets=500, priority="value", chain=chain),
+                    run_edge_builder_scheduled(chain),
                     timeout=900,
                 )
                 results[chain] = result
-                logger.error(f"=== [edge_building] {chain}: {result.get('total_edges_created', 0)} edges ===")
+                logger.error(
+                    f"=== [edge_building] {chain}: {result.get('status', 'unknown')} "
+                    f"edges={result.get('edges_upserted', 0)} ==="
+                )
             except asyncio.TimeoutError:
                 results[chain] = {"error": "15min timeout"}
                 logger.error(f"=== [edge_building] {chain}: TIMEOUT ===")
