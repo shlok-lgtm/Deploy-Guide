@@ -670,8 +670,17 @@ async def run_enrichment_pipeline() -> dict:
     # ---- CDA collection ----
 
     async def _run_cda():
-        from app.services.cda_collector import run_collection
-        result = await run_collection()
+        # v9.12 module-canonical: scheduler wrapper attests
+        # skipped_fresh / ran / error inline. Hoisted here from the
+        # LEGACY-DEAD-CODE site in main.py:163 per #225 Phase 0
+        # classification — enrichment_worker is on the LIVE-PATH (run by
+        # Dockerfile.worker via app.worker). Fixes #220 regression
+        # introduced by #212. Do NOT re-attest in this task. The outer
+        # _db_gate (min_hours=24) is preserved; the wrapper's internal
+        # 23h gate is strictly tighter, so when this task fires, the
+        # wrapper enters the ran branch and emits a per-run attestation.
+        from app.services.cda_collector import run_collection_scheduled
+        result = await run_collection_scheduled()
         logger.info(f"[enrichment] cda_collection result: {result}")
         return result
 
