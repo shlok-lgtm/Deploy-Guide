@@ -846,3 +846,28 @@ next session:
     only honest when the bug is a constant — eg. "every invocation
     raises" — not when the bug is a tail-distribution overrun.
     Distinguish the two before writing the closure check.
+
+## Lesson 12 — Verify the wrapper is on the live path, not just that the wrapper code is correct
+
+Surfaced: 2026-05-12 audit batch (D1/D2/D3/D4 of PRs #212/#213/#215/#216).
+
+Four merged v9.12 mechanical refactor PRs (#212 cda_extractions,
+#213 actors→assessments, #215 edges, #216 psi_discoveries) shipped
+wrappers that NEVER fire in production. Each was approved against
+the "≥1 attestation row in 4h" halt criterion. Each row count was
+vacuously satisfied by a fallback writer:
+
+- #212 — `main.py:163` is dead code (`Dockerfile.api` has `WORKER_ENABLED=false`; `Dockerfile.worker` runs `app.worker` direct). Live writers at `worker.py:1886` + `enrichment_worker.py:674` bypass the wrapper entirely.
+- #213 — `main.py:296` has a coroutine-never-awaited bug class (same shape as #214 wallets cleanup). 0 `assessments` rows in 19.4h despite 125 watcher events.
+- #215 — wrapper wired but gate closed by 3 sibling schedulers (`worker.py:2007`, `enrichment_worker.py:707`, `edges.py:620`) keeping `last_built_at` fresh.
+- #216 — wrapper wired but heartbeat at `worker.py:2602-2652` produces the cadence; wrapper's `ran` branch has never executed in production.
+
+**Discipline**: before any v9.12 (or v9.13) refactor PR ships:
+1. Classify EACH call site for the domain per the migration plan's new classification table (`LIVE-PATH` / `LEGACY-DEAD-CODE` / `MULTI-SCHEDULER-PEER` / `COROUTINE-BUG`).
+2. Refactor must hoist to `LIVE-PATH` sites; `LEGACY-DEAD-CODE` site changes are cosmetic and do NOT count as completion.
+3. Substrate verification must distinguish wrapper's `ran` branch from fallback writers by `record_count` signature, `batch_hash` uniqueness pattern, or direct substrate-table row count.
+4. "≥1 attestation row in 4h" is INSUFFICIENT and is removed from the halt criterion. PR template `#175` updated.
+
+**Self-reflection**: Claude (the orchestrator) approved several of these PRs reading only the diff — "wrapper code is correct" without verifying "wrapper is reachable." Same lesson-10 family but a sub-class worth its own number.
+
+References: PR #220, #221, #222, #216, #215, #213, #212, #217. D1/D2/D3/D4 audit comments.

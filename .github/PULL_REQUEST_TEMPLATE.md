@@ -38,6 +38,29 @@ Result:
 applicable. The CI gate (.github/workflows/pr-substrate-gate.yml)
 requires this section header to appear when the others are empty. -->
 
+## Wrapper ran-branch verification (v9.12 refactors only)
+
+For PRs that wire a module-canonical wrapper (scheduled or unscheduled)
+into the slow/fast cycle, substrate verification MUST distinguish the
+wrapper's `ran` branch from any fallback writer (heartbeat helper,
+sibling scheduler, multi-writer triangle, or pre-existing module path).
+
+Acceptable signatures:
+- `record_count` differs from fallback-writer signature (e.g.,
+  wrapper writes N=stablecoin_count rows per cycle; heartbeat writes
+  N=1)
+- `batch_hash` uniqueness pattern matches wrapper's payload shape
+  (heartbeat tends to produce repeating hashes when payload is fixed)
+- Direct substrate-table row counts advance past pre-deploy baseline
+  at the wrapper's specific cadence
+
+PRs MUST quote the actual signature observed and explain why fallback
+writers cannot produce it. "≥1 attestation row in 4h" is INSUFFICIENT
+— heartbeat fallback satisfies it vacuously.
+
+Reference: PRs #220, #221 (open follow-up issues from the May-12 audit
+batch). Lesson 12 (`docs/basis_punchlist_2026_05_11.md`).
+
 ## Test plan
 
 <!-- Bulleted checklist of TODOs for testing this PR. -->
