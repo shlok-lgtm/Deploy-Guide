@@ -26,19 +26,19 @@ the module write is dead-in-steady-state. v9.12 says modules are
 canonical → delete the worker.py inline, keep the module call,
 schedule the module from worker.py.
 
-| domain | worker/main site | module site | priority¹ | notes |
-|---|---|---|---|---|
-| `psi_discoveries` | `worker.py:2548`, `main.py:262` | `app/enrichment_worker.py::_run_psi_expansion` (lines 263-306, registered at 774-781) | **P0** | 3-PR history (#137, #150, #157). Highest-friction case. |
-| ~~`data_layer:peg_snapshots_5m` (+ `market_chart_history` + `volatility_surfaces`)~~ ✅ | ~~worker.py:1310-1373 inline~~ removed | `app/data_layer/peg_monitor.py::run_peg_monitoring_scheduled` | **P0 → DONE** | First v9.13 coupled-write refactor. #188 made the module canonical writer for all 3 domains; this PR adds the scheduled wrapper (freshness gate + 3-domain skip/error attest) and routes worker, enrichment_worker, and main.py through it. Dispatcher heartbeat at worker.py:2787 left in place until Phase 2.3. |
-| ~~`data_layer:exchange_snapshots`~~ ✅ | ~~worker.py:1186-1246 inline~~ removed | `app/data_layer/exchange_collector.py::run_exchange_collection_scheduled` | **P0 → DONE** | Q1 answered by #197 (migration 109 — schema replay). Q2 answered: 15 exchanges (worker._EX list), `_EX_FIX` legacy-slug remap ported into module. 35 additional exchanges deferred to Q2-extension (see below). enrichment_worker.py task entry removed (was kept closed by inline; lesson 6 family). main.py daily lambda switched. Dispatcher heartbeat at worker.py:2787 left in place until Phase 2.3. |
-| ~~`data_layer:dex_pool_ohlcv`~~ ✅ | ~~worker.py inline~~ removed | `app/data_layer/ohlcv_collector.py::run_ohlcv_collection_scheduled` | **P0 → DONE** | Pilot landed this session; module-canonical via `run_ohlcv_collection_scheduled()`. Dispatcher heartbeat at worker.py:2778 left in place until Phase 2.3. |
-| `wallets` | `worker.py:1957` (Path A), `worker.py:2642` (Path D heartbeat) | `app/indexer/pipeline.py:811` (Path B inner attest) | **v9.12-exempt** | Wave 1 + Wave 3 + Wave 5b. **v9.12-exempt** — layered defense: 4 writers each covering a failure mode added under fire (#142/#155/#163). Path C (`main.py:197-208`) deleted in #214 as dead code (coroutine-never-awaited — `run_pipeline_batch` is `async def` but called without `await`, swallowed by outer except). Paths A/B/D retained intentionally. See #202 for rationale. |
-| `web_research` | `worker.py:1960`, also 2787 | `app/collectors/web_research.py:563` | **P1** | Wave 1 + Wave 3 + Wave 5b. |
-| ~~`psi_components`~~ ✅ | ~~`worker.py:1073-1087`, `main.py:197-210`~~ removed | `app/collectors/psi_collector.py::run_psi_scoring_scheduled` | **P1 → DONE** | #198/#193 wrapper landed. Module is canonical writer for psi_components; freshness gate keys on `psi_scores.computed_at` (the table written by `run_psi_scoring`; there is no `psi_components` table). skipped_fresh / ran / error all attest inside the module. Both schedulers (worker.py fast cycle, main.py legacy loop) call the wrapper and do not re-attest. Heartbeat helper `_emit_slow_cycle_heartbeats` does NOT include `psi_components`; nothing to touch there (Phase 2.3 unchanged). |
-| `cda_extractions` | `main.py:167` | (enrichment task wraps `app/services/cda_collector.py`) | **P0** | Reclassified from P2 — coherence gap: 0 attestations despite vendor churn (see #207). |
-| `wallet_profiles` | `main.py:301` | (`app/wallet_profile.py`) | **P2** | |
-| `actors` | `main.py:317` | (`app/agent/`) | **P1** | Reclassified from P2 — multi-writer triangle: main.py + actor_classification.py write same domain with semantically different payloads (see #208). |
-| `edges` | `main.py:456` | (`app/indexer/edges.py`) | **P0** | Reclassified from P2 — coherence gap: 0 attestations despite 348k edge updates in 7d (see #209). |
+| domain | worker/main site | module site | priority¹ | classification² | notes |
+|---|---|---|---|---|---|
+| `psi_discoveries` | `worker.py:2548`, `main.py:262` | `app/enrichment_worker.py::_run_psi_expansion` (lines 263-306, registered at 774-781) | **P0** | `LIVE-PATH (wrapper unreached — see D1)` | 3-PR history (#137, #150, #157). Highest-friction case. Per D1: enrichment-task wrapper's db_gate stays closed because main.py's `collect_collateral_exposure()` keeps `protocol_collateral_exposure` fresh; cadence is produced by the slow-cycle heartbeat at `worker.py:2602-2652`, not by the wrapper's `ran` branch. |
+| ~~`data_layer:peg_snapshots_5m` (+ `market_chart_history` + `volatility_surfaces`)~~ ✅ | ~~worker.py:1310-1373 inline~~ removed | `app/data_layer/peg_monitor.py::run_peg_monitoring_scheduled` | **P0 → DONE** | `LIVE-PATH (verified post-DONE)` | First v9.13 coupled-write refactor. #188 made the module canonical writer for all 3 domains; this PR adds the scheduled wrapper (freshness gate + 3-domain skip/error attest) and routes worker, enrichment_worker, and main.py through it. Dispatcher heartbeat at worker.py:2787 left in place until Phase 2.3. Wrapper call verified at `worker.py:1260` (live path). |
+| ~~`data_layer:exchange_snapshots`~~ ✅ | ~~worker.py:1186-1246 inline~~ removed | `app/data_layer/exchange_collector.py::run_exchange_collection_scheduled` | **P0 → DONE** | `LIVE-PATH (verified post-DONE)` | Q1 answered by #197 (migration 109 — schema replay). Q2 answered: 15 exchanges (worker._EX list), `_EX_FIX` legacy-slug remap ported into module. 35 additional exchanges deferred to Q2-extension (see below). enrichment_worker.py task entry removed (was kept closed by inline; lesson 6 family). main.py daily lambda switched. Dispatcher heartbeat at worker.py:2787 left in place until Phase 2.3. Wrapper call verified at `worker.py:1196` (live path). |
+| ~~`data_layer:dex_pool_ohlcv`~~ ✅ | ~~worker.py inline~~ removed | `app/data_layer/ohlcv_collector.py::run_ohlcv_collection_scheduled` | **P0 → DONE** | `LIVE-PATH (verified post-DONE)` | Pilot landed this session; module-canonical via `run_ohlcv_collection_scheduled()`. Dispatcher heartbeat at worker.py:2778 left in place until Phase 2.3. Wrapper call verified at `worker.py:2066` (live path). |
+| `wallets` | `worker.py:1957` (Path A), `worker.py:2642` (Path D heartbeat) | `app/indexer/pipeline.py:811` (Path B inner attest) | **v9.12-exempt** | `LIVE-PATH` (Paths A/B/D); Path C `LEGACY-DEAD-CODE` (deleted #214) | Wave 1 + Wave 3 + Wave 5b. **v9.12-exempt** — layered defense: 4 writers each covering a failure mode added under fire (#142/#155/#163). Path C (`main.py:197-208`) deleted in #214 as dead code (coroutine-never-awaited — `run_pipeline_batch` is `async def` but called without `await`, swallowed by outer except). Paths A/B/D retained intentionally. See #202 for rationale. |
+| `web_research` | `worker.py:1960`, also 2787 | `app/collectors/web_research.py:563` | **P1** | `LIVE-PATH` | Wave 1 + Wave 3 + Wave 5b. |
+| ~~`psi_components`~~ ✅ | ~~`worker.py:1073-1087`, `main.py:197-210`~~ removed | `app/collectors/psi_collector.py::run_psi_scoring_scheduled` | **P1 → DONE** | `LIVE-PATH (verified post-DONE)` | #198/#193 wrapper landed. Module is canonical writer for psi_components; freshness gate keys on `psi_scores.computed_at` (the table written by `run_psi_scoring`; there is no `psi_components` table). skipped_fresh / ran / error all attest inside the module. Both schedulers (worker.py fast cycle, main.py legacy loop) call the wrapper and do not re-attest. Heartbeat helper `_emit_slow_cycle_heartbeats` does NOT include `psi_components`; nothing to touch there (Phase 2.3 unchanged). |
+| `cda_extractions` | `main.py:167` | (enrichment task wraps `app/services/cda_collector.py`) | **P0** | `LEGACY-DEAD-CODE` (per D2) | Reclassified from P2 — coherence gap: 0 attestations despite vendor churn (see #207). Live writers at `worker.py:1885` + `enrichment_worker.py:673`; `main.py:163` wrapper (#212) never fires because `Dockerfile.api` disables worker. |
+| `wallet_profiles` | `main.py:301` | (`app/wallet_profile.py`) | **P2** | `LEGACY-DEAD-CODE` | Verified via lesson 10: `main.py:301` only reachable inside `run_worker_loop`, which is gated by `WORKER_ENABLED=true`. `Dockerfile.api` sets it false and `Dockerfile.worker` bypasses main.py entirely. Module-side attest in `rebuild_all_profiles()` is the only live writer. |
+| `actors` | `main.py:317` | (`app/agent/`) | **P1** | `COROUTINE-BUG` (per D4) | Reclassified from P2 — multi-writer triangle: main.py + actor_classification.py write same domain with semantically different payloads (see #208). `main.py:311` calls `async def run_agent_cycle()` (defined at `app/agent/watcher.py:259`) without `await` or `asyncio.run`, swallowed by broad `except` at `main.py:321`. Same shape as #214 wallets cleanup. |
+| `edges` | `main.py:456` | (`app/indexer/edges.py`) | **P0** | `MULTI-SCHEDULER-PEER` (per D3) | Reclassified from P2 — coherence gap: 0 attestations despite 348k edge updates in 7d (see #209). Three sibling schedulers keep gate closed: `worker.py:2007` (slow-cycle inline), `enrichment_worker.py:707` (registered `edge_building` task), and `app/indexer/edges.py::edge_builder_background_loop` (launched from `worker.py:3598`). main.py:472 wrapper #215 is structurally unreachable in the worker container and superseded by 3 peers in the worker. |
 
 ¹ Priority key:
 - **P0** — most-fraught, multiple PRs in flight on 2026-05-11; should
@@ -48,45 +48,70 @@ schedule the module from worker.py.
 - **P2** — main.py legacy entries, no worker.py duplication; refactor
   last (lowest risk, lowest signal).
 
+² Classification key (added 2026-05-13 per lesson 12 — see
+"Pre-refactor call-site classification" section above). Evidence
+chain for LEGACY-DEAD-CODE / COROUTINE-BUG verdicts:
+`Dockerfile.api` line 19 sets `WORKER_ENABLED=false`, so
+`run_worker_loop` (which contains all `main.py:*` attest sites) never
+runs in the API container. `Dockerfile.worker` line 15 runs
+`python -m app.worker --loop` directly, bypassing `main.py` entirely.
+Therefore every `main.py:*` site is unreachable in steady state
+production. `LIVE-PATH (wrapper unreached — see D1)` is a refinement
+for cases where the wrapper exists at a live-path site but its `ran`
+branch is structurally never taken — the cadence comes from a sibling
+or heartbeat. Audit refs: D1 (PR #216 psi_discoveries), D2 (PR #212
+cda_extractions), D3 (PR #215 edges), D4 (PR #213 actors).
+
 ### SINGLE_WRITER (already canonical — no refactor needed)
 
 These already have exactly one writer. v9.12 leaves them alone
 EXCEPT to (a) confirm the writer's location in the manifest, (b)
 ensure no future PR re-introduces a worker.py inline.
 
-| domain | sole writer | notes |
-|---|---|---|
-| `sii_components` | `worker.py:665` (sole site; modules don't write) | Worker-canonical OK per v9.12 — this is the orchestrator-level scoring loop, not a data domain. Marked SINGLE_WRITER. |
-| `data_layer:liquidity_depth` | `app/data_layer/liquidity_collector.py:381` | Already module-canonical. ✅ |
-| `data_layer:token_approvals` | `app/data_layer/approval_collector.py:236` | ✅ |
-| `data_layer:yield_snapshots` | `app/data_layer/yield_collector.py:273` | ✅ |
-| `data_layer:mint_burn_events` | `app/data_layer/mint_burn_collector.py:322` | ✅ (data dry, op-followup #1 — not a v9.12 issue) |
-| `data_layer:governance_proposals` | `app/data_layer/governance_collector.py:473` | ✅ |
-| `data_layer:bridge_flows` | `app/data_layer/bridge_flow_collector.py:236` | ✅ (deferred per v9.3) |
-| `data_layer:oracle_cadence` | `app/data_layer/oracle_cadence_collector.py:176` | ✅ |
-| `data_layer:wallet_holdings` | `app/data_layer/holder_discovery.py:266` | ✅ |
-| `data_layer:market_chart_history` | `app/data_layer/markets_collector.py:298` + `market_chart_backfill.py:359` | Two module sites but BOTH module-canonical — different invocation paths (cron-style backfill vs live update). Not a v9.12 issue. |
-| `data_layer:protocol_traces` | `app/data_layer/trace_collector.py:270` | ✅ |
-| `data_layer:contract_surveillance` | `app/data_layer/contract_surveillance.py:396` | ✅ |
-| `data_layer:wallet_holder_discovery` | `app/data_layer/holder_ingestion_collector.py:402` | ✅ (weekly cadence, Wave 8 diagnosis) |
-| `data_layer:entity_snapshots_hourly` | `app/data_layer/entity_snapshots.py:326` | ✅ (Migration 107 fix landed) |
-| `data_layer:wallet_chain_presence` | `app/data_layer/multichain_holder_collector.py:251` + `wallet_presence_scanner.py:160` | Two module sites, different scanners; module-canonical. |
-| `mempool_observations` | `app/data_layer/mempool_watcher.py:800` | ✅ |
-| `oracle_readings` | `app/collectors/oracle_behavior.py:629` | ✅ |
-| `oracle_stress_events` | `app/collectors/oracle_behavior.py:471,679` | ✅ |
-| `sanctions_screening` | `app/collectors/sanctions_screening.py:198` | ✅ |
-| `clustered_concentration` | `app/collectors/clustered_concentration.py:339` | ✅ |
-| `governance_events` | `app/collectors/governance_events.py:443,448` | ✅ |
-| `enforcement_records` | `app/collectors/enforcement_history.py:273` | ✅ |
-| `exchange_health` | `app/collectors/exchange_health.py:303` | ✅ |
-| `parent_company_financials` | `app/collectors/parent_company_financials.py:285` | ✅ |
-| `flows` | `app/collectors/flows.py:433` | ✅ |
-| `tti_components` | `app/collectors/tti_collector.py:698,703` | ✅ |
-| `contract_dependencies(_snapshot)` | `app/collectors/contract_dependencies.py:375,460` | ✅ |
-| `lsti_components` | `app/collectors/lst_collector.py:671,676` | ✅ |
-| `validator_performance` | `app/collectors/rated_validators.py:227` | ✅ |
-| `dex_pool_data` | `app/collectors/dex_pools.py:426,431` | ✅ |
-| `rpi_components` | (`_emit_slow_cycle_heartbeats` in worker.py) | Wave 7 heartbeat lives in worker.py — this is a v9.12 candidate but lower priority because the heartbeat shape is intentionally orchestrator-level. Keep as worker-canonical for now and revisit. |
+| domain | sole writer | classification² | notes |
+|---|---|---|---|
+| `sii_components` | `worker.py:665` (sole site; modules don't write) | `LIVE-PATH` | Worker-canonical OK per v9.12 — this is the orchestrator-level scoring loop, not a data domain. Marked SINGLE_WRITER. |
+| `data_layer:liquidity_depth` | `app/data_layer/liquidity_collector.py:381` | `LIVE-PATH` | Already module-canonical. ✅ |
+| `data_layer:token_approvals` | `app/data_layer/approval_collector.py:236` | `LIVE-PATH` | ✅ |
+| `data_layer:yield_snapshots` | `app/data_layer/yield_collector.py:273` | `LIVE-PATH` | ✅ |
+| `data_layer:mint_burn_events` | `app/data_layer/mint_burn_collector.py:322` | `LIVE-PATH` | ✅ (data dry, op-followup #1 — not a v9.12 issue) |
+| `data_layer:governance_proposals` | `app/data_layer/governance_collector.py:473` | `LIVE-PATH` | ✅ |
+| `data_layer:bridge_flows` | `app/data_layer/bridge_flow_collector.py:236` | `LIVE-PATH` | ✅ (deferred per v9.3) |
+| `data_layer:oracle_cadence` | `app/data_layer/oracle_cadence_collector.py:176` | `LIVE-PATH` | ✅ |
+| `data_layer:wallet_holdings` | `app/data_layer/holder_discovery.py:266` | `LIVE-PATH` | ✅ |
+| `data_layer:market_chart_history` | `app/data_layer/markets_collector.py:298` + `market_chart_backfill.py:359` | `LIVE-PATH` | Two module sites but BOTH module-canonical — different invocation paths (cron-style backfill vs live update). Not a v9.12 issue. |
+| `data_layer:protocol_traces` | `app/data_layer/trace_collector.py:270` | `LIVE-PATH` | ✅ Reached via `trace_collector_background_loop` launched from `worker.py:3617`. |
+| `data_layer:contract_surveillance` | `app/data_layer/contract_surveillance.py:396` | `LIVE-PATH` | ✅ |
+| `data_layer:wallet_holder_discovery` | `app/data_layer/holder_ingestion_collector.py:402` | `LIVE-PATH` | ✅ (weekly cadence, Wave 8 diagnosis) |
+| `data_layer:entity_snapshots_hourly` | `app/data_layer/entity_snapshots.py:326` | `LIVE-PATH` | ✅ (Migration 107 fix landed) |
+| `data_layer:wallet_chain_presence` | `app/data_layer/multichain_holder_collector.py:251` + `wallet_presence_scanner.py:160` | `LIVE-PATH` | Two module sites, different scanners; both reached via background loops launched from `worker.py:3583` / `worker.py:3590`. |
+| `mempool_observations` | `app/data_layer/mempool_watcher.py:800` | `LIVE-PATH` | ✅ |
+| `oracle_readings` | `app/collectors/oracle_behavior.py:629` | `LIVE-PATH` | ✅ |
+| `oracle_stress_events` | `app/collectors/oracle_behavior.py:471,679` | `LIVE-PATH` | ✅ |
+| `sanctions_screening` | `app/collectors/sanctions_screening.py:198` | `LIVE-PATH` | ✅ |
+| `clustered_concentration` | `app/collectors/clustered_concentration.py:339` | `LIVE-PATH` | ✅ |
+| `governance_events` | `app/collectors/governance_events.py:443,448` | `LIVE-PATH` | ✅ |
+| `enforcement_records` | `app/collectors/enforcement_history.py:273` | `LIVE-PATH` | ✅ |
+| `exchange_health` | `app/collectors/exchange_health.py:303` | `LIVE-PATH` | ✅ |
+| `parent_company_financials` | `app/collectors/parent_company_financials.py:285` | `LIVE-PATH` | ✅ |
+| `flows` | `app/collectors/flows.py:433` | `LIVE-PATH` | ✅ |
+| `tti_components` | `app/collectors/tti_collector.py:698,703` | `LIVE-PATH` | ✅ |
+| `contract_dependencies(_snapshot)` | `app/collectors/contract_dependencies.py:375,460` | `LIVE-PATH` | ✅ |
+| `lsti_components` | `app/collectors/lst_collector.py:671,676` | `LIVE-PATH` | ✅ |
+| `validator_performance` | `app/collectors/rated_validators.py:227` | `LIVE-PATH` | ✅ |
+| `dex_pool_data` | `app/collectors/dex_pools.py:426,431` | `LIVE-PATH` | ✅ |
+| `rpi_components` | (`_emit_slow_cycle_heartbeats` in worker.py) | `LIVE-PATH` (heartbeat) | Wave 7 heartbeat lives in worker.py — this is a v9.12 candidate but lower priority because the heartbeat shape is intentionally orchestrator-level. Keep as worker-canonical for now and revisit. |
+
+## Pre-refactor call-site classification (REQUIRED per lesson 12)
+
+Before scheduling a refactor, classify EACH call site for the domain:
+
+| classification | criterion | example | refactor impact |
+|---|---|---|---|
+| **LIVE-PATH** | reachable via `Dockerfile.api` or `Dockerfile.worker` container's main entry; verified by reading the Dockerfile + the entry module's import chain | `app/worker.py:*`, `app/enrichment_worker.py:*` registered tasks, `app/indexer/edges.py:620` (called by `worker.py:3598`) | refactor must hoist wrapper to this site; verification gate applies |
+| **LEGACY-DEAD-CODE** | only reachable via `main.py` AND `Dockerfile.api` has `WORKER_ENABLED=false` (or equivalent), AND `Dockerfile.worker` runs `app.worker` directly | `main.py:163`, `main.py:296`, `main.py:301`, `main.py:467` post-#214 cleanup | wrapper-swap is cosmetic; do NOT count as refactor completion |
+| **MULTI-SCHEDULER-PEER** | wrapper exists at one site but sibling loops at other live-path sites keep the freshness gate closed | edges: wrapper at `main.py:467`, peers at `worker.py:2007`, `enrichment_worker.py:707`, `edges.py:620` | refactor MUST hoist all peers or document why wrapper-only is sufficient |
+| **COROUTINE-BUG** | `async def` function invoked without `await`, swallowed by broad `except` | `main.py:197-208` (cleaned in #214), `main.py:296` (still broken — #221) | wrapper-swap doesn't help; need to fix the bug OR move attest to a working call site |
 
 ## Refactor sweep order
 
