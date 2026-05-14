@@ -586,15 +586,17 @@ def _automate_dao_transparency(entity: dict, static: dict) -> dict:
                            'monthly update', 'financial update', 'budget report',
                            'spending report', 'treasury update']
 
-        # Check governance_forum_posts table for report-like posts
+        # Check governance_forum_posts table for report-like posts.
+        # Schema: timestamp column is `posted_at` (not `collected_at`),
+        # body text is `body_excerpt` (not `raw_text`).
         row = fetch_one("""
             SELECT COUNT(*) AS report_count
             FROM governance_forum_posts
             WHERE protocol_slug = %s
-              AND collected_at >= NOW() - INTERVAL '365 days'
+              AND posted_at >= NOW() - INTERVAL '365 days'
               AND (
                   LOWER(title) SIMILAR TO %s
-                  OR LOWER(raw_text) SIMILAR TO %s
+                  OR LOWER(body_excerpt) SIMILAR TO %s
               )
         """, (
             protocol_slug,
