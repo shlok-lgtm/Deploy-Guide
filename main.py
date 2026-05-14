@@ -191,21 +191,21 @@ def run_worker_loop():
         except Exception as e:
             logger.warning(f"Wallet batch re-index failed: {e}")
 
-        # PSI scoring — uses DeFiLlama only, no explorer API budget
-        # Sleep to avoid API contention with SII cycle
+        # PSI scoring (v9.12 module-canonical) — uses DeFiLlama only, no
+        # explorer API budget. Sleep to avoid API contention with SII cycle.
+        # Inline attest removed — psi_collector.run_psi_scoring_scheduled
+        # is the canonical writer for psi_components. Worker is
+        # scheduler-only (matches worker.py path).
         time.sleep(60)
         try:
-            from app.collectors.psi_collector import run_psi_scoring
-            logger.info("Running PSI scoring cycle...")
-            psi_results = run_psi_scoring()
-            logger.info(f"PSI scoring complete: {len(psi_results)} protocols scored")
-            # Attest PSI scores
-            try:
-                from app.state_attestation import attest_state
-                if psi_results:
-                    attest_state("psi_components", [{"slug": r.get("protocol_slug", ""), "score": r.get("overall_score")} for r in psi_results if isinstance(r, dict)], writer_id="main.inline.psi_components")
-            except Exception as ae:
-                logger.debug(f"PSI attestation skipped: {ae}")
+            import asyncio as _psi_asyncio
+            from app.collectors.psi_collector import run_psi_scoring_scheduled
+            logger.info("Running PSI scoring cycle (module-canonical)...")
+            _psi_summary = _psi_asyncio.run(run_psi_scoring_scheduled())
+            logger.info(
+                f"PSI scoring: status={_psi_summary.get('status')}, "
+                f"protocols_scored={_psi_summary.get('protocols_scored', 0)}"
+            )
         except Exception as e:
             logger.warning(f"PSI scoring failed: {e}")
 
