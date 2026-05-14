@@ -1843,6 +1843,121 @@ def run_psi_scoring():
 
 
 # =========================================================================
+# v9.12 module-canonical scheduler entry (#198 / #193 pattern)
+# =========================================================================
+
+_PSI_FRESHNESS_MINUTES = 50
+
+
+async def run_psi_scoring_scheduled() -> dict:
+    """Module-canonical scheduler entry for psi_components per v9.12.
+
+    Returns a status dict regardless of branch:
+      - {"status": "skipped_fresh", "table_age_minutes": X}
+      - {"status": "ran", "protocols_scored": N, ...}
+      - {"status": "error", "error": str}
+
+    The state_attestations row for ``psi_components`` fires inside this
+    function on every branch (skipped_fresh / ran / error). Schedulers
+    (worker.py fast cycle, main.py legacy loop) MUST NOT re-attest.
+
+    Freshness gate keys on ``psi_scores.computed_at`` — the table that
+    ``run_psi_scoring`` writes. ``psi_components`` is the attestation
+    domain only; there is no table by that name.
+    """
+    from app.state_attestation import attest_state
+
+    table_age_minutes: float = float(_PSI_FRESHNESS_MINUTES)
+    try:
+        latest = await asyncio.to_thread(
+            fetch_one, "SELECT MAX(computed_at) AS t FROM psi_scores"
+        )
+        if latest and latest.get("t"):
+            _t = latest["t"]
+            if hasattr(_t, "tzinfo") and _t.tzinfo is None:
+                _t = _t.replace(tzinfo=timezone.utc)
+            if hasattr(_t, "timestamp"):
+                table_age_minutes = (
+                    datetime.now(timezone.utc) - _t
+                ).total_seconds() / 60
+    except Exception as e:
+        logger.warning(f"[psi_collector] freshness check failed: {e}")
+        table_age_minutes = float(_PSI_FRESHNESS_MINUTES)
+
+    if table_age_minutes < _PSI_FRESHNESS_MINUTES:
+        skipped_payload = {
+            "status": "skipped_fresh",
+            "table_age_minutes": round(table_age_minutes, 2),
+        }
+        try:
+            await asyncio.to_thread(
+                attest_state,
+                "psi_components",
+                [skipped_payload],
+                writer_id="module.psi_collector",
+            )
+        except Exception as e:
+            logger.warning(f"[psi_collector] skipped-fresh attest failed: {e}")
+        return skipped_payload
+
+    try:
+        psi_results = await asyncio.to_thread(run_psi_scoring)
+        # Preserve the payload shape worker.py / main.py used pre-v9.12:
+        # one dict per protocol with {slug, score}. entity_id stays NULL,
+        # matching the existing 283-row attestation history.
+        attest_records = [
+            {"slug": r.get("protocol_slug", ""), "score": r.get("overall_score")}
+            for r in (psi_results or [])
+            if isinstance(r, dict)
+        ]
+        if attest_records:
+            try:
+                await asyncio.to_thread(
+                    attest_state,
+                    "psi_components",
+                    attest_records,
+                    writer_id="module.psi_collector",
+                )
+            except Exception as e:
+                logger.warning(f"[psi_collector] ran attest failed: {e}")
+        else:
+            # Attest even when zero protocols scored so the domain stays
+            # fresh. Same lesson as psi_discoveries (#137) — gating on
+            # non-empty results lets the domain go silent.
+            try:
+                await asyncio.to_thread(
+                    attest_state,
+                    "psi_components",
+                    [{"status": "ran", "protocols_scored": 0}],
+                    writer_id="module.psi_collector",
+                )
+            except Exception as e:
+                logger.warning(f"[psi_collector] ran-empty attest failed: {e}")
+        return {
+            "status": "ran",
+            "table_age_minutes": round(table_age_minutes, 2),
+            "protocols_scored": len(attest_records),
+        }
+    except Exception as e:
+        logger.warning(f"[psi_collector] scheduled run failed: {e}")
+        error_payload = {
+            "status": "error",
+            "table_age_minutes": round(table_age_minutes, 2),
+            "error": str(e)[:200],
+        }
+        try:
+            await asyncio.to_thread(
+                attest_state,
+                "psi_components",
+                [error_payload],
+                writer_id="module.psi_collector",
+            )
+        except Exception:
+            pass
+        return {"status": "error", "error": str(e)[:500]}
+
+
+# =========================================================================
 # Chain Discovery — surface chains needing collector coverage
 # =========================================================================
 
