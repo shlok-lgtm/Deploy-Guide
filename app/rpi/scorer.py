@@ -645,6 +645,178 @@ def sync_all_lens_components(protocols: list[str]) -> dict:
 
 
 # =============================================================================
+# Module-canonical wrapper for rpi_components attestation (v9.12 Wave 3.1)
+# =============================================================================
+#
+# Background:
+#   rpi_components attestations historically came from two paths:
+#     1. `app.enrichment_worker._run_rpi` — wraps run_rpi_scoring() and
+#        attests with writer_id="enrichment.rpi_scoring" using a list of
+#        {slug, score} records (record_count == #protocols scored).
+#     2. `app.worker._emit_slow_cycle_heartbeats` — fires once per slow
+#        cycle with writer_id="heartbeat.slow_cycle" and a placeholder
+#        payload {status, via, ...} (record_count == 1).
+#
+#   In production today (substrate cite at PR body), 100% of recent rows
+#   come from path (2) — record_count=1, writer_id=null. The enrichment
+#   task's attestation is currently dormant (its 24h gate caps freshness
+#   to once/day, and the heartbeat fires every slow cycle).
+#
+#   Phase 2.3a (the next PR) will remove rpi_components from the heartbeat
+#   loop in worker.py. This wrapper is the module-canonical replacement
+#   the heartbeat path will drop into; the enrichment worker can also be
+#   migrated to call it instead of attesting inline.
+#
+# Distinguishable signatures (Lesson 12):
+#   - heartbeat path:  record_count == 1, payload = {"status": "...",
+#     "via": "run_slow_cycle_parallel", ...}
+#   - wrapper ran:     record_count == #protocols scored (>=1, usually
+#     13+ given current RPI_TARGET_PROTOCOLS list), payload entries are
+#     {"slug": ..., "score": ...} dicts. NEVER contains "via".
+#   - wrapper skipped_fresh: record_count == 1, payload =
+#     {"status": "skipped_fresh", "table_age_minutes": X}
+#   - wrapper error: record_count == 1, payload =
+#     {"status": "error", "table_age_minutes": X, "error": "..."}
+#
+# Mirrors #198 (exchange_collector) / #193 (peg_monitor) / #240
+# (psi_collector). Freshness gate at 24h matches the existing enrichment
+# task gate (`SELECT MAX(computed_at) FROM rpi_scores`, min_hours=24).
+# =============================================================================
+
+# RPI is a slow/daily cycle. Match the enrichment-worker gate exactly.
+# 1440 min = 24h. Use a slightly smaller value so the wrapper "ran" branch
+# can fire on a cycle that races ahead of the gate (e.g., if rpi_scores
+# was last written 23h59m ago we should still let it run).
+_RPI_FRESHNESS_MINUTES = 1380  # 23h
+
+
+async def run_rpi_scoring_scheduled(
+    cycle_ts: datetime | None = None,
+) -> dict:
+    """Module-canonical scheduler entry for rpi_components per v9.12.
+
+    Returns a status dict regardless of branch:
+      - {"status": "skipped_fresh", "table_age_minutes": X}
+      - {"status": "ran", "protocols_scored": N, ...}
+      - {"status": "error", "error": str}
+
+    The state_attestations row for ``rpi_components`` fires inside this
+    function on every branch (skipped_fresh / ran / error). Schedulers
+    (worker.py slow-cycle heartbeat, enrichment_worker._run_rpi) MUST NOT
+    re-attest after calling this wrapper.
+
+    Freshness gate keys on ``rpi_scores.computed_at`` — the table that
+    ``run_rpi_scoring`` writes via ``store_rpi_score``. ``rpi_components``
+    is BOTH the attestation domain AND a real table (component values per
+    protocol); the freshness anchor we use here is the parent ``rpi_scores``
+    table because that is what ``run_rpi_scoring`` produces as its final
+    output, matching the gate in app.enrichment_worker.
+
+    Args:
+      cycle_ts: optional timestamp passed by scheduler. Not stored —
+        state_attestations uses NOW(). Accepted for caller-symmetry with
+        ``run_psi_discovery_monitor_scheduled`` (#230).
+    """
+    from app.state_attestation import attest_state
+
+    _ = cycle_ts  # currently unused; reserved for future symmetry
+
+    table_age_minutes: float = float(_RPI_FRESHNESS_MINUTES)
+    try:
+        latest = await asyncio.to_thread(
+            fetch_one, "SELECT MAX(computed_at) AS t FROM rpi_scores"
+        )
+        if latest and latest.get("t"):
+            _t = latest["t"]
+            if hasattr(_t, "tzinfo") and _t.tzinfo is None:
+                _t = _t.replace(tzinfo=timezone.utc)
+            if hasattr(_t, "timestamp"):
+                table_age_minutes = (
+                    datetime.now(timezone.utc) - _t
+                ).total_seconds() / 60
+    except Exception as e:
+        logger.warning(f"[rpi.scorer] freshness check failed: {e}")
+        table_age_minutes = float(_RPI_FRESHNESS_MINUTES)
+
+    if table_age_minutes < _RPI_FRESHNESS_MINUTES:
+        skipped_payload = {
+            "status": "skipped_fresh",
+            "table_age_minutes": round(table_age_minutes, 2),
+        }
+        try:
+            await asyncio.to_thread(
+                attest_state,
+                "rpi_components",
+                [skipped_payload],
+                None,
+                "module.rpi_scorer",
+            )
+        except Exception as e:
+            logger.warning(f"[rpi.scorer] skipped-fresh attest failed: {e}")
+        return skipped_payload
+
+    try:
+        rpi_results = await asyncio.to_thread(run_rpi_scoring)
+        # Preserve the payload shape `_run_rpi` used pre-Wave-3.1:
+        # one dict per protocol with {slug, score}. entity_id stays NULL,
+        # matching the existing 30-row rpi_components attestation history.
+        attest_records = [
+            {"slug": r.get("protocol_slug", ""), "score": r.get("overall_score")}
+            for r in (rpi_results or [])
+            if isinstance(r, dict)
+        ]
+        if attest_records:
+            try:
+                await asyncio.to_thread(
+                    attest_state,
+                    "rpi_components",
+                    attest_records,
+                    None,
+                    "module.rpi_scorer",
+                )
+            except Exception as e:
+                logger.warning(f"[rpi.scorer] ran attest failed: {e}")
+        else:
+            # Attest even when zero protocols scored so the domain stays
+            # fresh. Same lesson as psi_components (#240) and
+            # psi_discoveries (#137) — gating on non-empty results lets
+            # the domain go silent on transient failures.
+            try:
+                await asyncio.to_thread(
+                    attest_state,
+                    "rpi_components",
+                    [{"status": "ran", "protocols_scored": 0}],
+                    None,
+                    "module.rpi_scorer",
+                )
+            except Exception as e:
+                logger.warning(f"[rpi.scorer] ran-empty attest failed: {e}")
+        return {
+            "status": "ran",
+            "table_age_minutes": round(table_age_minutes, 2),
+            "protocols_scored": len(attest_records),
+        }
+    except Exception as e:
+        logger.warning(f"[rpi.scorer] scheduled run failed: {e}")
+        error_payload = {
+            "status": "error",
+            "table_age_minutes": round(table_age_minutes, 2),
+            "error": str(e)[:200],
+        }
+        try:
+            await asyncio.to_thread(
+                attest_state,
+                "rpi_components",
+                [error_payload],
+                None,
+                "module.rpi_scorer",
+            )
+        except Exception:
+            pass
+        return {"status": "error", "error": str(e)[:500]}
+
+
+# =============================================================================
 # Orchestrator
 # =============================================================================
 
