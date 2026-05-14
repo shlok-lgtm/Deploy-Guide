@@ -304,7 +304,7 @@ async def run_pool_wallet_collection(max_pages_per_pool: int = 30) -> dict:
                 "discovered": total_discovered,
                 "seeded": total_seeded,
                 "protocols": list(by_protocol.keys()),
-            }])
+            }], None, "module.pool_wallet_collector")
     except asyncio.CancelledError:
         raise
     except Exception as e:

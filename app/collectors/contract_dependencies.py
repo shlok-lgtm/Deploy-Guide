@@ -376,7 +376,7 @@ def _reconcile_dependencies(entity: dict, current_deps: list[dict], results: dic
                     "entity_slug": entity["entity_slug"],
                     "depends_on": dep["depends_on_address"],
                     "chain": dep["depends_on_chain"],
-                }], str(entity_id))
+                }], str(entity_id), writer_id="module.contract_dependencies")
             except Exception as e:
                 logger.warning(f"reconcile dependencies failed: {e}")
                 try:
@@ -461,7 +461,7 @@ def _store_daily_snapshot(entity: dict, current_deps: list[dict], results: dict)
             "entity_slug": entity["entity_slug"],
             "snapshot_date": today.isoformat(),
             "dependency_count": len(dep_addresses),
-        }], str(entity_id))
+        }], str(entity_id), writer_id="module.contract_dependencies")
     except Exception as e:
         logger.warning(f"store daily snapshot failed: {e}")
         try:

@@ -283,7 +283,7 @@ async def archive_contagion_event(
                 "trigger_metric": trigger_metric,
                 "trigger_after": trigger_after,
                 "detected_at": now.isoformat(),
-            }], str(source_entity_id))
+            }], str(source_entity_id), "module.contagion_archive")
         except asyncio.CancelledError:
             raise
         except Exception as ae:

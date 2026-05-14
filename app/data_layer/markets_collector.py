@@ -295,7 +295,7 @@ async def run_extended_5min_pulls() -> dict:
     try:
         from app.data_layer.provenance_scaling import attest_data_batch
         if total_records > 0:
-            await asyncio.to_thread(attest_data_batch, "market_chart_history", [{"records": total_records, "entities": entities_processed, "type": "circle7_5min"}])
+            await asyncio.to_thread(attest_data_batch, "market_chart_history", [{"records": total_records, "entities": entities_processed, "type": "circle7_5min"}], None, "module.markets_collector")
     except asyncio.CancelledError:
         raise
     except Exception as e:

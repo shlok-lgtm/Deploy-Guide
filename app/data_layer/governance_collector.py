@@ -470,7 +470,7 @@ async def run_governance_collection() -> dict:
     try:
         from app.data_layer.provenance_scaling import attest_data_batch, link_batch_to_proof
         if total_proposals > 0:
-            await asyncio.to_thread(attest_data_batch, "governance_proposals", [{"proposals": total_proposals, "voters": total_voters}])
+            await asyncio.to_thread(attest_data_batch, "governance_proposals", [{"proposals": total_proposals, "voters": total_voters}], None, "module.governance_collector")
             await link_batch_to_proof("governance_proposals", "governance_proposals")
             await link_batch_to_proof("governance_voters", "governance_voters")
     except asyncio.CancelledError:

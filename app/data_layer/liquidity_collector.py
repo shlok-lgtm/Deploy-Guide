@@ -378,7 +378,7 @@ async def run_liquidity_collection() -> dict:
     try:
         from app.data_layer.provenance_scaling import attest_data_batch, link_batch_to_proof
         if total_records > 0:
-            await asyncio.to_thread(attest_data_batch, "liquidity_depth", [{"records": total_records, "cex": total_cex, "dex": total_dex}])
+            await asyncio.to_thread(attest_data_batch, "liquidity_depth", [{"records": total_records, "cex": total_cex, "dex": total_dex}], None, "module.liquidity_collector")
             await link_batch_to_proof("liquidity_depth", "liquidity_depth")
     except asyncio.CancelledError:
         raise

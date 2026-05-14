@@ -227,7 +227,7 @@ def collect_validator_performance() -> dict:
             attest_state("validator_performance", [{
                 "snapshot_date": today.isoformat(),
                 "operators_stored": snapshots_stored,
-            }])
+            }], writer_id="module.rated_validators")
         except Exception as e:
             logger.warning(f"Validator performance attestation failed: {ae}")
             try:

@@ -291,6 +291,8 @@ async def _run_psi_expansion():
             attest_state,
             "psi_discoveries",
             [{"synced": synced, "discovered": discovered, "enriched": enriched, "promoted": promoted}],
+            None,
+            "enrichment.psi_expansion",
         )
     except Exception as ae:
         logger.error(f"[enrichment] psi_discoveries attestation failed: {ae}")
@@ -435,7 +437,7 @@ async def run_enrichment_pipeline() -> dict:
                     records = [{"status": "ran_no_dict_results", "result_count": len(result)}]
             else:
                 records = [{"status": "ran_no_results", "result_count": 0}]
-            await asyncio.to_thread(attest_state, "rpi_components", records)
+            await asyncio.to_thread(attest_state, "rpi_components", records, None, "enrichment.rpi_scoring")
         except Exception as ae:
             logger.error(f"RPI components attestation failed: {ae}")
             try:
@@ -768,7 +770,7 @@ async def run_enrichment_pipeline() -> dict:
                     {"type": s.get("type"), "severity": s.get("severity")}
                     for s in signals
                 ]
-                await asyncio.to_thread(attest_state, "divergence_signals", records)
+                await asyncio.to_thread(attest_state, "divergence_signals", records, None, "enrichment.divergence_detection")
         except Exception as e:
             logger.error(f"[enrichment] divergence attestation failed: {e}")
             try:
@@ -1237,7 +1239,7 @@ async def run_enrichment_pipeline() -> dict:
                 "SELECT source_domain, attestation_hash, proved_at FROM provenance_proofs WHERE proved_at > NOW() - INTERVAL '2 hours'",
             )
             if prov_rows:
-                await asyncio.to_thread(attest_state, "provenance", [dict(r) for r in prov_rows])
+                await asyncio.to_thread(attest_state, "provenance", [dict(r) for r in prov_rows], None, "enrichment.provenance_update")
         except Exception as e:
             logger.error(f"[enrichment] provenance attestation failed: {e}")
             try:

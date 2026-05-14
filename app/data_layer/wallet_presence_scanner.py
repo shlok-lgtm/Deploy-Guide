@@ -157,7 +157,7 @@ async def run_wallet_presence_scan() -> dict:
     try:
         from app.data_layer.provenance_scaling import attest_data_batch
         if total_presences > 0:
-            await asyncio.to_thread(attest_data_batch, "wallet_chain_presence", [{"presences": total_presences, "mode": "B"}])
+            await asyncio.to_thread(attest_data_batch, "wallet_chain_presence", [{"presences": total_presences, "mode": "B"}], None, "module.wallet_presence_scanner")
     except asyncio.CancelledError:
         raise
     except Exception as e:

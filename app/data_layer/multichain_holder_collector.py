@@ -248,7 +248,7 @@ async def run_multichain_holder_scan() -> dict:
         from app.data_layer.provenance_scaling import attest_data_batch
         total_presences = sum(s["new_presences"] for s in stats.values())
         if total_presences > 0:
-            await asyncio.to_thread(attest_data_batch, "wallet_chain_presence", [dict(stats)])
+            await asyncio.to_thread(attest_data_batch, "wallet_chain_presence", [dict(stats)], None, "module.multichain_holder_collector")
     except asyncio.CancelledError:
         raise
     except Exception as e:

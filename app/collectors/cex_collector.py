@@ -469,9 +469,9 @@ def run_cxri_scoring() -> list[dict]:
             attest_state("cxri_components", [
                 {"slug": r["entity_slug"], "score": r["overall_score"]}
                 for r in results
-            ])
+            ], writer_id="module.cex_collector")
         else:
-            attest_state("cxri_components", [{"status": "ran_no_results", "results_count": 0}])
+            attest_state("cxri_components", [{"status": "ran_no_results", "results_count": 0}], writer_id="module.cex_collector")
     except Exception as ae:
         logger.error(f"cxri_components attestation failed: {ae}")
         try:

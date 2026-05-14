@@ -662,7 +662,7 @@ async def score_stablecoin(client: httpx.AsyncClient, stablecoin_id: str) -> dic
             for c in components
         ]
         await _loop.run_in_executor(
-            None, attest_state, "sii_components", _attest_records, stablecoin_id
+            None, attest_state, "sii_components", _attest_records, stablecoin_id, "worker.inline.sii_components"
         )
     except Exception as e:
         logger.debug(f"SII attestation skipped for {stablecoin_id}: {e}")
@@ -1080,7 +1080,7 @@ async def run_fast_cycle():
             from app.state_attestation import attest_state
             if psi_results:
                 _psi_attest = [{"slug": r.get("protocol_slug", ""), "score": r.get("overall_score")} for r in psi_results if isinstance(r, dict)]
-                await _fc_loop.run_in_executor(None, attest_state, "psi_components", _psi_attest)
+                await _fc_loop.run_in_executor(None, attest_state, "psi_components", _psi_attest, None, "worker.inline.psi_components")
         except Exception as ae:
             logger.debug(f"PSI attestation skipped: {ae}")
     except Exception as e:
@@ -1478,13 +1478,13 @@ async def run_fast_cycle():
                         "status": "ran",
                         "assessments": count,
                         "severities": result.get("severities", {}),
-                    }])
+                    }], writer_id="worker.assessments")
                 else:
                     attest_state("assessments", [{
                         "status": "ran_no_results",
                         "assessments": 0,
                         "severities": result.get("severities", {}),
-                    }])
+                    }], writer_id="worker.assessments")
             except Exception as ae:
                 logger.debug(f"Assessments attestation skipped: {ae}")
     except Exception as e:
@@ -1987,7 +1987,7 @@ async def run_slow_cycle():
                 "status": "failed",
                 "error_message": (reindex_failure or "unknown")[:200],
             }
-        await asyncio.to_thread(attest_state, "wallets", [payload])
+        await asyncio.to_thread(attest_state, "wallets", [payload], None, "worker.inline.wallets")
     except Exception as _e_attest:
         logger.warning(f"wallets worker attest failed: {_e_attest}")
 
@@ -2650,7 +2650,7 @@ async def _emit_slow_cycle_heartbeats(
     try:
         from app.data_layer.provenance_scaling import attest_data_batch
         await asyncio.to_thread(
-            attest_data_batch, "dex_pool_ohlcv", [base_payload]
+            attest_data_batch, "dex_pool_ohlcv", [base_payload], None, "heartbeat.slow_cycle"
         )
     except Exception as e:
         logger.warning(f"slow-cycle heartbeat dex_pool_ohlcv attest failed: {e}")
@@ -2669,7 +2669,7 @@ async def _emit_slow_cycle_heartbeats(
         # gate internally and emits skipped_fresh|ran|error payloads.
         for _domain in ("wallets", "web_research", "rpi_components"):
             try:
-                await asyncio.to_thread(attest_state, _domain, [base_payload])
+                await asyncio.to_thread(attest_state, _domain, [base_payload], None, "heartbeat.slow_cycle")
             except Exception as e:
                 logger.warning(
                     f"slow-cycle heartbeat {_domain} attest failed: {e}"

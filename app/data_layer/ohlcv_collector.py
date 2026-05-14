@@ -220,6 +220,8 @@ async def run_ohlcv_collection() -> dict:
                 attest_data_batch,
                 "dex_pool_ohlcv",
                 [{"records": 0, "pools": 0, "status": "no_upstream_pools"}],
+                None,
+                "module.ohlcv_collector",
             )
         except Exception as e:
             logger.warning(f"[ohlcv_collector] no-pools attestation failed: {e}")
@@ -307,7 +309,7 @@ async def run_ohlcv_collection() -> dict:
         payload = {"records": total_records, "pools": pools_processed}
         if total_records == 0:
             payload["status"] = "queried_no_bars"
-        await asyncio.to_thread(attest_data_batch, "dex_pool_ohlcv", [payload])
+        await asyncio.to_thread(attest_data_batch, "dex_pool_ohlcv", [payload], None, "module.ohlcv_collector")
         if total_records > 0:
             await link_batch_to_proof("dex_pool_ohlcv", "liquidity_depth")
     except asyncio.CancelledError:
@@ -390,6 +392,8 @@ async def run_ohlcv_collection_scheduled() -> dict:
                     "status": "skipped_fresh",
                     "table_age_hours": round(table_age_hours, 2),
                 }],
+                None,
+                "module.ohlcv_collector",
             )
         except Exception as e:
             logger.warning(f"[ohlcv_collector] skipped-fresh attest failed: {e}")
@@ -409,6 +413,8 @@ async def run_ohlcv_collection_scheduled() -> dict:
                     "table_age_hours": round(table_age_hours, 2),
                     "error": str(e)[:200],
                 }],
+                None,
+                "module.ohlcv_collector",
             )
         except Exception:
             pass

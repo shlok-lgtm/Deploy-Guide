@@ -734,7 +734,7 @@ async def run_vsri_scoring() -> list[dict]:
             await asyncio.to_thread(attest_state, "vsri_components", [
                 {"slug": r["entity_slug"], "score": r["overall_score"]}
                 for r in results
-            ])
+            ], None, "module.vault_collector")
     except Exception as e:
         logger.warning(f"VSRI attestation failed: {e}")
 

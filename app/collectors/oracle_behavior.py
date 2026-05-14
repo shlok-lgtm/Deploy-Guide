@@ -473,7 +473,7 @@ async def _handle_stress_event(oracle: dict, reading: dict, deviation_pct: float
                 "event_type": event_type,
                 "asset_symbol": asset,
                 "deviation_pct": deviation_pct,
-            }])
+            }], None, "module.oracle_behavior")
         except Exception:
             pass
 
@@ -630,7 +630,7 @@ async def collect_oracle_readings() -> dict:
                         "oracle_address": oracle["oracle_address"],
                         "oracle_price": oracle_price,
                         "deviation_pct": deviation_pct,
-                    }])
+                    }], None, "module.oracle_behavior")
                 except Exception:
                     pass
 
@@ -682,7 +682,7 @@ async def collect_oracle_readings() -> dict:
             "readings_stored": results["readings_stored"],
             "stress_events_detected": results["stress_events_detected"],
             "errors_count": len(results["errors"]),
-        }])
+        }], None, "module.oracle_behavior")
     except Exception as e:
         logger.warning(f"[oracle] cycle heartbeat attestation skipped: {e}")
 

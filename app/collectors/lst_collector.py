@@ -671,9 +671,9 @@ def run_lsti_scoring() -> list[dict]:
             attest_state("lsti_components", [
                 {"slug": r["entity_slug"], "score": r["overall_score"]}
                 for r in results
-            ])
+            ], writer_id="module.lst_collector")
         else:
-            attest_state("lsti_components", [{"status": "ran_no_results", "results_count": 0}])
+            attest_state("lsti_components", [{"status": "ran_no_results", "results_count": 0}], writer_id="module.lst_collector")
     except Exception as ae:
         logger.error(f"lsti_components attestation failed: {ae}")
         try:

@@ -449,9 +449,9 @@ async def run_peg_monitoring() -> dict:
             mchart_payload["error"] = block_error
             vs_payload["error"] = block_error
 
-        await asyncio.to_thread(attest_data_batch, "peg_snapshots_5m", [peg_payload])
-        await asyncio.to_thread(attest_data_batch, "market_chart_history", [mchart_payload])
-        await asyncio.to_thread(attest_data_batch, "volatility_surfaces", [vs_payload])
+        await asyncio.to_thread(attest_data_batch, "peg_snapshots_5m", [peg_payload], None, "module.peg_monitor")
+        await asyncio.to_thread(attest_data_batch, "market_chart_history", [mchart_payload], None, "module.peg_monitor")
+        await asyncio.to_thread(attest_data_batch, "volatility_surfaces", [vs_payload], None, "module.peg_monitor")
 
         if total_snapshots > 0:
             await link_batch_to_proof("peg_snapshots_5m", "peg_snapshots_5m")
@@ -552,7 +552,7 @@ async def run_peg_monitoring_scheduled() -> dict:
         }
         try:
             for domain in ("peg_snapshots_5m", "market_chart_history", "volatility_surfaces"):
-                await asyncio.to_thread(attest_data_batch, domain, [skipped_payload])
+                await asyncio.to_thread(attest_data_batch, domain, [skipped_payload], None, "module.peg_monitor")
         except Exception as e:
             logger.warning(f"[peg_monitor] skipped-fresh attest failed: {e}")
         return skipped_payload
@@ -573,7 +573,7 @@ async def run_peg_monitoring_scheduled() -> dict:
         }
         try:
             for domain in ("peg_snapshots_5m", "market_chart_history", "volatility_surfaces"):
-                await asyncio.to_thread(attest_data_batch, domain, [error_payload])
+                await asyncio.to_thread(attest_data_batch, domain, [error_payload], None, "module.peg_monitor")
         except Exception:
             pass
         return {"status": "error", "error": str(e)[:500]}

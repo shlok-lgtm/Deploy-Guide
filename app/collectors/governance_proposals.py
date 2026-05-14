@@ -403,7 +403,7 @@ def _upsert_proposal(proposal: dict, protocol_id: int, protocol_slug: str, resul
                 "source": source,
                 "protocol_slug": protocol_slug,
                 "body_hash": body_hash,
-            }], str(protocol_id))
+            }], str(protocol_id), writer_id="module.governance_proposals")
         except Exception as e:
             logger.warning(f"upsert proposal failed: {e}")
             try:

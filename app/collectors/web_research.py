@@ -560,7 +560,7 @@ async def run_web_research_collection() -> list[dict]:
                 "scored_count": 0,
             }]
         _loop = asyncio.get_event_loop()
-        await _loop.run_in_executor(None, attest_state, "web_research", payload)
+        await _loop.run_in_executor(None, attest_state, "web_research", payload, None, "module.web_research")
     except asyncio.CancelledError:
         raise
     except Exception as e:
@@ -634,7 +634,7 @@ async def run_web_research_scheduled() -> dict:
             "gate_age_hours": round(gate_age_hours, 2),
         }
         try:
-            await asyncio.to_thread(attest_state, "web_research", [skipped_payload])
+            await asyncio.to_thread(attest_state, "web_research", [skipped_payload], None, "module.web_research")
         except Exception as e:
             logger.warning(f"[web_research] skipped-fresh attest failed: {e}")
         return skipped_payload
@@ -656,7 +656,7 @@ async def run_web_research_scheduled() -> dict:
             "error": str(e)[:200],
         }
         try:
-            await asyncio.to_thread(attest_state, "web_research", [error_payload])
+            await asyncio.to_thread(attest_state, "web_research", [error_payload], None, "module.web_research")
         except Exception:
             pass
         return {"status": "error", "error": str(e)[:500]}

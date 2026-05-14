@@ -388,9 +388,9 @@ def classify_all_active(limit: int = 2000) -> dict:
     try:
         from app.state_attestation import attest_state
         if classified > 0:
-            attest_state("actors", [{"classified": classified, "reclassified": reclassified, "by_type": by_type}])
+            attest_state("actors", [{"classified": classified, "reclassified": reclassified, "by_type": by_type}], writer_id="module.actor_classification")
         else:
-            attest_state("actors", [{"status": "ran_no_results", "results_count": 0}])
+            attest_state("actors", [{"status": "ran_no_results", "results_count": 0}], writer_id="module.actor_classification")
     except Exception as ae:
         logger.error(f"Actor attestation FAILED: {ae}")
         from app.worker import _record_cycle_error

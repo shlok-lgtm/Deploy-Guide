@@ -233,7 +233,7 @@ async def run_approval_collection() -> dict:
     try:
         from app.data_layer.provenance_scaling import attest_data_batch
         if total_inserted > 0:
-            await asyncio.to_thread(attest_data_batch, "token_approvals", [{"inserted": total_inserted}])
+            await asyncio.to_thread(attest_data_batch, "token_approvals", [{"inserted": total_inserted}], None, "module.approval_collector")
     except asyncio.CancelledError:
         raise
     except Exception as e:

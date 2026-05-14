@@ -336,7 +336,7 @@ def _record_upgrade(
             "previous_implementation": last_snapshot.get("implementation_address"),
             "current_implementation": impl_address,
             "upgrade_detected_at": now.isoformat(),
-        }], str(target["entity_id"]))
+        }], str(target["entity_id"]), writer_id="module.contract_upgrades")
     except Exception as e:
         logger.warning(f"Contract upgrade attestation failed: {ae}")
         try:

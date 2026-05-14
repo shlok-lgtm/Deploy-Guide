@@ -203,7 +203,7 @@ def run_worker_loop():
             try:
                 from app.state_attestation import attest_state
                 if psi_results:
-                    attest_state("psi_components", [{"slug": r.get("protocol_slug", ""), "score": r.get("overall_score")} for r in psi_results if isinstance(r, dict)])
+                    attest_state("psi_components", [{"slug": r.get("protocol_slug", ""), "score": r.get("overall_score")} for r in psi_results if isinstance(r, dict)], writer_id="main.inline.psi_components")
             except Exception as ae:
                 logger.debug(f"PSI attestation skipped: {ae}")
         except Exception as e:
@@ -245,6 +245,7 @@ def run_worker_loop():
                         "psi_discoveries",
                         [{"synced": synced, "discovered": discovered,
                           "enriched": enriched, "promoted": promoted}],
+                        writer_id="main.inline.psi_discoveries",
                     )
                 except Exception as ae:
                     logger.debug(f"PSI discovery attestation skipped: {ae}")
@@ -356,6 +357,7 @@ def run_worker_loop():
                         attest_state(
                             f"data_layer:{name}",
                             [{"status": "error", "error_type": type(e).__name__, "error": str(e)[:200]}],
+                            writer_id="main.data_layer_error_heartbeat",
                         )
                     except Exception:  # silenced-by-design: attest must not abort the loop
                         pass

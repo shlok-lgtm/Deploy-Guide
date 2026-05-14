@@ -267,7 +267,7 @@ async def run_trace_collection() -> dict:
     try:
         from app.data_layer.provenance_scaling import attest_data_batch
         if total_traces > 0:
-            await asyncio.to_thread(attest_data_batch, "protocol_traces", [{"traces": total_traces}])
+            await asyncio.to_thread(attest_data_batch, "protocol_traces", [{"traces": total_traces}], None, "module.trace_collector")
     except asyncio.CancelledError:
         raise
     except Exception as e:

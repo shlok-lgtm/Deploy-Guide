@@ -88,7 +88,7 @@ async def run_psi_discovery_monitor_scheduled(
         }
 
     try:
-        await asyncio.to_thread(attest_state, "psi_discoveries", [out_payload])
+        await asyncio.to_thread(attest_state, "psi_discoveries", [out_payload], None, "module.psi_discovery_monitor")
     except Exception as ae:
         logger.warning(f"[psi_discovery_monitor] attest failed: {ae}")
         try:

@@ -512,7 +512,7 @@ async def run_edge_builder_scheduled(chain: str, cycle_ts=None) -> dict:
             "table_age_hours": round(table_age_hours, 2),
         }
         try:
-            await asyncio.to_thread(attest_state, "edges", [payload])
+            await asyncio.to_thread(attest_state, "edges", [payload], None, "module.edges")
         except Exception as e:
             logger.warning(f"[edge_builder_scheduled] {chain} skipped-fresh attest failed: {e}")
         return payload
@@ -530,7 +530,7 @@ async def run_edge_builder_scheduled(chain: str, cycle_ts=None) -> dict:
         # Bug A fix: attest ALWAYS in `ran` branch.
         # Bug B fix: NO 3rd positional — entity_id stays NULL.
         try:
-            await asyncio.to_thread(attest_state, "edges", [payload])
+            await asyncio.to_thread(attest_state, "edges", [payload], None, "module.edges")
         except Exception as e:
             logger.warning(f"[edge_builder_scheduled] {chain} ran-attest failed: {e}")
             try:
@@ -563,7 +563,7 @@ async def run_edge_builder_scheduled(chain: str, cycle_ts=None) -> dict:
         logger.warning(f"[edge_builder_scheduled] {chain} run failed: {e}")
         payload = {"status": "error", "chain": chain, "error": str(e)[:200]}
         try:
-            await asyncio.to_thread(attest_state, "edges", [payload])
+            await asyncio.to_thread(attest_state, "edges", [payload], None, "module.edges")
         except Exception:
             pass
         return payload

@@ -358,7 +358,7 @@ def compute_rqs_for_protocol(protocol_slug: str, coverage_threshold: float = 0.0
         from app.state_attestation import attest_state
         attest_state("rqs_composition", [
             {"protocol": protocol_slug, "rqs_score": result.get("rqs_score")},
-        ], entity_id=protocol_slug)
+        ], entity_id=protocol_slug, writer_id="composition.rqs_protocol")
     except Exception:
         pass  # attestation is non-critical
 
@@ -388,9 +388,9 @@ def compute_rqs_all() -> dict:
             attest_state("rqs_compositions", [
                 {"protocol": r["protocol_slug"], "rqs_score": round(r["rqs_score"], 2)}
                 for r in results if r.get("rqs_score") is not None
-            ])
+            ], writer_id="composition.rqs_batch")
         else:
-            attest_state("rqs_compositions", [{"status": "ran_no_results", "results_count": 0}])
+            attest_state("rqs_compositions", [{"status": "ran_no_results", "results_count": 0}], writer_id="composition.rqs_batch")
     except Exception as ae:
         logger.error(f"rqs_compositions attestation failed: {ae}")
         try:
@@ -457,9 +457,9 @@ def compute_cqi_matrix():
     try:
         from app.state_attestation import attest_state
         if matrix:
-            attest_state("cqi_compositions", [{"asset": r["asset"], "protocol": r["protocol_slug"], "cqi_score": round(r["cqi_score"], 2)} for r in matrix])
+            attest_state("cqi_compositions", [{"asset": r["asset"], "protocol": r["protocol_slug"], "cqi_score": round(r["cqi_score"], 2)} for r in matrix], writer_id="composition.cqi_matrix")
         else:
-            attest_state("cqi_compositions", [{"status": "ran_no_results", "results_count": 0}])
+            attest_state("cqi_compositions", [{"status": "ran_no_results", "results_count": 0}], writer_id="composition.cqi_matrix")
     except Exception as ae:
         logger.error(f"cqi_compositions attestation failed: {ae}")
         try:

@@ -263,7 +263,7 @@ async def run_holder_discovery() -> dict:
     try:
         from app.data_layer.provenance_scaling import attest_data_batch
         if total_discovered > 0:
-            await asyncio.to_thread(attest_data_batch, "wallet_holdings", [{"discovered": total_discovered, "seeded": total_seeded}])
+            await asyncio.to_thread(attest_data_batch, "wallet_holdings", [{"discovered": total_discovered, "seeded": total_seeded}], None, "module.holder_discovery")
     except asyncio.CancelledError:
         raise
     except Exception as e:

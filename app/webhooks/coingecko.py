@@ -288,6 +288,7 @@ def attest_inline(
             "coingecko_metadata_events",
             [record],
             entity_id=basis_entity_id,
+            writer_id="webhook.coingecko",
         )
     except Exception as e:
         _record_cycle_error(

@@ -443,13 +443,13 @@ def run_governance_event_collection() -> dict:
             attest_state("governance_events", [
                 {"protocol": slug, "new_events": total_new}
                 for slug in protocols_processed
-            ])
+            ], writer_id="module.governance_events")
         else:
             attest_state("governance_events", [{
                 "status": "ran_no_protocols",
                 "total_new": total_new,
                 "total_skipped": total_skipped,
-            }])
+            }], writer_id="module.governance_events")
     except Exception as e:
         logger.warning(f"Governance events attestation failed: {e}")
 

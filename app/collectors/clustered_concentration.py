@@ -341,7 +341,7 @@ async def collect_clustered_concentration() -> dict:
                     "snapshot_date": today.isoformat(),
                     "clustered_gini": metrics["clustered_gini"],
                     "divergence_score": metrics["divergence_score"],
-                }], str(coin_id))
+                }], str(coin_id), "module.clustered_concentration")
             except asyncio.CancelledError:
                 raise
             except Exception as e:
