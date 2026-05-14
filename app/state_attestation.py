@@ -45,25 +45,40 @@ def store_attestation(
     record_count: int,
     entity_id: str = None,
     methodology_version: str = None,
+    writer_id: str = None,
 ) -> None:
     """Store a state attestation record. Sync because called from sync
-    attest_state(), which itself has many sync callers."""
+    attest_state(), which itself has many sync callers.
+
+    writer_id (per #235 Option A, W2.1): operator-set provenance label
+    e.g. "module.peg_monitor", "heartbeat.slow_cycle",
+    "worker.inline.psi_components". NULL acceptable — W2.2 will fill in
+    the existing call sites; new ones may pass it directly."""
     execute(
         """
         INSERT INTO state_attestations
-            (domain, entity_id, batch_hash, record_count, methodology_version, cycle_timestamp)
-        VALUES (%s, %s, %s, %s, %s, NOW())
+            (domain, entity_id, batch_hash, record_count, methodology_version, writer_id, cycle_timestamp)
+        VALUES (%s, %s, %s, %s, %s, %s, NOW())
         """,
-        (domain, entity_id, batch_hash, record_count, methodology_version or FORMULA_VERSION),
+        (domain, entity_id, batch_hash, record_count, methodology_version or FORMULA_VERSION, writer_id),
     )
 
 
-def attest_state(domain: str, records: list[dict], entity_id: str = None) -> str:
-    """Compute hash and store attestation in one call. Returns the hash."""
+def attest_state(
+    domain: str,
+    records: list[dict],
+    entity_id: str = None,
+    writer_id: str = None,
+) -> str:
+    """Compute hash and store attestation in one call. Returns the hash.
+
+    writer_id (per #235 Option A, W2.1): see store_attestation. Defaults
+    to NULL so legacy callers continue to work; W2.2 will populate the
+    ~20-25 known call sites with explicit labels."""
     if not records:
         return ""
     batch_hash = compute_batch_hash(records)
-    store_attestation(domain, batch_hash, len(records), entity_id)
+    store_attestation(domain, batch_hash, len(records), entity_id, writer_id=writer_id)
     logger.info(f"State attested: domain={domain} entity={entity_id} records={len(records)} hash={batch_hash[:16]}...")
     return batch_hash
 

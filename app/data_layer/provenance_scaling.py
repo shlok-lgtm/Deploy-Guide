@@ -166,10 +166,15 @@ def attest_data_batch(
     data_type: str,
     records: list[dict],
     entity_id: str = None,
+    writer_id: str = None,
 ) -> str:
     """
     Attest a batch of data from a data layer collector.
     Calls state_attestation.attest_state() and returns the hash.
+
+    writer_id (per #235 Option A, W2.1): operator-set provenance label
+    threaded through to state_attestations.writer_id. NULL acceptable;
+    W2.2 will populate the data_layer call sites.
 
     Usage in collectors:
         from app.data_layer.provenance_scaling import attest_data_batch
@@ -178,7 +183,7 @@ def attest_data_batch(
     try:
         from app.state_attestation import attest_state
         domain = f"data_layer:{data_type}"
-        return attest_state(domain, records, entity_id=entity_id)
+        return attest_state(domain, records, entity_id=entity_id, writer_id=writer_id)
     except Exception as e:
         logger.warning(f"State attestation failed for {data_type}: {e}")
         try:
