@@ -1460,9 +1460,29 @@ async def run_fast_cycle():
             logger.info(f"Agent cycle: {result.get('assessments', 0)} assessments")
             try:
                 from app.state_attestation import attest_state
-                if result.get("assessments", 0) > 0:
+                # Mirror actor_classification.py:388-393 — write an attestation
+                # every cycle the agent runs cleanly, with `status=ran_no_results`
+                # when total_processed==0. Previous gate
+                # `if result.get("assessments", 0) > 0` filtered out clean-but-quiet
+                # cycles, so consumers could not distinguish "agent healthy, no
+                # triggers" from "agent silently broken" — exactly the lesson-12
+                # observability hazard #221/#225 set out to cure. Substrate
+                # evidence (5h post-#227 deploy): 117 SII cycles → 1 assessments
+                # row, despite multiple cycles where the watcher ran fine and
+                # heartbeats were stored at 20:01Z and 22:21Z. assessments has
+                # a 24h freshness floor in app/coherence.py:75, so the gate
+                # could silently break the coherence contract on any quiet day.
+                count = result.get("assessments", 0)
+                if count > 0:
                     attest_state("assessments", [{
-                        "assessments": result.get("assessments", 0),
+                        "status": "ran",
+                        "assessments": count,
+                        "severities": result.get("severities", {}),
+                    }])
+                else:
+                    attest_state("assessments", [{
+                        "status": "ran_no_results",
+                        "assessments": 0,
                         "severities": result.get("severities", {}),
                     }])
             except Exception as ae:
