@@ -107,8 +107,20 @@ async def _fetch_recent_transfers(
                 error_message=result_str[:500],
             )
 
-        # Etherscan returned a non-success status (e.g. invalid key, bad params)
+        # Etherscan returned a non-success status. Discriminate between
+        # "no transactions in window" (status="0" with `result` empty or
+        # absent, often accompanied by message "No transactions found")
+        # which is a *genuine zero* outcome, not an API failure, vs.
+        # actual API errors (invalid key, bad params, etc).
         if data.get("status") != "1":
+            message = str(data.get("message", "")).lower()
+            no_data = (
+                "no transactions found" in message
+                or result_str in ("", "[]", "None")
+            )
+            if no_data:
+                # Treat as success-with-zero-transfers; caller logs at info.
+                return _FlowsFetchResult(success=True, transfers=[])
             return _FlowsFetchResult(
                 success=False,
                 transfers=[],
