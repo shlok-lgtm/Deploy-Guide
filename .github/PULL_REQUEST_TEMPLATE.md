@@ -61,6 +61,31 @@ writers cannot produce it. "≥1 attestation row in 4h" is INSUFFICIENT
 Reference: PRs #220, #221 (open follow-up issues from the May-12 audit
 batch). Lesson 12 (`docs/basis_punchlist_2026_05_11.md`).
 
+### Writer provenance (post-W2.2)
+
+Effective 2026-05-14 post-#241 deploy, every attest call passes a
+`writer_id` label (`module.<name>` / `worker.inline.<name>` /
+`heartbeat.slow_cycle` / `enrichment.<task>` / etc.). New PRs SHOULD
+include a writer_id check that confirms the wrapper's specific label
+appears in `state_attestations`:
+
+````sql
+SELECT writer_id, COUNT(*), AVG(record_count), MAX(cycle_timestamp)
+FROM state_attestations
+WHERE domain = '<your domain>'
+  AND cycle_timestamp > '<deploy_ts>'::timestamptz
+GROUP BY writer_id
+ORDER BY COUNT(*) DESC;
+````
+
+Expected: wrapper's writer_id (`module.<name>`) dominant for the
+post-deploy window. `WHERE writer_id NOT LIKE 'heartbeat.%'` cleanly
+separates wrapper writes from heartbeat fallback — replacing the older
+"distinct batch_hash from base_payload shape" heuristic.
+
+References: PRs #237 (W2.1 column), #241 (W2.2 labels), #235 (Option A
+design rationale).
+
 ## Test plan
 
 <!-- Bulleted checklist of TODOs for testing this PR. -->
