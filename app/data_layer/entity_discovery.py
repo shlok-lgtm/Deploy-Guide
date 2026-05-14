@@ -138,13 +138,20 @@ def _store_discovered_entities(entities: list[dict]):
             with get_cursor() as cur:
                 cur.execute(
                     """INSERT INTO discovery_signals
-                       (signal_type, domain, entity_id, severity, title, details, created_at)
-                       VALUES ('entity_discovery', %s, %s, 'notable', %s, %s, NOW())
-                       ON CONFLICT DO NOTHING""",
+                       (signal_type, domain, title, description, entities,
+                        novelty_score, direction, magnitude, baseline,
+                        detail, methodology_version)
+                       VALUES ('entity_discovery', %s, %s, %s, %s,
+                               %s, %s, %s, %s, %s, 'discovery-v0.1.0')""",
                     (
                         entity["target_index"],
-                        entity["slug"],
                         f"New {entity['target_index'].upper()} candidate: {entity['name']}",
+                        f"{entity['category']} protocol with ${_sanitize_float(entity['tvl']) or 0:,.0f} TVL",
+                        json.dumps([entity["slug"]]),
+                        0.3,  # 'notable' severity baseline
+                        "new",
+                        _sanitize_float(entity["tvl"]),
+                        None,  # baseline TVL threshold varies per index
                         json.dumps({
                             "name": entity["name"],
                             "slug": entity["slug"],

@@ -367,11 +367,19 @@ async def run_contract_surveillance() -> dict:
                 await asyncio.to_thread(
                     db_execute,
                     """INSERT INTO discovery_signals
-                       (signal_type, domain, entity_id, severity, title, details, created_at)
-                       VALUES ('contract_change', 'sii', %s, 'alert', %s, %s, NOW())""",
+                       (signal_type, domain, title, description, entities,
+                        novelty_score, direction, magnitude, baseline,
+                        detail, methodology_version)
+                       VALUES ('contract_change', 'sii', %s, %s, %s,
+                               %s, %s, %s, %s, %s, 'discovery-v0.1.0')""",
                     (
-                        change["entity_id"],
                         f"Contract source code changed: {change['entity_id']}",
+                        f"Source hash drift detected for {change['entity_id']} on {change['chain']}",
+                        json.dumps([change["entity_id"]]),
+                        0.6,  # 'alert' severity baseline
+                        "break",
+                        None,  # binary change event — no magnitude
+                        None,
                         json.dumps(change),
                     ),
                 )
