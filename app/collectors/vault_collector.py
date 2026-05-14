@@ -549,24 +549,33 @@ async def extract_vault_raw_values(entity: dict, all_pools: list[dict]) -> dict:
 
     # CQI lookup for underlying asset quality
     try:
-        # Look up SII score for the underlying stablecoin
+        # Look up SII score for the underlying stablecoin.
+        # Defensive None-check: scores.overall_score is currently always
+        # populated, but the cost of guarding is one comparison.
         if "usdc" in entity["slug"]:
             sii_row = await fetch_one_async("SELECT overall_score FROM scores WHERE stablecoin_id = 'usdc'")
-            if sii_row:
+            if sii_row and sii_row.get("overall_score") is not None:
                 raw["underlying_sii_score"] = float(sii_row["overall_score"])
         elif "dai" in entity["slug"]:
             sii_row = await fetch_one_async("SELECT overall_score FROM scores WHERE stablecoin_id = 'dai'")
-            if sii_row:
+            if sii_row and sii_row.get("overall_score") is not None:
                 raw["underlying_sii_score"] = float(sii_row["overall_score"])
 
-        # Look up PSI score for the underlying protocol
+        # Look up the latest *scored* PSI row. Without the IS NOT NULL
+        # filter the "most recent" row is usually a null-score placeholder
+        # (4477/5006 = 89% of psi_scores have overall_score IS NULL on
+        # 2026-05-14: drift, jupiter-perpetual-exchange, etc.) and
+        # `float(None)` raises — see cycle_errors `vault_collector` /
+        # `collectors_extract_vault_raw_values_failure` (146/7d).
         protocol_slug = entity.get("protocol")
         if protocol_slug:
             psi_row = await fetch_one_async(
-                "SELECT overall_score FROM psi_scores WHERE protocol_slug = %s ORDER BY computed_at DESC LIMIT 1",
+                "SELECT overall_score FROM psi_scores "
+                "WHERE protocol_slug = %s AND overall_score IS NOT NULL "
+                "ORDER BY computed_at DESC LIMIT 1",
                 (protocol_slug,),
             )
-            if psi_row:
+            if psi_row and psi_row.get("overall_score") is not None:
                 raw["underlying_psi_score"] = float(psi_row["overall_score"])
     except asyncio.CancelledError:
         raise
