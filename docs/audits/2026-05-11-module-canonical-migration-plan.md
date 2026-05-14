@@ -385,3 +385,41 @@ Cost: +35 `/exchanges/{id}` + `/exchanges/{id}/volume_chart/30`
 calls per fast cycle (~80 calls / cycle / hour). CG pro tier
 (500/min, 500k credits/month) has ample headroom. Worth a brief
 budget check against the daily usage tracker before flipping.
+
+---
+
+## Wave-N candidates
+
+Items surfaced during v9.12 remediation that are out of scope for the
+current sweep but warrant a tracked entry. Pick up in a future
+v9.13/v9.14-style amendment session or when blocked-on prerequisites
+clear.
+
+### `assessments` — secondary writer bypasses agent counter
+
+**Surfaced:** 2026-05-13 Prompt 2 audit (#238 gate fix).
+
+**Finding:** `app/collectors/psi_collector.py:1783` writes
+`psi_score_change` events directly to `assessment_events` table,
+bypassing `run_agent_cycle`'s `total_processed` counter. Substrate
+cite (5h window): 5 `psi_score_change` events in `assessment_events`,
+but none counted by the agent's gate (now-fixed in #238 to attest
+unconditionally — but `record_count` still won't reflect the
+`psi_score_change` writes).
+
+**Class:** Coherence gap — domain has 2 write surfaces; one isn't
+seen by the canonical writer that drives the attestation.
+
+**Priority:** P2. Not data-quality (events ARE being written and
+stored); just attestation provenance is incomplete. Defer until
+v9.13-style coupled-write design call for `assessments` (or until
+`writer_id` from #235 Option A makes the discrepancy visible via
+Option A query).
+
+**When picked up:** decide whether `psi_collector.py:1783` should also
+attest `'assessments'` with `writer_id='module.psi_collector'`, or
+whether the agent should query `assessment_events` directly to
+include all events in its counter.
+
+**Refs:** #238 (gate fix), #235 (writer_id discriminator), #208 +
+#221 (original `actors`/`assessments` domain split history).
