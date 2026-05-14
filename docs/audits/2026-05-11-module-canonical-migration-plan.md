@@ -179,13 +179,13 @@ expected cadence. The legacy fallback may still be serving them.
 dispatcher heartbeat at `worker.py:2650`
 (`for _domain in ("wallets","web_research","rpi_components")`)
 currently writes the same domains that the new module-canonical
-wrappers also write. Until we can definitively distinguish
-wrapper-vs-heartbeat row provenance for each of these three
-domains (e.g., a `payload_size_signature` column or a `writer_id`
-discriminator on `state_attestations` — see follow-up issue), the
-collapse cannot remove all three at once: a silent wrapper failure
-would be masked by the heartbeat right up until the heartbeat
-itself is deleted.
+wrappers also write. Until 2026-05-14 we could not definitively
+distinguish wrapper-vs-heartbeat row provenance. This was resolved
+by #237 (W2.1 writer_id column) + #241 (W2.2 labels). The collapse
+staging below remains in force; the verification is now mechanical
+via the discriminator. A silent wrapper failure would still be
+masked by the heartbeat until the heartbeat itself is deleted —
+staging protects against this.
 
 **Phase 2.3 must stage the heartbeat dissolution. Remove one
 domain from the heartbeat list per PR; verify
@@ -200,10 +200,12 @@ behavior in substrate):
 3. `wallets` — last; v9.12-exempt layered-defense path, see #202.
 
 Each removal PR must include: (a) a 24-48h substrate query showing
-the wrapper has fired for that domain independently of the
-heartbeat (distinct `batch_hash` from the heartbeat's
-`base_payload` shape), and (b) the rollback plan if cadence
-regresses.
+the wrapper has fired for that domain independently of the heartbeat
+(writer_id distribution shows `writer_id='module.<name>'` rows present
+in addition to or instead of `writer_id='heartbeat.slow_cycle'`, per
+#235 Option A discriminator — query template in
+`.github/PULL_REQUEST_TEMPLATE.md` Writer provenance section), and (b)
+the rollback plan if cadence regresses.
 
 ## Session scope note
 
