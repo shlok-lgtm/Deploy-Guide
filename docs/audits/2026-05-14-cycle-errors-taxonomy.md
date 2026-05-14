@@ -278,3 +278,130 @@ Two PRs that meet the criteria (single file each, <50 lines, not in A2 scope):
 - Distinct fixable bug classes outside A2: **5** (scored_at, governance_forum_posts columns, numeric(30,8) overflow, numeric(10,4) overflow, vault NoneType). Below the 10-class limit; no further split required.
 - Active-outage check: no pattern is failing every cycle. The dominant active ones (`numeric overflow`, `scored_at`, `Alchemy 429`) are partial failures inside collectors that catch and continue.
 - A2 overlap: peg_monitor's `discovery_signals.entity_id missing` is a sibling site to A2's mint_burn_collector fix — flagged for A2 to absorb.
+
+## Post-kill-switch baseline (2026-05-14 02:38Z)
+
+Follow-up residual sweep run immediately after #252 (kill-switch for the Aave + Compound parameter_history decoders) deployed across all six Railway services at 2026-05-14T02:38:34Z (commit `e5ea976`). Baseline taken at 2026-05-14T02:39Z, so the window includes only one deploy minute — direct post-deploy verification has to wait for the next scoring cycle. The data below combines pre-deploy 24h volume with the categorization required for forward planning.
+
+Substrate query (verbatim, project `small-scene-57890564`):
+
+```sql
+SELECT
+  cycle_phase,
+  LEFT(error_message, 100) AS pattern,
+  COUNT(*) AS occurrences_7d,
+  COUNT(*) FILTER (WHERE occurred_at > NOW() - INTERVAL '30 minutes') AS occurrences_30m,
+  COUNT(*) FILTER (WHERE occurred_at > NOW() - INTERVAL '2 hours') AS occurrences_2h,
+  MIN(occurred_at) AS first_seen,
+  MAX(occurred_at) AS last_seen
+FROM cycle_errors
+WHERE occurred_at > NOW() - INTERVAL '7 days'
+GROUP BY cycle_phase, LEFT(error_message, 100)
+HAVING COUNT(*) > 20
+ORDER BY occurrences_7d DESC
+LIMIT 30;
+```
+
+Kill-switch verification:
+
+```sql
+SELECT COUNT(*) FROM cycle_errors
+WHERE error_message ILIKE '%numeric%overflow%'
+  AND occurred_at > NOW() - INTERVAL '30 minutes';
+-- -> 0
+```
+
+Last cycle_errors row globally is 2026-05-14T02:30:53Z — 8 minutes before the deploy timestamp. Workers have not run a full cycle yet; "30m" / "2h" buckets still represent the pre-deploy steady state.
+
+### Pattern triage (>20 occurrences/7d)
+
+| Pattern | 7d | 24h | Category | Status |
+|---|---|---|---|---|
+| `parameter_history: protocol_parameters does not exist` | 2145 | 0 | schema-drift | **resolved** (last_seen 2026-05-11) |
+| `parameter_history: numeric overflow (precision 30,8)` | 1252 | 492 | data-type | **already-fixed-pending-deploy** (#252 kill-switch) |
+| `rpi_forum_scraper: mentioned_vendors jsonb vs text[]` | 572 | 0 | schema-drift | **resolved** (last_seen 2026-05-10) |
+| `tti_collector: tti_disclosure_extractions does not exist` | 410 | 0 | schema-drift | **resolved** (last_seen 2026-05-11) |
+| `parameter_history: scored_at does not exist` | 376 | 147 | schema-drift | **already-fixed-pending-deploy** (#244 / `bfc4c17`) |
+| `enforcement_history: enforcement_records does not exist` | 365 | 0 | schema-drift | **resolved** |
+| `parameter_history: Alchemy 429 + Dwellir fallback` | 342 | 75 | dependency | **noise** (operational, provider quota) |
+| `parameter_history: Expecting value (empty JSON)` | 338 | 0 | dependency | **resolved** (last_seen 2026-05-08) |
+| `parameter_history: numeric overflow (precision 10,4)` | 312 | 118 | data-type | **already-fixed-pending-deploy** (#252 kill-switch covers same code path) |
+| `regulatory_scraper: regulatory_registry_checks` | 272 | 0 | schema-drift | **resolved** |
+| `wallet_scanner: <empty>` | 248 | 49 | dependency | **noise** (httpx.ReadTimeout fallback; logging-shape issue only) |
+| `parameter_history: invalid int base 16` | 220 | 0 | business-logic | **resolved** (last_seen 2026-05-11) |
+| `parameter_history: Alchemy 429 + Dwellir revert` | 194 | 21 | dependency | **noise** |
+| `vault_collector: float() NoneType` | 148 | 26 | data-type | **trivial-fix** → PR #253 |
+| `flows_collection: <slug>: []` / `: None` | 135 | 18 | logging | **trivial-fix** → PR #254 |
+| `parameter_history: protocol_parameter_snapshots` | 78 | 0 | schema-drift | **resolved** |
+| `entity_discovery: entity_id does not exist` | 74 | 13 | schema-drift | **already-fixed-pending-deploy** (#247) |
+| `mint_burn_collector: discovery_signals.entity_id` | 58 | 10 | schema-drift | **already-fixed-pending-deploy** (#249) |
+| `edge_builder:ethereum: 500 for 0x28c6c062…` | 54 | 12 | dependency | **noise** (single-wallet Etherscan flake) |
+| `tti_collector: api.llama.fi timeout` | 51 | 13 | dependency | **noise** (timeout=15s; tracked in A4 queue for 30s bump) |
+| `enrichment_sanctions_screening` | 45 | 0 | schema-drift | **resolved** |
+| `enrichment_parent_financials` | 45 | 0 | schema-drift | **resolved** |
+| `enrichment_validator_performance` | 45 | 0 | schema-drift | **resolved** |
+| `enrichment_treasury_flows budget exceeded` | 43+12 | 12 | budget | **noise** (operational) |
+| `enrichment_materialized_compositions budget` | 42 | 0 | budget | **noise** |
+| `enrichment_data_catalog_update budget` | 42 | 0 | budget | **noise** |
+| `enrichment_actor_classification budget` | 41 | 1 | budget | **noise** |
+| `rpi_scorer: vendor_mentions does not exist` | 39 | 0 | schema-drift | **already-fixed-pending-deploy** (#246) |
+| `enrichment_wallet_expansion budget` | 36 | 10 | budget | **noise** |
+| `enrichment_divergence_detection budget` | 36 | 0 | budget | **noise** |
+| `dex_pools: stablecoin_id does not exist` (12 protocol variants × 6 each ≈ 72) | 72 | 72 | schema-drift | **already-fixed-pending-deploy** (#248) |
+| `peg_monitor: discovery_signals.entity_id` | 22 | 11 | schema-drift | **already-fixed-pending-deploy** (#249) |
+
+Patterns sub-20 omitted; see A4 taxonomy body for the long tail.
+
+### Categorization rollup
+
+| Class | Patterns | 7d sum | Action |
+|---|---|---|---|
+| trivial-fix (new) | 2 | ~283 | PRs #253 + #254 |
+| already-fixed-pending-deploy | 9 | ~2256 | verify 2h post-deploy halt criteria; if any pattern still firing after a full scoring cycle → halt + revert |
+| design-class | 0 | 0 | — |
+| noise (operational / dependency / budget) | 14 | ~1346 | leave alone; cross-reference 2026-05-11 enrichment budget audit |
+| resolved (last_seen ≥ 3d ago) | 8 | ~4170 | informational only |
+
+### 2h post-deploy halt criteria (consolidated)
+
+Run after at least one full scoring cycle (default `COLLECTION_INTERVAL=60` minutes, so wait until 03:45Z minimum):
+
+```sql
+-- 1. kill-switch took
+SELECT cycle_phase, COUNT(*) FROM cycle_errors
+WHERE error_message ILIKE '%numeric%overflow%'
+  AND occurred_at > '2026-05-14T02:38:34Z'::timestamptz
+GROUP BY cycle_phase;
+-- expect: empty
+
+-- 2. #244 scored_at fix took
+SELECT COUNT(*) FROM cycle_errors
+WHERE cycle_phase = 'parameter_history'
+  AND error_message ILIKE '%scored_at%does not exist%'
+  AND occurred_at > '2026-05-14T02:38:34Z'::timestamptz;
+-- expect: 0
+
+-- 3. #246/#247/#248/#249 schema-drift fixes took
+SELECT cycle_phase, COUNT(*) FROM cycle_errors
+WHERE (
+    (cycle_phase = 'entity_discovery' AND error_message ILIKE '%entity_id%generic_index_scores%')
+ OR (cycle_phase IN ('mint_burn_collector','peg_monitor') AND error_message ILIKE '%entity_id%discovery_signals%')
+ OR (cycle_phase = 'dex_pools' AND error_message ILIKE '%stablecoin_id%')
+ OR (cycle_phase = 'rpi_scorer' AND error_message ILIKE '%vendor_mentions%')
+ OR (cycle_phase = 'dao_collector' AND error_message ILIKE '%collected_at%')
+)
+  AND occurred_at > '2026-05-14T02:38:34Z'::timestamptz
+GROUP BY cycle_phase;
+-- expect: empty
+```
+
+If any of (1)–(3) is non-zero after 2h post-deploy: halt + surface to operator. Either the deploy did not propagate to the worker container or the fix did not fully cover the bug class.
+
+### Halt-rule check
+
+- Trivial-fix candidates this pass: **2** (vault_collector NoneType, flows_collection no-data). Both opened as PRs (#253, #254). Below 5-PR cap.
+- Design-class candidates this pass: **0**. No Wave-N entries appended.
+- Already-fixed-pending-deploy: 9 patterns covered by #244 / #246 / #247 / #248 / #249 / #252. All on main as of 2026-05-13 — deploy completed 02:38:34Z. No halt.
+- Noise: 14 patterns left alone (rate-limits, timeouts, soft budgets, edge_builder 500s, llama.fi timeouts).
+- Did not consolidate vault + flows into one PR: distinct root causes (one is None-handling on a read; the other is mis-classification of a soft outcome).
+- Kill-switch verification: 0 numeric-overflow rows in the 30m window — proceed.
