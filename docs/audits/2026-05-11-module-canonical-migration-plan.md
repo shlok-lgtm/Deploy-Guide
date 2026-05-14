@@ -33,7 +33,7 @@ schedule the module from worker.py.
 | ~~`data_layer:exchange_snapshots`~~ ✅ | ~~worker.py:1186-1246 inline~~ removed | `app/data_layer/exchange_collector.py::run_exchange_collection_scheduled` | **P0 → DONE** | `LIVE-PATH (verified post-DONE)` | Q1 answered by #197 (migration 109 — schema replay). Q2 answered: 15 exchanges (worker._EX list), `_EX_FIX` legacy-slug remap ported into module. 35 additional exchanges deferred to Q2-extension (see below). enrichment_worker.py task entry removed (was kept closed by inline; lesson 6 family). main.py daily lambda switched. Dispatcher heartbeat at worker.py:2787 left in place until Phase 2.3. Wrapper call verified at `worker.py:1196` (live path). |
 | ~~`data_layer:dex_pool_ohlcv`~~ ✅ | ~~worker.py inline~~ removed | `app/data_layer/ohlcv_collector.py::run_ohlcv_collection_scheduled` | **P0 → DONE** | `LIVE-PATH (verified post-DONE)` | Pilot landed this session; module-canonical via `run_ohlcv_collection_scheduled()`. Dispatcher heartbeat at worker.py:2778 left in place until Phase 2.3. Wrapper call verified at `worker.py:2066` (live path). |
 | `wallets` | `worker.py:1957` (Path A), `worker.py:2642` (Path D heartbeat) | `app/indexer/pipeline.py:811` (Path B inner attest) | **v9.12-exempt** | `LIVE-PATH` (Paths A/B/D); Path C `LEGACY-DEAD-CODE` (deleted #214) | Wave 1 + Wave 3 + Wave 5b. **v9.12-exempt** — layered defense: 4 writers each covering a failure mode added under fire (#142/#155/#163). Path C (`main.py:197-208`) deleted in #214 as dead code (coroutine-never-awaited — `run_pipeline_batch` is `async def` but called without `await`, swallowed by outer except). Paths A/B/D retained intentionally. See #202 for rationale. |
-| `web_research` | `worker.py:1960`, also 2787 | `app/collectors/web_research.py:563` | **P1** | `LIVE-PATH` | Wave 1 + Wave 3 + Wave 5b. |
+| ~~`web_research`~~ ✅ | ~~`worker.py:1816-1863` inline~~ removed | `app/collectors/web_research.py::run_web_research_scheduled` | **P1 → DONE** | `LIVE-PATH (verified post-DONE)` | Wrapper landed in #201 (#198 pattern): 24h gate via `MAX(computed_at)` across `web_research_*` index_ids; skip/ran/error branches; ran branch defers to existing module attest at `web_research.py:563`. Worker.py main loop awaits the wrapper at `worker.py:1844`. enrichment_worker.py task at `enrichment_worker.py:530` also routes through the wrapper (external `_db_gate` removed since the wrapper's internal gate is authoritative). Dispatcher heartbeat at `worker.py:2650` (`for _domain in ("wallets","web_research","rpi_components")`) left in place until Phase 2.3. record_count signature: 1 on skipped_fresh/error (wrapper), 50/51 on ran (module per-component list) or 1 on ran-no-scores. Wrapper call verified at `worker.py:1844` (live path) and `enrichment_worker.py:530` (live path). |
 | `psi_components` | `worker.py:1100`, `main.py:224` | (enrichment task) | **P1** | `LIVE-PATH` (worker.py site); `main.py:224` is **LEGACY-DEAD-CODE** | Two live paths post-Wave-1. Note: `main.py:224` only fires in the API container, which has `WORKER_ENABLED=false`; in steady state the worker.py:1100 site is the only live writer. |
 | `cda_extractions` | `main.py:167` | (enrichment task wraps `app/services/cda_collector.py`) | **P0** | `LEGACY-DEAD-CODE` (per D2) | Reclassified from P2 — coherence gap: 0 attestations despite vendor churn (see #207). Live writers at `worker.py:1885` + `enrichment_worker.py:673`; `main.py:163` wrapper (#212) never fires because `Dockerfile.api` disables worker. |
 | `wallet_profiles` | `main.py:301` | (`app/wallet_profile.py`) | **P2** | `LEGACY-DEAD-CODE` | Verified via lesson 10: `main.py:301` only reachable inside `run_worker_loop`, which is gated by `WORKER_ENABLED=true`. `Dockerfile.api` sets it false and `Dockerfile.worker` bypasses main.py entirely. Module-side attest in `rebuild_all_profiles()` is the only live writer. |
@@ -148,8 +148,11 @@ Halt conditions:
 5. `wallets` — driven by pipeline; the worker.py attest is the
    wave-3 + wave-5b heartbeat. Move into the pipeline's own status
    surface.
-6. `web_research` — worker.py:1960 + Wave 5b heartbeat; module
-   exists at `collectors/web_research.py:563`. Coordinate.
+6. ~~`web_research`~~ ✅ — worker.py:1816-1863 inline + Wave 5b heartbeat;
+   module exists at `collectors/web_research.py:563`. **DONE** in #201:
+   wrapper `run_web_research_scheduled` owns the 24h gate; worker.py and
+   enrichment_worker.py both route through it. Dispatcher heartbeat
+   retained for Phase 2.3.
 7. `psi_components` — two live paths (worker.py:1100, main.py:224);
    enrichment task in PSI scorer.
 8. `cda_extractions`, `wallet_profiles`, `actors`, `edges` —
@@ -168,6 +171,36 @@ deleted and the dispatcher collapsed.
 Per orchestrator: do NOT collapse until every P0 + P1 + (most) P2
 domain in §Refactor sweep order shows fresh attestations within
 expected cadence. The legacy fallback may still be serving them.
+
+**Staging requirement (added 2026-05-13 post-#201 review).** The
+dispatcher heartbeat at `worker.py:2650`
+(`for _domain in ("wallets","web_research","rpi_components")`)
+currently writes the same domains that the new module-canonical
+wrappers also write. Until we can definitively distinguish
+wrapper-vs-heartbeat row provenance for each of these three
+domains (e.g., a `payload_size_signature` column or a `writer_id`
+discriminator on `state_attestations` — see follow-up issue), the
+collapse cannot remove all three at once: a silent wrapper failure
+would be masked by the heartbeat right up until the heartbeat
+itself is deleted.
+
+**Phase 2.3 must stage the heartbeat dissolution. Remove one
+domain from the heartbeat list per PR; verify
+`state_attestations` continues firing for that domain post-removal
+(at least one full slow cycle elapsed, fresh row from the
+wrapper's distinct payload shape); only then proceed to the next.**
+Order of removal — least-risky first (most-confident wrapper
+behavior in substrate):
+
+1. `rpi_components` — daily-gated, low blast radius.
+2. `web_research` — daily-gated, well-exercised wrapper (#201).
+3. `wallets` — last; v9.12-exempt layered-defense path, see #202.
+
+Each removal PR must include: (a) a 24-48h substrate query showing
+the wrapper has fired for that domain independently of the
+heartbeat (distinct `batch_hash` from the heartbeat's
+`base_payload` shape), and (b) the rollback plan if cadence
+regresses.
 
 ## Session scope note
 
@@ -294,7 +327,7 @@ Suggested per-domain path:
   paths' actual outputs over the next 24h of substrate. Then pick
   one as canonical and retire the other two.
 
-The remaining P1/P2 domains (`wallets`, `web_research`,
+The remaining P1/P2 domains (`wallets`, ~~`web_research`~~ (done #201),
 `psi_components`, `cda_extractions`, `wallet_profiles`, `actors`,
 `edges`) are likely each their own variant of the same problem.
 Each needs the lesson-10 reading before any refactor commit lands.
