@@ -296,7 +296,7 @@ def compute_collateral_diversity(protocol_slug: str) -> dict:
         has_stablecoin = False
         try:
             row = fetch_one(
-                "SELECT COUNT(*) as cnt FROM protocol_collateral_exposure WHERE protocol_slug = %s AND stablecoin_id IS NOT NULL",
+                "SELECT COUNT(*) as cnt FROM protocol_collateral_exposure WHERE protocol_slug = %s AND is_stablecoin = TRUE",
                 (protocol_slug,),
             )
             has_stablecoin = row and row.get("cnt", 0) > 0
