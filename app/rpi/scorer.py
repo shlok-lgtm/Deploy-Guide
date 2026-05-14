@@ -531,15 +531,18 @@ def _sync_lens_vendor_diversity(slug: str) -> float | None:
     read the count and write the normalized score to rpi_components.
     """
     try:
+        # governance_forum_posts schema: `mentioned_vendors` is JSONB
+        # (array of strings), the post timestamp is `posted_at`.
         row = fetch_one("""
             SELECT COUNT(DISTINCT vendor_name) AS vendor_count
             FROM (
-                SELECT UNNEST(vendor_mentions) AS vendor_name
+                SELECT jsonb_array_elements_text(mentioned_vendors) AS vendor_name
                 FROM governance_forum_posts
                 WHERE protocol_slug = %s
-                  AND collected_at >= NOW() - INTERVAL '365 days'
-                  AND vendor_mentions IS NOT NULL
-                  AND ARRAY_LENGTH(vendor_mentions, 1) > 0
+                  AND posted_at >= NOW() - INTERVAL '365 days'
+                  AND mentioned_vendors IS NOT NULL
+                  AND jsonb_typeof(mentioned_vendors) = 'array'
+                  AND jsonb_array_length(mentioned_vendors) > 0
             ) sub
         """, (slug,))
 
