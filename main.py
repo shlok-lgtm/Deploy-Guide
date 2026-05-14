@@ -153,16 +153,8 @@ def run_worker_loop():
         hours_since_cda = (time.time() - last_cda_at) / 3600
         if hours_since_cda >= cda_interval_hours:
             try:
-                logger.info("Running CDA collection pipeline...")
-                # v9.12 module-canonical: scheduler wrapper attests
-                # skipped_fresh / ran / error inline. Replaces the
-                # post-hoc 2h SELECT attest that left
-                # state_attestations.domain='cda_extractions' empty for
-                # 30+ days (#207). Do NOT re-attest here.
-                from app.services.cda_collector import run_collection_scheduled
-                cda_result = asyncio.run(run_collection_scheduled())
+                asyncio.run(_run_cda_cycle_once())
                 last_cda_at = time.time()
-                logger.info(f"CDA collection complete: {cda_result.get('status')}")
             except Exception as e:
                 logger.warning(f"CDA collection failed: {e}")
 
@@ -213,42 +205,8 @@ def run_worker_loop():
         hours_since_expansion = (time.time() - last_expansion_at) / 3600
         if hours_since_expansion >= 24:
             try:
-                from app.collectors.psi_collector import (
-                    collect_collateral_exposure,
-                    sync_collateral_to_backlog,
-                    discover_protocols,
-                    enrich_protocol_backlog,
-                    promote_eligible_protocols,
-                )
-                logger.info("Running PSI expansion pipeline...")
-                collect_collateral_exposure()
-                synced = sync_collateral_to_backlog()
-                discovered = discover_protocols()
-                enriched = enrich_protocol_backlog()
-                promoted = promote_eligible_protocols()
+                _run_psi_expansion_cycle_once()
                 last_expansion_at = time.time()
-                logger.info(
-                    f"PSI expansion: {synced} stablecoins synced, {discovered} discovered, "
-                    f"{enriched} enriched, {promoted} promoted"
-                )
-                # Attest PSI discoveries — always, even with discovered=0 and
-                # promoted=0. The enrichment-task path (#137) added the same
-                # fix at app/enrichment_worker.py, but its db_gate stays
-                # closed because main.py's `collect_collateral_exposure()`
-                # call above keeps `protocol_collateral_exposure` fresh —
-                # so the enrichment task never actually fires in production.
-                # That made #137's fix a no-op for the live code path and
-                # left psi_discoveries silent. Dropping the gate here too.
-                try:
-                    from app.state_attestation import attest_state
-                    attest_state(
-                        "psi_discoveries",
-                        [{"synced": synced, "discovered": discovered,
-                          "enriched": enriched, "promoted": promoted}],
-                        writer_id="main.inline.psi_discoveries",
-                    )
-                except Exception as ae:
-                    logger.debug(f"PSI discovery attestation skipped: {ae}")
             except Exception as e:
                 logger.warning(f"PSI expansion pipeline failed: {e}")
 
@@ -293,22 +251,8 @@ def run_worker_loop():
                 logger.warning(f"Profile rebuild failed: {e}")
 
         # Verification agent cycle — runs after every scoring cycle
-        # F2 (#221): the attest_state("assessments", ...) call previously
-        # here is dead — run_agent_cycle() is async (app/agent/watcher.py:
-        # 259) but this site calls it without `await`, so `result` is a
-        # coroutine and `.get(...)` raises AttributeError which the broad
-        # except below swallows. Net: 0 rows in state_attestations for
-        # 'assessments' over 19.4h despite 125+ watcher events. The
-        # attest has been moved to app/worker.py's awaited live-path
-        # caller (see comment there). The coroutine bug at the next line
-        # is intentionally left in place — same bug class N cleaned up
-        # for wallets in PR #214, separate cleanup sweep tracked
-        # outside F2's scope.
         try:
-            from app.agent.watcher import run_agent_cycle
-            result = run_agent_cycle()
-            if result:
-                logger.info(f"Agent cycle: {result.get('assessments', 0)} assessments")
+            _run_agent_cycle_once()
         except Exception as e:
             logger.error(f"Agent cycle error: {e}")
 
@@ -464,14 +408,7 @@ def run_worker_loop():
             #  Bug B: chain inside payload, entity_id stays NULL for consumers.)
             for edge_chain in ["ethereum", "base", "arbitrum", "solana"]:
                 try:
-                    from app.indexer.edges import run_edge_builder_scheduled
-                    logger.info(f"Running edge builder for {edge_chain} (top 200 unbuilt wallets by value)...")
-                    edge_outcome = asyncio.run(run_edge_builder_scheduled(edge_chain, time.time()))
-                    logger.info(
-                        f"Edge builder ({edge_chain}) {edge_outcome.get('status', 'unknown')}: "
-                        f"wallets={edge_outcome.get('wallets_processed', 0)}, "
-                        f"edges={edge_outcome.get('edges_upserted', 0)}"
-                    )
+                    asyncio.run(_run_edges_cycle_once(edge_chain))
                 except Exception as e:
                     logger.warning(f"Edge building failed for {edge_chain}: {e}")
 
@@ -578,6 +515,103 @@ def run_worker_loop():
 
         logger.info(f"Worker sleeping {WORKER_INTERVAL} minutes...")
         time.sleep(WORKER_INTERVAL * 60)
+
+
+# =============================================================================
+# Phase-trigger functions
+# =============================================================================
+# Each function is one iteration of that phase's work, decoupled from the
+# time-gate checks in run_worker_loop. Enables harness-based scenario testing
+# where each phase can be triggered as a stable function call regardless of
+# fix-shape variation (canonical wrapper vs. in-place fix vs. alternative).
+# Production goes through run_worker_loop, which calls these on the same
+# schedule as before. Underscore prefix = internal; scenarios import them
+# directly.
+
+
+async def _run_cda_cycle_once():
+    """Run one iteration of CDA collection. Wrapper attests
+    skipped_fresh / ran / error inline; no caller-side attest."""
+    logger.info("Running CDA collection pipeline...")
+    from app.services.cda_collector import run_collection_scheduled
+    cda_result = await run_collection_scheduled()
+    logger.info(f"CDA collection complete: {cda_result.get('status') if cda_result else 'no result'}")
+    return cda_result
+
+
+async def _run_edges_cycle_once(chain: str):
+    """Run one iteration of edges building for the given chain."""
+    from app.indexer.edges import run_edge_builder_scheduled
+    logger.info(f"Running edge builder for {chain} (top 200 unbuilt wallets by value)...")
+    edge_outcome = await run_edge_builder_scheduled(chain, time.time())
+    logger.info(
+        f"Edge builder ({chain}) {edge_outcome.get('status', 'unknown')}: "
+        f"wallets={edge_outcome.get('wallets_processed', 0)}, "
+        f"edges={edge_outcome.get('edges_upserted', 0)}"
+    )
+    return edge_outcome
+
+
+def _run_agent_cycle_once():
+    """Run one iteration of the verification agent.
+
+    F2 (#221): run_agent_cycle is async (app/agent/watcher.py:259) but
+    this site calls it without `await`, so `result` is a coroutine and
+    `.get(...)` raises AttributeError which the caller's broad except
+    swallows. The attest_state("assessments", ...) call previously here
+    has been moved to app/worker.py's awaited live-path caller. The
+    coroutine bug at the next line is intentionally left in place —
+    same bug class as wallets PR #214, separate cleanup sweep tracked
+    outside F2's scope.
+    """
+    from app.agent.watcher import run_agent_cycle
+    result = run_agent_cycle()
+    if result:
+        logger.info(f"Agent cycle: {result.get('assessments', 0)} assessments")
+    return result
+
+
+def _run_psi_expansion_cycle_once():
+    """Run one iteration of the PSI expansion pipeline
+    (collect → sync → discover → enrich → promote → attest).
+
+    Attest psi_discoveries always, even with discovered=0 and promoted=0.
+    The enrichment-task path (#137) added the same fix at
+    app/enrichment_worker.py, but its db_gate stays closed because
+    collect_collateral_exposure here keeps protocol_collateral_exposure
+    fresh — so the enrichment task never actually fires in production.
+    That made #137's fix a no-op for the live code path and left
+    psi_discoveries silent. Dropping the gate here too.
+    """
+    from app.collectors.psi_collector import (
+        collect_collateral_exposure,
+        sync_collateral_to_backlog,
+        discover_protocols,
+        enrich_protocol_backlog,
+        promote_eligible_protocols,
+    )
+    logger.info("Running PSI expansion pipeline...")
+    collect_collateral_exposure()
+    synced = sync_collateral_to_backlog()
+    discovered = discover_protocols()
+    enriched = enrich_protocol_backlog()
+    promoted = promote_eligible_protocols()
+    logger.info(
+        f"PSI expansion: {synced} stablecoins synced, {discovered} discovered, "
+        f"{enriched} enriched, {promoted} promoted"
+    )
+    try:
+        from app.state_attestation import attest_state
+        attest_state(
+            "psi_discoveries",
+            [{"synced": synced, "discovered": discovered,
+              "enriched": enriched, "promoted": promoted}],
+            writer_id="main.inline.psi_discoveries",
+        )
+    except Exception as ae:
+        logger.debug(f"PSI discovery attestation skipped: {ae}")
+    return {"synced": synced, "discovered": discovered,
+            "enriched": enriched, "promoted": promoted}
 
 
 def run_migrations():
