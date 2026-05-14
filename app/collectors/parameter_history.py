@@ -323,7 +323,7 @@ async def _get_concurrent_scores(protocol_slug: str, asset_symbol: str | None) -
         sii_row = await fetch_one_async(
             """SELECT overall_score FROM scores
                WHERE stablecoin_id = LOWER(%s)
-               ORDER BY scored_at DESC LIMIT 1""",
+               ORDER BY computed_at DESC LIMIT 1""",
             (asset_symbol,),
         )
         if sii_row:
