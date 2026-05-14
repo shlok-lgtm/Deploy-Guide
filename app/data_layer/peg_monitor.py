@@ -295,19 +295,32 @@ def _store_volatility_surface_90d_sync(stablecoin_id, vol_90d):
 
 def _emit_depeg_signals_sync(micro_depegs):
     """Sync helper: emit discovery signals for micro-depegs."""
+    import json
     from app.database import execute as db_execute
     for depeg in micro_depegs:
+        # Severity → novelty_score: 'alert' (>100bps) → 0.6, 'notable' (50-100bps) → 0.3
+        novelty = 0.6 if depeg["max_deviation_bps"] > 100 else 0.3
+        description = (
+            f"{depeg['consecutive_5m_intervals']} consecutive 5-min intervals "
+            f"with >{depeg['max_deviation_bps']:.0f}bps deviation "
+            f"({depeg['duration_minutes']} min duration)"
+        )
         db_execute(
             """INSERT INTO discovery_signals
-               (signal_type, domain, entity_id, severity, title, details, created_at)
-               VALUES ('micro_depeg', 'sii', %s, %s, %s, %s, NOW())""",
+               (signal_type, domain, title, description, entities,
+                novelty_score, direction, magnitude, baseline,
+                detail, methodology_version)
+               VALUES ('micro_depeg', 'sii', %s, %s, %s,
+                       %s, %s, %s, %s, %s, 'discovery-v0.1.0')""",
             (
-                depeg["stablecoin_id"],
-                "alert" if depeg["max_deviation_bps"] > 100 else "notable",
                 f"Micro-depeg detected: {depeg['stablecoin']}",
-                f"{depeg['consecutive_5m_intervals']} consecutive 5-min intervals "
-                f"with >{depeg['max_deviation_bps']:.0f}bps deviation "
-                f"({depeg['duration_minutes']} min duration)",
+                description,
+                json.dumps([depeg["stablecoin_id"]]),
+                novelty,
+                "decrease",  # depeg = price moving away from $1
+                float(depeg["max_deviation_bps"]),
+                50.0,  # 50bps trigger threshold
+                json.dumps(depeg),
             ),
         )
 

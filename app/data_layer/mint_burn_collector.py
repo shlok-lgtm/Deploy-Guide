@@ -289,12 +289,19 @@ async def run_mint_burn_collection() -> dict:
             for evt in large_events[:10]:  # Cap at 10 signals per cycle
                 await execute_async(
                     """INSERT INTO discovery_signals
-                       (signal_type, domain, entity_id, severity, title, details, created_at)
-                       VALUES ('large_mint_burn', 'sii', %s, 'notable', %s, %s, NOW())
-                       ON CONFLICT DO NOTHING""",
+                       (signal_type, domain, title, description, entities,
+                        novelty_score, direction, magnitude, baseline,
+                        detail, methodology_version)
+                       VALUES ('large_mint_burn', 'sii', %s, %s, %s,
+                               %s, %s, %s, %s, %s, 'discovery-v0.1.0')""",
                     (
-                        evt["stablecoin"],
                         f"Large {evt['type']}: {evt['stablecoin']} ${evt['amount']:,.0f}",
+                        f"{evt['type'].title()} of ${evt['amount']:,.0f} on {evt['chain']}",
+                        json.dumps([evt["stablecoin"]]),
+                        0.3,  # 'notable' severity baseline
+                        "increase" if evt["type"] == "mint" else "decrease",
+                        float(evt["amount"]),
+                        1_000_000.0,  # $1M threshold
                         json.dumps(evt),
                     ),
                 )
