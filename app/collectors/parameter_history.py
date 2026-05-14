@@ -27,6 +27,23 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Kill-switch
+# ---------------------------------------------------------------------------
+# Kill-switch for protocols whose decoder is known-broken pending architectural
+# fix. The Aave V3 registry entries decode `getReserveData(address)` as a flat
+# uint256 array (field indices 1-12) but the actual return type is the packed
+# struct `ReserveDataLegacy` whose field 0 (`configuration`) is bit-packed and
+# fields 1-6 are Ray-scaled (~10**27). The Compound `getAssetInfoByAddress`
+# decoder is also broken (zero rows ever landed in `protocol_parameters`).
+# Together this produces ~1500/7d numeric-overflow cycle_errors.
+#
+# Skipping these protocols is lossless: the data being written is wrong.
+# Re-enable by removing the slug from this set once the proper decoder ships.
+# See follow-up issue #251 + PR #250 (A5.4 forensic investigation).
+KILLED_PROTOCOLS: frozenset[str] = frozenset({"aave", "compound-finance"})
+
+
+# ---------------------------------------------------------------------------
 # RPC helpers
 # ---------------------------------------------------------------------------
 
@@ -584,7 +601,15 @@ async def check_parameter_changes() -> dict:
         "errors": [],
     }
 
+    if KILLED_PROTOCOLS:
+        logger.info(
+            f"[parameter_history] Kill-switch skipping {sorted(KILLED_PROTOCOLS)} "
+            f"(see KILLED_PROTOCOLS comment + follow-up issue)"
+        )
+
     for protocol_slug, param_specs in PROTOCOL_PARAMETER_REGISTRY.items():
+        if protocol_slug in KILLED_PROTOCOLS:
+            continue  # see KILLED_PROTOCOLS doc comment
         try:
             protocol_id = 0
 
@@ -692,6 +717,8 @@ async def collect_parameter_history() -> dict:
 
     # Store daily snapshots for each protocol
     for protocol_slug in PROTOCOL_PARAMETER_REGISTRY:
+        if protocol_slug in KILLED_PROTOCOLS:
+            continue  # see KILLED_PROTOCOLS doc comment
         try:
             await _store_daily_snapshot(protocol_slug, 0, results)
         except asyncio.CancelledError:
