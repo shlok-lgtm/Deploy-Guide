@@ -280,7 +280,7 @@ async def run_exchange_collection() -> dict:
         payload = {"exchanges": total_snapshots}
         if total_snapshots == 0:
             payload["status"] = "ran_no_snapshots"
-        await asyncio.to_thread(attest_data_batch, "exchange_snapshots", [payload])
+        await asyncio.to_thread(attest_data_batch, "exchange_snapshots", [payload], None, "module.exchange_collector")
         if total_snapshots > 0:
             await link_batch_to_proof("exchange_snapshots", "exchange_snapshots")
     except asyncio.CancelledError:
@@ -351,7 +351,7 @@ async def run_exchange_collection_scheduled() -> dict:
         }
         try:
             await asyncio.to_thread(
-                attest_data_batch, "exchange_snapshots", [skipped_payload]
+                attest_data_batch, "exchange_snapshots", [skipped_payload], None, "module.exchange_collector"
             )
         except Exception as e:
             logger.warning(f"[exchange_collector] skipped-fresh attest failed: {e}")
@@ -373,7 +373,7 @@ async def run_exchange_collection_scheduled() -> dict:
         }
         try:
             await asyncio.to_thread(
-                attest_data_batch, "exchange_snapshots", [error_payload]
+                attest_data_batch, "exchange_snapshots", [error_payload], None, "module.exchange_collector"
             )
         except Exception:
             pass

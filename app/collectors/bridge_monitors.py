@@ -337,7 +337,7 @@ async def run_bridge_monitoring() -> list[dict]:
             await asyncio.to_thread(attest_state, "bridge_monitoring", [
                 {"slug": r["bridge_slug"], "rate": r["success_rate"]}
                 for r in scored
-            ])
+            ], None, "module.bridge_monitors")
     except asyncio.CancelledError:
         raise
     except Exception as e:

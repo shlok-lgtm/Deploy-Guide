@@ -233,7 +233,7 @@ async def run_bridge_flow_collection() -> dict:
     try:
         from app.data_layer.provenance_scaling import attest_data_batch, link_batch_to_proof
         if total_flows > 0:
-            await asyncio.to_thread(attest_data_batch, "bridge_flows", [{"flows": total_flows, "bridges": bridges_processed}])
+            await asyncio.to_thread(attest_data_batch, "bridge_flows", [{"flows": total_flows, "bridges": bridges_processed}], None, "module.bridge_flow_collector")
             await link_batch_to_proof("bridge_flows", "bridge_flows")
     except asyncio.CancelledError:
         raise

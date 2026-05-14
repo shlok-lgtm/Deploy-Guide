@@ -274,7 +274,7 @@ def collect_enforcement_records() -> dict:
                         "entity_symbol": symbol,
                         "new_records": new_records,
                         "scanned_at": datetime.now(timezone.utc).isoformat(),
-                    }])
+                    }], writer_id="module.enforcement_history")
                 except Exception as e:
                     logger.warning(f"Enforcement attestation failed: {ae}")
                     try:

@@ -393,7 +393,7 @@ async def run_contract_surveillance() -> dict:
     try:
         from app.data_layer.provenance_scaling import attest_data_batch, link_batch_to_proof
         if total_scanned > 0:
-            await asyncio.to_thread(attest_data_batch, "contract_surveillance", [{"scanned": total_scanned, "changes": len(changes_detected)}])
+            await asyncio.to_thread(attest_data_batch, "contract_surveillance", [{"scanned": total_scanned, "changes": len(changes_detected)}], None, "module.contract_surveillance")
             await link_batch_to_proof("contract_surveillance", "contract_surveillance")
     except asyncio.CancelledError:
         raise

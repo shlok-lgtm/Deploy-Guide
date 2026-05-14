@@ -245,9 +245,10 @@ def rebuild_all_profiles(limit: int = 0) -> dict:
             attest_state(
                 "wallet_profiles",
                 [{"built": built_substrate, "built_inmem": built, "total": len(addresses)}],
+                writer_id="module.wallet_profile",
             )
         else:
-            attest_state("wallet_profiles", [{"status": "ran_no_results", "profiles_built": 0}])
+            attest_state("wallet_profiles", [{"status": "ran_no_results", "profiles_built": 0}], writer_id="module.wallet_profile")
     except asyncio.CancelledError:
         raise
     except Exception as ae:

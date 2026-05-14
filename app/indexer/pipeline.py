@@ -819,6 +819,8 @@ async def run_pipeline_batch(batch_size: int = 500) -> dict:
                 "scored": scored,
                 "balances_updated": balances_updated,
             }],
+            None,
+            "module.indexer_pipeline",
         )
     except asyncio.CancelledError:
         raise

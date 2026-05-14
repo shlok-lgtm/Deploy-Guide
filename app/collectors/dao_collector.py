@@ -986,9 +986,9 @@ def run_dohi_scoring() -> list[dict]:
             attest_state("dohi_components", [
                 {"slug": r["entity_slug"], "score": r["overall_score"]}
                 for r in results
-            ])
+            ], writer_id="module.dao_collector")
         else:
-            attest_state("dohi_components", [{"status": "ran_no_results", "results_count": 0}])
+            attest_state("dohi_components", [{"status": "ran_no_results", "results_count": 0}], writer_id="module.dao_collector")
     except Exception as ae:
         logger.error(f"dohi_components attestation failed: {ae}")
         try:

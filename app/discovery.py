@@ -234,9 +234,9 @@ def run_discovery_cycle():
     try:
         from app.state_attestation import attest_state
         if all_signals:
-            attest_state("discovery_signals", [{"type": s.get("signal_type"), "novelty": s.get("novelty_score")} for s in all_signals])
+            attest_state("discovery_signals", [{"type": s.get("signal_type"), "novelty": s.get("novelty_score")} for s in all_signals], writer_id="module.discovery")
         else:
-            attest_state("discovery_signals", [{"status": "ran_no_results", "results_count": 0}])
+            attest_state("discovery_signals", [{"status": "ran_no_results", "results_count": 0}], writer_id="module.discovery")
     except Exception as ae:
         logger.error(f"discovery_signals attestation failed: {ae}")
         try:

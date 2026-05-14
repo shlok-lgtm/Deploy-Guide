@@ -473,7 +473,7 @@ async def _handle_parameter_change(
             "new_value": new_value,
             "change_context": score_ctx["change_context"],
             "changed_at": now.isoformat(),
-        }], str(protocol_id))
+        }], str(protocol_id), "module.parameter_history")
     except asyncio.CancelledError:
         raise
     except Exception as e:
@@ -549,7 +549,7 @@ async def _store_daily_snapshot(protocol_slug: str, protocol_id: int, results: d
             "protocol_slug": protocol_slug,
             "snapshot_date": today.isoformat(),
             "parameter_count": len(param_dict),
-        }], str(protocol_id))
+        }], str(protocol_id), "module.parameter_history")
     except asyncio.CancelledError:
         raise
     except Exception as e:

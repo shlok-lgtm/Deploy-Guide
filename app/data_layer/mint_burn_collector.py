@@ -319,7 +319,7 @@ async def run_mint_burn_collection() -> dict:
     try:
         from app.data_layer.provenance_scaling import attest_data_batch, link_batch_to_proof
         if total_mints + total_burns > 0:
-            await asyncio.to_thread(attest_data_batch, "mint_burn_events", [{"mints": total_mints, "burns": total_burns}])
+            await asyncio.to_thread(attest_data_batch, "mint_burn_events", [{"mints": total_mints, "burns": total_burns}], None, "module.mint_burn_collector")
             await link_batch_to_proof("mint_burn_events", "mint_burn_events")
     except asyncio.CancelledError:
         raise

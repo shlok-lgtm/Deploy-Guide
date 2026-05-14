@@ -199,7 +199,7 @@ def run_sanctions_screening() -> dict:
                 "date": today.isoformat(),
                 "targets_screened": targets_screened,
                 "matches_found": matches_found,
-            }])
+            }], writer_id="module.sanctions_screening")
         except Exception as e:
             logger.warning(f"Sanctions screening attestation failed: {ae}")
             try:

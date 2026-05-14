@@ -286,7 +286,7 @@ def collect_parent_financials() -> dict:
                 "companies_checked": companies_checked,
                 "quarters_stored": quarters_stored,
                 "date": date.today().isoformat(),
-            }])
+            }], writer_id="module.parent_company_financials")
         except Exception as e:
             logger.warning(f"Parent company financials attestation failed: {ae}")
             try:

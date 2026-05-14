@@ -680,7 +680,7 @@ async def collect_governance_reads(client: httpx.AsyncClient) -> list[dict]:
             await _loop.run_in_executor(None, attest_state, "governance_reads", [
                 {"slug": c.get("entity_slug"), "id": c.get("component_id"), "score": c.get("normalized_score")}
                 for c in all_components
-            ])
+            ], None, "module.smart_contract")
     except asyncio.CancelledError:
         raise
     except Exception as e:
@@ -941,7 +941,7 @@ async def collect_smart_contract_components(
         from app.state_attestation import attest_state
         if components:
             _loop = asyncio.get_event_loop()
-            await _loop.run_in_executor(None, partial(attest_state, "smart_contracts", [{"id": c.get("component_id"), "score": c.get("normalized_score")} for c in components], entity_id=stablecoin_id))
+            await _loop.run_in_executor(None, partial(attest_state, "smart_contracts", [{"id": c.get("component_id"), "score": c.get("normalized_score")} for c in components], entity_id=stablecoin_id, writer_id="module.smart_contract"))
     except asyncio.CancelledError:
         raise
     except Exception as e:

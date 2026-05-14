@@ -698,9 +698,9 @@ def run_tti_scoring() -> list[dict]:
             attest_state("tti_components", [
                 {"slug": r["entity_slug"], "score": r["overall_score"]}
                 for r in results
-            ])
+            ], writer_id="module.tti_collector")
         else:
-            attest_state("tti_components", [{"status": "ran_no_results", "results_count": 0}])
+            attest_state("tti_components", [{"status": "ran_no_results", "results_count": 0}], writer_id="module.tti_collector")
     except Exception as ae:
         logger.error(f"tti_components attestation failed: {ae}")
         try:

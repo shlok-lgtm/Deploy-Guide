@@ -303,7 +303,7 @@ async def run_exchange_health_monitoring() -> list[dict]:
                 attest_state, "exchange_health", [
                     {"slug": r["exchange_slug"], "score": r["availability_score"]}
                     for r in results
-                ]
+                ], None, "module.exchange_health"
             )
     except asyncio.CancelledError:
         raise

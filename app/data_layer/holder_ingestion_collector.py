@@ -399,7 +399,7 @@ async def run_holder_ingestion() -> dict:
         from app.data_layer.provenance_scaling import attest_data_batch
         total_new = sum(s["new_wallets"] for s in stats.values())
         if total_new > 0:
-            await asyncio.to_thread(attest_data_batch, "wallet_holder_discovery", [dict(stats)])
+            await asyncio.to_thread(attest_data_batch, "wallet_holder_discovery", [dict(stats)], None, "module.holder_ingestion_collector")
     except asyncio.CancelledError:
         raise
     except Exception as e:

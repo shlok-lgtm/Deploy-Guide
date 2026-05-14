@@ -270,7 +270,7 @@ async def run_yield_collection() -> dict:
     try:
         from app.data_layer.provenance_scaling import attest_data_batch, link_batch_to_proof
         if snapshots:
-            await asyncio.to_thread(attest_data_batch, "yield_snapshots", [{"pools": len(snapshots)}])
+            await asyncio.to_thread(attest_data_batch, "yield_snapshots", [{"pools": len(snapshots)}], None, "module.yield_collector")
             await link_batch_to_proof("yield_snapshots", "yield_snapshots")
     except asyncio.CancelledError:
         raise

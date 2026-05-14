@@ -356,7 +356,7 @@ async def run_market_chart_backfill(backfill_days: int = 90) -> dict:
     try:
         from app.data_layer.provenance_scaling import attest_data_batch, link_batch_to_proof
         if total_records > 0:
-            await asyncio.to_thread(attest_data_batch, "market_chart_history", [{"records": total_records, "coins": coins_processed}])
+            await asyncio.to_thread(attest_data_batch, "market_chart_history", [{"records": total_records, "coins": coins_processed}], None, "module.market_chart_backfill")
     except asyncio.CancelledError:
         raise
     except Exception as e:

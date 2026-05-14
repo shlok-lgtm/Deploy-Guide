@@ -430,7 +430,7 @@ async def collect_flows_components(
         from app.state_attestation import attest_state
         if components:
             _attest_records = [{"id": c.get("component_id"), "score": c.get("normalized_score")} for c in components]
-            await _fl.run_in_executor(None, attest_state, "flows", _attest_records, stablecoin_id)
+            await _fl.run_in_executor(None, attest_state, "flows", _attest_records, stablecoin_id, "module.flows")
     except asyncio.CancelledError:
         raise
     except Exception as e:

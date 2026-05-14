@@ -797,7 +797,7 @@ async def _attest_observations_summary(payload: dict) -> None:
     """
     try:
         from app.state_attestation import attest_state
-        await asyncio.to_thread(attest_state, "mempool_observations", [payload])
+        await asyncio.to_thread(attest_state, "mempool_observations", [payload], None, "module.mempool_watcher")
     except asyncio.CancelledError:
         raise
     except Exception as e:

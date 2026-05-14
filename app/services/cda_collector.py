@@ -1376,7 +1376,7 @@ async def run_collection_scheduled(cycle_ts=None) -> dict:
         }
         try:
             await asyncio.to_thread(
-                attest_state, "cda_extractions", [skipped_payload]
+                attest_state, "cda_extractions", [skipped_payload], None, "module.cda_collector"
             )
         except Exception as e:
             logger.warning(f"[cda_collector] skipped-fresh attest failed: {e}")
@@ -1391,7 +1391,7 @@ async def run_collection_scheduled(cycle_ts=None) -> dict:
         }
         try:
             await asyncio.to_thread(
-                attest_state, "cda_extractions", [ran_payload]
+                attest_state, "cda_extractions", [ran_payload], None, "module.cda_collector"
             )
         except Exception as e:
             logger.warning(f"[cda_collector] ran-branch attest failed: {e}")
@@ -1415,7 +1415,7 @@ async def run_collection_scheduled(cycle_ts=None) -> dict:
         }
         try:
             await asyncio.to_thread(
-                attest_state, "cda_extractions", [error_payload]
+                attest_state, "cda_extractions", [error_payload], None, "module.cda_collector"
             )
         except Exception:
             pass

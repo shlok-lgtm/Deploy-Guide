@@ -426,9 +426,9 @@ def run_dex_pool_collection() -> list[dict]:
             attest_state("dex_pool_data", [
                 {"slug": r.get("protocol_slug"), "component": r.get("component"), "score": r.get("score")}
                 for r in results if "score" in r
-            ])
+            ], writer_id="module.dex_pools")
         else:
-            attest_state("dex_pool_data", [{"status": "ran_no_results", "results_count": 0}])
+            attest_state("dex_pool_data", [{"status": "ran_no_results", "results_count": 0}], writer_id="module.dex_pools")
     except Exception as ae:
         logger.error(f"dex_pool_data attestation failed: {ae}")
         try:
