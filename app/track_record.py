@@ -91,7 +91,7 @@ def _get_entity_baseline(entity_slug: str, index_name: str) -> dict:
 
     elif index_name in ("lsti", "bri", "dohi", "vsri", "cxri", "tti"):
         row = fetch_one(
-            "SELECT * FROM generic_index_scores WHERE index_id = %s AND entity_id = %s ORDER BY computed_at DESC LIMIT 1",
+            "SELECT * FROM generic_index_scores WHERE index_id = %s AND entity_slug = %s ORDER BY computed_at DESC LIMIT 1",
             (index_name, entity_slug),
         )
         if row:

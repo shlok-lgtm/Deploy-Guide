@@ -74,11 +74,11 @@ async def _get_existing_entities() -> set:
     existing = set()
     try:
         rows = await fetch_all_async(
-            """SELECT DISTINCT entity_id FROM generic_index_scores
+            """SELECT DISTINCT entity_slug FROM generic_index_scores
                WHERE index_id IN ('lsti', 'bri', 'vsri', 'cxri', 'tti', 'dohi')"""
         )
         if rows:
-            existing.update(r["entity_id"] for r in rows)
+            existing.update(r["entity_slug"] for r in rows)
     except asyncio.CancelledError:
         raise
     except Exception as e:
