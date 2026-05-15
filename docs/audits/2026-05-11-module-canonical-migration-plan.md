@@ -445,24 +445,25 @@ inserts the migration name into the `migrations` table (lines 769-776).
 The index never exists and the migration is never retried on subsequent
 boots. A genuine CONCURRENTLY requirement would silently fail forever.
 
-**Possible prior instance — verify in prod:**
-`migrations/061_attestation_domain_index.sql` already uses
+**Prior instance — verified RESOLVED (2026-05-15):**
+`migrations/061_attestation_domain_index.sql` also uses
 `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_state_attestations_domain_ts`.
-If migration 061 went through `run_migration()`, the index creation would
-have hard-errored, been swallowed, and `061_attestation_domain_index`
-recorded as applied anyway. The coherence-sweep covering index it was
-meant to create may not exist on prod. Verify with:
+W2.4 pre-flight flagged it as a possible silent failure. Architect ran
 `SELECT indexname FROM pg_indexes WHERE tablename = 'state_attestations';`
-— if `idx_state_attestations_domain_ts` is absent, this entry's priority
-should be raised (coherence-sweep queries are doing seq scans).
+against the production Neon branch — `idx_state_attestations_domain_ts`
+**IS present**. Migration 061 did not silently fail (it predates the
+current glob runner, or was applied via a path that did not wrap it in a
+transaction). No coherence-sweep regression. This does not retire the
+entry: the runner foot-gun remains a class issue for any *future*
+CONCURRENTLY migration.
 
 **Class:** Foot-gun in shared infrastructure.
 
-**Priority:** P2 *(pending the 061 verification above — raise to P1 if the
-index is confirmed missing)*. No live failure from W2.4 itself (we dodge
-by using non-CONCURRENT `CREATE INDEX` for the 3,100-row
-`state_attestations` table, where plain `CREATE` completes in <1s with
-negligible lock).
+**Priority:** P2. No live failure today — 061's index is confirmed
+present (above), and W2.4 dodges the runner entirely by using
+non-CONCURRENT `CREATE INDEX` for the 3,100-row `state_attestations`
+table (plain `CREATE` completes in <1s with negligible lock). Bites the
+next time a large hot table genuinely needs a CONCURRENTLY index/drop.
 
 **When picked up:** add an opt-out path to `run_migration()` for migrations
 that need to run outside a transaction (sniff filename suffix like
