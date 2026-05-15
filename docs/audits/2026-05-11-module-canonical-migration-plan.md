@@ -428,3 +428,48 @@ include all events in its counter.
 
 **Refs:** #238 (gate fix), #235 (writer_id discriminator), #208 +
 #221 (original `actors`/`assessments` domain split history).
+
+### Migration runner wraps every migration in a transaction (CONCURRENTLY incompatible)
+
+**Surfaced:** 2026-05-15 W2.4 pre-flight by CC agent.
+
+**Finding:** `app/database.py:280-293` `run_migration()` opens migrations via
+`with get_conn() as conn: cur.execute(sql)`. psycopg2's `with conn:` is a
+transaction block — no autocommit. `CREATE INDEX CONCURRENTLY` and
+`DROP INDEX CONCURRENTLY` cannot run inside a transaction; Postgres
+hard-errors.
+
+**Hidden severity:** the glob loop at `main.py:746-780` catches the error,
+logs "failed (objects may already exist — recorded anyway)", and STILL
+inserts the migration name into the `migrations` table (lines 769-776).
+The index never exists and the migration is never retried on subsequent
+boots. A genuine CONCURRENTLY requirement would silently fail forever.
+
+**Possible prior instance — verify in prod:**
+`migrations/061_attestation_domain_index.sql` already uses
+`CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_state_attestations_domain_ts`.
+If migration 061 went through `run_migration()`, the index creation would
+have hard-errored, been swallowed, and `061_attestation_domain_index`
+recorded as applied anyway. The coherence-sweep covering index it was
+meant to create may not exist on prod. Verify with:
+`SELECT indexname FROM pg_indexes WHERE tablename = 'state_attestations';`
+— if `idx_state_attestations_domain_ts` is absent, this entry's priority
+should be raised (coherence-sweep queries are doing seq scans).
+
+**Class:** Foot-gun in shared infrastructure.
+
+**Priority:** P2 *(pending the 061 verification above — raise to P1 if the
+index is confirmed missing)*. No live failure from W2.4 itself (we dodge
+by using non-CONCURRENT `CREATE INDEX` for the 3,100-row
+`state_attestations` table, where plain `CREATE` completes in <1s with
+negligible lock).
+
+**When picked up:** add an opt-out path to `run_migration()` for migrations
+that need to run outside a transaction (sniff filename suffix like
+`_concurrent.sql`, or read a directive comment in the SQL header). Then
+either fail-loud OR auto-retry on the error class that indicates "needs
+no-transaction" instead of silently recording as applied.
+
+**Refs:** `app/database.py:280-293`, `main.py:746-780`,
+`migrations/061_attestation_domain_index.sql`, W2.4 pre-flight halt
+(this session).
