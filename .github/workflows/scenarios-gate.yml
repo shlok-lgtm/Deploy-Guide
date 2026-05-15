@@ -1,0 +1,212 @@
+# Scenarios regression matrix gate
+#
+# Cross-repo dispatch + wait: triggers the reusable
+# regression-matrix.yml workflow in basis-protocol/scenarios-harness,
+# polls for completion, downloads the matrix_verdict.json artifact,
+# and gates this PR/push on the overall_pass field.
+#
+# TODO: requires repo secret SCENARIOS_HARNESS_PAT.
+# Generate via Settings > Developer settings > Personal access tokens >
+# Fine-grained, scoped to basis-protocol/scenarios-harness with
+# Actions: read+write. Add as repo secret SCENARIOS_HARNESS_PAT.
+# Until that secret exists, this workflow will fail on first dispatch.
+# See issue tracking the PAT setup.
+#
+# Run-ID correlation note: gh workflow run does NOT return a run ID
+# (GitHub API limitation for workflow_dispatch). We dispatch, wait
+# briefly, then query gh run list for the most-recent workflow_dispatch
+# run on regression-matrix.yml created after our dispatch timestamp.
+# Race condition: another dispatcher firing the same workflow in the
+# same window could be picked up instead. In practice this is the only
+# automated dispatcher for that workflow; manual dispatches during a CI
+# run are rare.
+
+name: Scenarios regression matrix gate
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  invoke-regression-matrix:
+    name: invoke-regression-matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Guard — SCENARIOS_HARNESS_PAT must be set
+        env:
+          PAT: ${{ secrets.SCENARIOS_HARNESS_PAT }}
+        run: |
+          if [ -z "$PAT" ]; then
+            echo "::error::Secret SCENARIOS_HARNESS_PAT is not set."
+            echo "::error::See the issue tracking PAT setup in basis-hub for instructions."
+            echo "::error::Fine-grained PAT scope: basis-protocol/scenarios-harness, Actions: read+write."
+            exit 1
+          fi
+
+      - name: Resolve basis_hub_ref
+        id: ref
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            SHA="${{ github.event.pull_request.head.sha }}"
+          else
+            SHA="${{ github.sha }}"
+          fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Resolved basis_hub_ref: $SHA"
+
+      - name: Dispatch regression-matrix workflow
+        id: dispatch
+        env:
+          GH_TOKEN: ${{ secrets.SCENARIOS_HARNESS_PAT }}
+        run: |
+          DISPATCH_TIME=$(date -u +%s)
+          DISPATCH_ISO=$(date -u -d "@$DISPATCH_TIME" +"%Y-%m-%dT%H:%M:%SZ")
+          echo "dispatch_time=$DISPATCH_TIME" >> "$GITHUB_OUTPUT"
+          echo "dispatch_iso=$DISPATCH_ISO" >> "$GITHUB_OUTPUT"
+
+          gh workflow run regression-matrix.yml \
+            --repo basis-protocol/scenarios-harness \
+            --ref main \
+            -f basis_hub_ref="${{ steps.ref.outputs.sha }}" \
+            -f scenarios_ref=main
+
+          echo "Dispatch fired at $DISPATCH_ISO for basis_hub_ref=${{ steps.ref.outputs.sha }}"
+
+      - name: Locate dispatched run
+        id: locate
+        env:
+          GH_TOKEN: ${{ secrets.SCENARIOS_HARNESS_PAT }}
+        run: |
+          # Wait briefly for GitHub to register the dispatched run.
+          sleep 10
+
+          RUN_ID=""
+          for attempt in $(seq 1 12); do
+            RUN_ID=$(gh run list \
+              --repo basis-protocol/scenarios-harness \
+              --workflow=regression-matrix.yml \
+              --limit=10 \
+              --json databaseId,createdAt,event \
+              -q "[.[] | select(.event==\"workflow_dispatch\") | select((.createdAt | fromdateiso8601) >= ${{ steps.dispatch.outputs.dispatch_time }})] | sort_by(.createdAt) | .[0].databaseId")
+
+            if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ]; then
+              break
+            fi
+            echo "Attempt $attempt: dispatched run not yet visible, retrying in 5s..."
+            sleep 5
+          done
+
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            echo "::error::Could not locate dispatched regression-matrix run within ~70s of dispatch."
+            echo "::error::Check scenarios-harness Actions tab manually:"
+            echo "::error::  https://github.com/basis-protocol/scenarios-harness/actions/workflows/regression-matrix.yml"
+            exit 1
+          fi
+
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "Located dispatched run: $RUN_ID"
+          echo "URL: https://github.com/basis-protocol/scenarios-harness/actions/runs/$RUN_ID"
+
+      - name: Poll for completion
+        id: poll
+        env:
+          GH_TOKEN: ${{ secrets.SCENARIOS_HARNESS_PAT }}
+        run: |
+          RUN_ID="${{ steps.locate.outputs.run_id }}"
+          MAX_WAIT_SECONDS=1800
+          INTERVAL=15
+          ELAPSED=0
+          STATUS="unknown"
+
+          while [ $ELAPSED -lt $MAX_WAIT_SECONDS ]; do
+            STATUS=$(gh run view "$RUN_ID" \
+              --repo basis-protocol/scenarios-harness \
+              --json status \
+              -q '.status')
+
+            if [ "$STATUS" = "completed" ]; then
+              CONCLUSION=$(gh run view "$RUN_ID" \
+                --repo basis-protocol/scenarios-harness \
+                --json conclusion \
+                -q '.conclusion')
+              echo "conclusion=$CONCLUSION" >> "$GITHUB_OUTPUT"
+              echo "Regression-matrix run completed: $CONCLUSION (elapsed: ${ELAPSED}s)"
+              break
+            fi
+
+            echo "Status: $STATUS (elapsed: ${ELAPSED}s / ${MAX_WAIT_SECONDS}s)"
+            sleep $INTERVAL
+            ELAPSED=$((ELAPSED + INTERVAL))
+          done
+
+          if [ "$STATUS" != "completed" ]; then
+            echo "::error::Regression-matrix run did not complete within ${MAX_WAIT_SECONDS}s timeout."
+            echo "::error::Run URL: https://github.com/basis-protocol/scenarios-harness/actions/runs/$RUN_ID"
+            exit 1
+          fi
+
+      - name: Download matrix_verdict artifact
+        env:
+          GH_TOKEN: ${{ secrets.SCENARIOS_HARNESS_PAT }}
+        run: |
+          RUN_ID="${{ steps.locate.outputs.run_id }}"
+          gh run download "$RUN_ID" \
+            --repo basis-protocol/scenarios-harness \
+            --name matrix_verdict
+
+          # gh run download may unzip into a directory named after the
+          # artifact; flatten so jq can read matrix_verdict.json from cwd.
+          if [ ! -f matrix_verdict.json ] && [ -f matrix_verdict/matrix_verdict.json ]; then
+            mv matrix_verdict/matrix_verdict.json .
+          fi
+
+          if [ ! -f matrix_verdict.json ]; then
+            echo "::error::matrix_verdict.json not found in downloaded artifact."
+            ls -laR
+            exit 1
+          fi
+
+          echo "matrix_verdict.json contents:"
+          cat matrix_verdict.json
+
+      - name: Parse verdict and write step summary
+        run: |
+          RUN_ID="${{ steps.locate.outputs.run_id }}"
+          OVERALL_PASS=$(jq -r '.overall_pass' matrix_verdict.json)
+
+          {
+            echo "# Scenarios regression matrix"
+            echo ""
+            echo "**Run:** [scenarios-harness run #${RUN_ID}](https://github.com/basis-protocol/scenarios-harness/actions/runs/${RUN_ID})"
+            echo "**basis_hub_ref:** \`${{ steps.ref.outputs.sha }}\`"
+            echo "**scenarios_ref:** \`main\`"
+            echo "**Overall pass:** \`${OVERALL_PASS}\`"
+            echo ""
+            echo "## Per-scenario results"
+            echo ""
+            if jq -e '.scenarios | type == "array"' matrix_verdict.json >/dev/null 2>&1; then
+              jq -r '.scenarios[] | "- **\(.name // "unnamed")**: \(.status // .pass // .conclusion // "n/a")"' matrix_verdict.json
+            elif jq -e '.scenarios | type == "object"' matrix_verdict.json >/dev/null 2>&1; then
+              jq -r '.scenarios | to_entries[] | "- **\(.key)**: \(.value)"' matrix_verdict.json
+            else
+              echo "_Per-scenario detail not found at \`.scenarios\` — full verdict below._"
+              echo ""
+              echo '```json'
+              jq . matrix_verdict.json
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$OVERALL_PASS" != "true" ]; then
+            echo "::error::Scenarios regression matrix FAILED (overall_pass=${OVERALL_PASS})"
+            exit 1
+          fi
+
+          echo "::notice::Scenarios regression matrix PASSED"
