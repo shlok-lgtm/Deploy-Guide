@@ -1,0 +1,158 @@
+name: scenarios-gate
+# Dispatches the scenarios regression matrix in basis-protocol/scenarios-harness
+# and gates this PR (or push to main) on its verdict.
+#
+# HOLDOUT ISOLATION — read before editing:
+# Scenario slugs, individual results, and durations are protected test
+# content. This workflow MUST surface aggregates ONLY. It reads exactly
+# seven whitelisted fields from matrix_verdict.json and never touches
+# `.per_scenario`. Do NOT add per-scenario logging, do NOT `cat` the
+# verdict file, do NOT print scenario names anywhere. For debugging
+# detail, follow the dispatched run's URL into scenarios-harness Actions.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  invoke-regression-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ secrets.SCENARIOS_HARNESS_PAT }}
+      HARNESS_REPO: basis-protocol/scenarios-harness
+    steps:
+      - name: Determine basis-hub ref
+        id: ref
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            sha="${{ github.event.pull_request.head.sha }}"
+          else
+            sha="${{ github.sha }}"
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "basis-hub ref under test: $sha"
+
+      - name: Dispatch regression matrix
+        id: dispatch
+        run: |
+          dispatch_time=$(date -u +%s)
+          echo "dispatch_time=$dispatch_time" >> "$GITHUB_OUTPUT"
+          gh workflow run regression-matrix.yml \
+            --repo "$HARNESS_REPO" \
+            --ref main \
+            -f basis_hub_ref="${{ steps.ref.outputs.sha }}" \
+            -f scenarios_ref=main
+          echo "Dispatched regression-matrix.yml (dispatch_time=$dispatch_time)."
+
+      - name: Find dispatched run
+        id: find
+        run: |
+          dispatch_time="${{ steps.dispatch.outputs.dispatch_time }}"
+          run_id=""
+          # Poll ~60s for the run we just dispatched to appear. The
+          # dispatch API returns no run ID, so match on event type and
+          # a createdAt newer than the timestamp captured pre-dispatch.
+          for _ in $(seq 1 12); do
+            runs=$(gh run list --repo "$HARNESS_REPO" \
+              --workflow=regression-matrix.yml \
+              --json databaseId,createdAt,event \
+              --limit 5)
+            run_id=$(echo "$runs" | jq -r --argjson dt "$dispatch_time" '
+              [ .[]
+                | select(.event == "workflow_dispatch")
+                | select((.createdAt | fromdateiso8601) > $dt) ]
+              | sort_by(.createdAt) | last | .databaseId // empty')
+            if [ -n "$run_id" ]; then
+              echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+              echo "Found dispatched run: $run_id"
+              break
+            fi
+            sleep 5
+          done
+          if [ -z "$run_id" ]; then
+            echo "::error::No regression-matrix workflow_dispatch run appeared within 60s."
+            exit 1
+          fi
+
+      - name: Wait for completion
+        id: wait
+        run: |
+          run_id="${{ steps.find.outputs.run_id }}"
+          deadline=$(( $(date -u +%s) + 1800 ))
+          while true; do
+            info=$(gh run view "$run_id" --repo "$HARNESS_REPO" \
+              --json status,conclusion)
+            status=$(echo "$info" | jq -r '.status')
+            conclusion=$(echo "$info" | jq -r '.conclusion // ""')
+            echo "run $run_id: status=$status conclusion=$conclusion"
+            if [ "$status" = "completed" ]; then
+              break
+            fi
+            if [ "$(date -u +%s)" -ge "$deadline" ]; then
+              echo "::error::regression-matrix run $run_id did not complete within 30 min."
+              exit 1
+            fi
+            sleep 30
+          done
+
+      - name: Download verdict artifact
+        id: download
+        run: |
+          run_id="${{ steps.find.outputs.run_id }}"
+          rm -rf verdict && mkdir -p verdict
+          # Primary: artifact named 'matrix-verdict'. Fallback: pull all
+          # run artifacts and locate matrix_verdict.json among them.
+          if gh run download "$run_id" --repo "$HARNESS_REPO" \
+              --name matrix-verdict --dir ./verdict; then
+            echo "Downloaded artifact 'matrix-verdict'."
+          else
+            echo "Artifact 'matrix-verdict' not found by name; downloading all run artifacts."
+            gh run download "$run_id" --repo "$HARNESS_REPO" --dir ./verdict || true
+          fi
+          verdict_file=$(find ./verdict -type f -name matrix_verdict.json -print -quit)
+          if [ -z "$verdict_file" ]; then
+            echo "::error::matrix_verdict.json not present in run $run_id artifacts."
+            exit 1
+          fi
+          echo "verdict_file=$verdict_file" >> "$GITHUB_OUTPUT"
+          echo "Located verdict file: $verdict_file"
+
+      - name: Evaluate verdict
+        run: |
+          f="${{ steps.download.outputs.verdict_file }}"
+          # Whitelisted fields ONLY — never read or echo .per_scenario.
+          overall_pass=$(jq -r '.overall_pass' "$f")
+          total=$(jq -r '.scenarios_total' "$f")
+          passed=$(jq -r '.scenarios_pass' "$f")
+          failed=$(jq -r '.scenarios_fail' "$f")
+          harness_failure=$(jq -r '.scenarios_harness_failure' "$f")
+          basis_hub_sha=$(jq -r '.basis_hub_sha' "$f")
+          harness_version=$(jq -r '.harness_version' "$f")
+
+          if [ "$overall_pass" = "true" ]; then
+            verdict="PASS"
+          else
+            verdict="FAIL"
+          fi
+
+          {
+            echo "**Regression matrix verdict: $verdict**"
+            echo ""
+            echo '```'
+            echo "basis-hub: $basis_hub_sha"
+            echo "harness:   $harness_version"
+            echo "total: $total | pass: $passed | fail: $failed | harness_failure: $harness_failure"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$overall_pass" = "true" ]; then
+            echo "Regression matrix passed."
+            exit 0
+          fi
+          echo "::error::Regression matrix failed (overall_pass=false)."
+          exit 1
