@@ -2666,14 +2666,18 @@ async def _emit_slow_cycle_heartbeats(
         # run_slow_cycle is dead in steady state. The wrapper handles the
         # `SELECT MAX(snapshot_date) FROM protocol_collateral_exposure`
         # gate internally and emits skipped_fresh|ran|error payloads.
-        # Phase 2.3a (#235): 'web_research' removed from the heartbeat.
-        # The module-canonical wrapper run_web_research_scheduled() owns
-        # the 'web_research' domain's attestation in every branch
-        # (skipped_fresh / ran / error), so the heartbeat fallback was a
-        # redundant second writer. Staged dissolution — one domain per
-        # PR, verify the wrapper still fires solo post-deploy, then the
-        # next ('rpi_components' → 'wallets').
-        for _domain in ("wallets", "rpi_components"):
+        # Staged heartbeat dissolution (#235), one domain per PR:
+        #   2.3a — 'web_research' removed (#262): owned by
+        #          run_web_research_scheduled().
+        #   2.3b — 'wallets' removed (this change): wallets is
+        #          v9.12-exempt with layered defense — worker.inline.wallets
+        #          (Path A) + module.indexer_pipeline (Path B) remain as
+        #          live writers; Path C (main.py) was deleted dead in #214.
+        #          The heartbeat was the fourth writer; three live writers
+        #          is sufficient layering.
+        # 'rpi_components' is the last heartbeat domain — Phase 2.3c
+        # removes it once Wave 3.1 wires the rpi module-canonical wrapper.
+        for _domain in ("rpi_components",):
             try:
                 await asyncio.to_thread(attest_state, _domain, [base_payload], None, "heartbeat.slow_cycle")
             except Exception as e:
