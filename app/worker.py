@@ -2643,9 +2643,9 @@ async def _emit_slow_cycle_heartbeats(
         base_payload["total_tasks"] = pipeline_result.get("total_tasks")
 
     # data_layer:dex_pool_ohlcv uses the attest_data_batch helper which
-    # prepends "data_layer:" to the domain. wallets / web_research /
-    # psi_discoveries use plain attest_state — they're top-level domains,
-    # not data_layer ones.
+    # prepends "data_layer:" to the domain. wallets / psi_discoveries
+    # use plain attest_state — they're top-level domains, not data_layer
+    # ones.
     try:
         from app.data_layer.provenance_scaling import attest_data_batch
         await asyncio.to_thread(
@@ -2666,7 +2666,14 @@ async def _emit_slow_cycle_heartbeats(
         # run_slow_cycle is dead in steady state. The wrapper handles the
         # `SELECT MAX(snapshot_date) FROM protocol_collateral_exposure`
         # gate internally and emits skipped_fresh|ran|error payloads.
-        for _domain in ("wallets", "web_research", "rpi_components"):
+        # Phase 2.3a (#235): 'web_research' removed from the heartbeat.
+        # The module-canonical wrapper run_web_research_scheduled() owns
+        # the 'web_research' domain's attestation in every branch
+        # (skipped_fresh / ran / error), so the heartbeat fallback was a
+        # redundant second writer. Staged dissolution — one domain per
+        # PR, verify the wrapper still fires solo post-deploy, then the
+        # next ('rpi_components' → 'wallets').
+        for _domain in ("wallets", "rpi_components"):
             try:
                 await asyncio.to_thread(attest_state, _domain, [base_payload], None, "heartbeat.slow_cycle")
             except Exception as e:
