@@ -428,3 +428,49 @@ include all events in its counter.
 
 **Refs:** #238 (gate fix), #235 (writer_id discriminator), #208 +
 #221 (original `actors`/`assessments` domain split history).
+
+### Migration runner wraps every migration in a transaction (CONCURRENTLY incompatible)
+
+**Surfaced:** 2026-05-15 W2.4 pre-flight by CC agent.
+
+**Finding:** `app/database.py:280-293` `run_migration()` opens migrations via
+`with get_conn() as conn: cur.execute(sql)`. psycopg2's `with conn:` is a
+transaction block — no autocommit. `CREATE INDEX CONCURRENTLY` and
+`DROP INDEX CONCURRENTLY` cannot run inside a transaction; Postgres
+hard-errors.
+
+**Hidden severity:** the glob loop at `main.py:746-780` catches the error,
+logs "failed (objects may already exist — recorded anyway)", and STILL
+inserts the migration name into the `migrations` table (lines 769-776).
+The index never exists and the migration is never retried on subsequent
+boots. A genuine CONCURRENTLY requirement would silently fail forever.
+
+**Prior instance — verified RESOLVED (2026-05-15):**
+`migrations/061_attestation_domain_index.sql` also uses
+`CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_state_attestations_domain_ts`.
+W2.4 pre-flight flagged it as a possible silent failure. Architect ran
+`SELECT indexname FROM pg_indexes WHERE tablename = 'state_attestations';`
+against the production Neon branch — `idx_state_attestations_domain_ts`
+**IS present**. Migration 061 did not silently fail (it predates the
+current glob runner, or was applied via a path that did not wrap it in a
+transaction). No coherence-sweep regression. This does not retire the
+entry: the runner foot-gun remains a class issue for any *future*
+CONCURRENTLY migration.
+
+**Class:** Foot-gun in shared infrastructure.
+
+**Priority:** P2. No live failure today — 061's index is confirmed
+present (above), and W2.4 dodges the runner entirely by using
+non-CONCURRENT `CREATE INDEX` for the 3,100-row `state_attestations`
+table (plain `CREATE` completes in <1s with negligible lock). Bites the
+next time a large hot table genuinely needs a CONCURRENTLY index/drop.
+
+**When picked up:** add an opt-out path to `run_migration()` for migrations
+that need to run outside a transaction (sniff filename suffix like
+`_concurrent.sql`, or read a directive comment in the SQL header). Then
+either fail-loud OR auto-retry on the error class that indicates "needs
+no-transaction" instead of silently recording as applied.
+
+**Refs:** `app/database.py:280-293`, `main.py:746-780`,
+`migrations/061_attestation_domain_index.sql`, W2.4 pre-flight halt
+(this session).
