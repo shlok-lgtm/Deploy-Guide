@@ -1,0 +1,7 @@
+# attestation orphan audit summary
+#   db_status: no_db_url
+#   total domains: 45
+#   ok           0
+#   orphaned     0
+#   duplicate    0
+#   unknown      45
