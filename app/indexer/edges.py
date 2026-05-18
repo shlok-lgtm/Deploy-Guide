@@ -487,12 +487,24 @@ async def run_edge_builder_scheduled(chain: str, cycle_ts=None) -> dict:
     """
     from app.state_attestation import attest_state
 
-    # Per-chain freshness check via wallet_graph.wallet_edges MAX(updated_at).
-    # Preserves the pre-v9.12 main.py:471 10h cadence (Q4 unanswered in doc).
+    # Per-chain freshness gate: hours since the edge builder last ATTEMPTED a
+    # build for this chain, read from edge_build_status.build_attempted_at.
+    #
+    # This must NOT key on wallet_graph.wallet_edges.updated_at: updated_at is
+    # bumped by decay_edges() (runs every worker cycle once edges are stale) and
+    # by the sibling transfer_edge_builder's steady-state ON CONFLICT upserts.
+    # It therefore never goes stale, which permanently closed this gate and
+    # silently stalled the edge builder from 2026-05-15 onward.
+    #
+    # build_attempted_at is written only by build_edges_for_wallet (this
+    # module), on every attempt regardless of outcome (migration 104). It is
+    # the correct "did the edge builder run recently" signal and preserves the
+    # pre-v9.12 main.py:471 10h cadence.
     table_age_hours: float = float(_EDGE_BUILDER_FRESHNESS_HOURS)
     try:
         latest = await fetch_one_async(
-            "SELECT MAX(updated_at) AS t FROM wallet_graph.wallet_edges WHERE chain = %s",
+            "SELECT MAX(build_attempted_at) AS t "
+            "FROM wallet_graph.edge_build_status WHERE chain = %s",
             (chain,),
         )
         if latest and latest.get("t"):
