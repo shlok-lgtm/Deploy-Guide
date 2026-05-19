@@ -1428,13 +1428,38 @@ async def readyz():
 
 
 # =============================================================================
-# 1. GET /api/health
+# 1. GET /api/health — trivial liveness probe
+#    GET /api/health/deep — full integrity-layer status
 # =============================================================================
+# /api/health must stay cheap (well under 100ms): it confirms only that the
+# process is alive and the database connection is reachable. It does NOT run
+# the integrity layer. The internal monitor
+# (app/ops/tools/health_checker.py::check_api_health) and any orchestrator
+# poll this endpoint — heavy work here cascades into false `api: down`
+# alerts when an unrelated domain is slow. The per-domain integrity
+# aggregation lives at /api/health/deep.
 
 @app.get("/api/health")
 async def get_health():
-    """System health check — powered by the integrity layer."""
-    cached = _cache.get("health", ttl=60)
+    """Liveness + DB-reachability probe. Trivial by design — returns in
+    well under 100ms. For the full per-domain integrity status, use
+    /api/health/deep."""
+    ok, reason = await asyncio.to_thread(_probe_db_quick)
+    payload = {
+        "status": "healthy" if ok else "unhealthy",
+        "database": {"reachable": ok, "detail": reason},
+        "formula_version": FORMULA_VERSION,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    return JSONResponse(payload, status_code=200 if ok else 503)
+
+
+@app.get("/api/health/deep")
+async def get_health_deep():
+    """Full system health — the integrity layer across every domain.
+    Heavier than /api/health (runs check_all over all domains); cached
+    60s. Not for liveness polling."""
+    cached = _cache.get("health_deep", ttl=60)
     if cached:
         return cached
 
@@ -1463,7 +1488,7 @@ async def get_health():
         "formula_version": FORMULA_VERSION,
         "timestamp": result["checked_at"],
     }
-    _cache.set("health", response_data)
+    _cache.set("health_deep", response_data)
     return response_data
 
 
