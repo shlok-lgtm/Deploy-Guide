@@ -67,6 +67,54 @@ class TestEndpointSmoke:
         assert resp.json() is not None
 
 
+class TestHealthEndpoint:
+    """`/api/health` must be a trivial liveness probe — process alive + DB
+    reachable — and must NOT run the integrity layer. The rich per-domain
+    status lives at `/api/health/deep`. A heavy `/api/health` is what
+    caused the `api: down` ('read operation timed out') outage: the
+    internal monitor polls it."""
+
+    def test_health_is_fast(self, api):
+        """A liveness probe must return quickly. Server-side work is a
+        single SELECT 1; the ceiling here is generous to absorb network
+        latency to a remote deployment while still catching the timeout
+        regression (which manifested as multi-second / 20s+ responses)."""
+        import time
+        start = time.time()
+        resp = api("/api/health")
+        elapsed = time.time() - start
+        assert resp.status_code in (200, 503), (
+            f"/api/health returned {resp.status_code}"
+        )
+        assert elapsed < 2.0, (
+            f"/api/health took {elapsed:.2f}s — a liveness probe must be "
+            f"trivial. Heavy work here re-introduces the api-down outage."
+        )
+
+    def test_health_does_not_run_integrity_layer(self, api):
+        """The trivial probe must not carry the per-domain integrity
+        payload — that work is exactly what made it time out."""
+        resp = api("/api/health")
+        data = resp.json()
+        assert data is not None
+        assert "status" in data
+        assert "domains" not in data, (
+            "/api/health must not run the integrity layer; the per-domain "
+            "view belongs on /api/health/deep"
+        )
+
+    def test_health_deep_carries_full_status(self, api):
+        """The split-out deep endpoint still exposes the integrity-layer
+        per-domain status for dashboards that need it."""
+        resp = api("/api/health/deep")
+        if resp.status_code == 404:
+            pytest.skip("/api/health/deep not deployed yet")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data is not None
+        assert "domains" in data and "status" in data
+
+
 # =============================================================================
 # 2. Data Consistency
 # =============================================================================
