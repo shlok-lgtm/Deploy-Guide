@@ -2901,6 +2901,25 @@ async def state_growth_live(request: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@router.get("/system-status")
+async def system_status(request: Request):
+    """Rebuilt state-of-system dashboard.
+
+    Top-level health verdict is derived from ops_health_checks (latest row
+    per system) and ops_alert_log (unacknowledged alerts) — the project's
+    source of truth — not from collector cycle counts. Also reports true
+    row counts (the legacy state-growth view mislabeled COUNT(DISTINCT key)
+    as a table's row count) and a live table catalog with schema drift.
+    """
+    _check_admin_key(request)
+    try:
+        from app.data_layer.system_health import get_system_status
+        return await get_system_status()
+    except Exception as e:
+        logger.warning(f"System status dashboard failed: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @router.get("/storage-evaluation")
 async def storage_evaluation(request: Request):
     """Time-series storage evaluation: row projections, partitioning, cost estimates."""
