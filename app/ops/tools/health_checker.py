@@ -252,24 +252,79 @@ def check_database():
         return {"system": "database", "status": "down", "details": {"error": str(e)}}
 
 
+# Known signal_type × domain streams under discovery_signals, with each
+# stream's own cadence (hours). Aggregate MAX(detected_at) hid a 5-day
+# entity_discovery outage on 2026-05-21 because large_mint_burn /
+# micro_depeg kept firing every ~5min. Verify each stream individually.
+_DISCOVERY_STREAMS: list[tuple[str, str, str, float]] = [
+    # (signal_type, domain, label, max_age_hours)
+    ("large_mint_burn", "sii", "large_mint_burn:sii", 4),
+    ("micro_depeg", "sii", "micro_depeg:sii", 4),
+    ("concentration_topology", "graph", "concentration_topology:graph", 26),
+    ("entity_discovery", "bri", "entity_discovery:bri", 168),
+    ("entity_discovery", "cxri", "entity_discovery:cxri", 168),
+    ("entity_discovery", "lsti", "entity_discovery:lsti", 168),
+    ("entity_discovery", "tti", "entity_discovery:tti", 168),
+    ("entity_discovery", "vsri", "entity_discovery:vsri", 168),
+]
+
+
 def check_discovery_freshness():
-    """Check discovery signal freshness."""
-    row = _safe_fetch_one(
-        "SELECT MAX(detected_at) as last_detected FROM discovery_signals"
-    )
-    if row is None:
-        return {"system": "discovery", "status": "down", "details": {"error": "query_failed_or_no_table"}}
+    """Check each declared discovery_signals stream against its own cadence.
 
-    last_detected = row.get("last_detected")
-    if not last_detected:
-        return {"system": "discovery", "status": "down", "details": {"error": "no_signals"}}
+    The previous implementation aggregated MAX(detected_at) across all
+    signal types — which stayed fresh as long as ANY writer fired. That
+    masked the 2026-05-21 entity_discovery outage for 5 days while
+    large_mint_burn / micro_depeg kept the aggregate green. The
+    replacement walks every declared (signal_type, domain) stream and
+    surfaces DEGRADED at >1× cadence, DOWN at >2× cadence.
+    """
+    streams_status = []
+    worst = "healthy"
 
-    age = _age_hours(last_detected)
-    status = "healthy" if age < 24 else ("degraded" if age < 48 else "down")
+    for signal_type, domain, label, max_age_h in _DISCOVERY_STREAMS:
+        row = _safe_fetch_one(
+            "SELECT MAX(detected_at) AS ts FROM discovery_signals "
+            "WHERE signal_type = %s AND domain = %s",
+            (signal_type, domain),
+        )
+        if row is None:
+            streams_status.append({"stream": label, "status": "error", "age_hours": None})
+            worst = "down"
+            continue
+        ts = row.get("ts")
+        if ts is None:
+            streams_status.append({
+                "stream": label, "status": "never_fired",
+                "age_hours": None, "max_age_hours": max_age_h,
+            })
+            worst = "down"
+            continue
+        age = _age_hours(ts)
+        if age <= max_age_h:
+            stream_status = "healthy"
+        elif age <= max_age_h * 2:
+            stream_status = "degraded"
+            if worst == "healthy":
+                worst = "degraded"
+        else:
+            stream_status = "down"
+            worst = "down"
+        streams_status.append({
+            "stream": label, "status": stream_status,
+            "age_hours": round(age, 1),
+            "max_age_hours": max_age_h,
+            "last_detected": ts.isoformat(),
+        })
+
     return {
         "system": "discovery",
-        "status": status,
-        "details": {"last_detected": last_detected.isoformat(), "age_hours": round(age, 1)},
+        "status": worst,
+        "details": {
+            "stream_count": len(streams_status),
+            "healthy": sum(1 for s in streams_status if s["status"] == "healthy"),
+            "streams": streams_status,
+        },
     }
 
 
