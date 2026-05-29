@@ -82,6 +82,12 @@ class _ResponseCache:
     def set(self, key: str, value):
         self._store[key] = (value, time.time())
 
+    def clear(self):
+        """Drop every cached entry. Called by admin publish/unpublish so
+        the gate flip takes effect on the next request rather than after
+        a 30s TTL window."""
+        self._store.clear()
+
 _cache = _ResponseCache()
 
 
@@ -942,7 +948,7 @@ def _resolve_entity(slug: str) -> dict | None:
                s.mint_burn_score, s.distribution_score, s.structural_score,
                s.component_count, s.formula_version, s.computed_at,
                st.name, st.symbol, st.id as stablecoin_id
-        FROM scores s JOIN stablecoins st ON st.id = s.stablecoin_id
+        FROM scores s JOIN stablecoins_published st ON st.id = s.stablecoin_id
         WHERE LOWER(st.symbol) = %s OR LOWER(st.id) = %s
     """, (slug_lower, slug_lower))
     if row:
@@ -968,7 +974,7 @@ def _resolve_entity(slug: str) -> dict | None:
     row = fetch_one("""
         SELECT overall_score, grade, protocol_name, category_scores,
                component_scores, formula_version, computed_at
-        FROM psi_scores WHERE LOWER(protocol_slug) = %s
+        FROM psi_scores_published WHERE LOWER(protocol_slug) = %s
         ORDER BY computed_at DESC LIMIT 1
     """, (slug_lower,))
     if row:
@@ -1043,8 +1049,8 @@ def _also_scored_in(slug: str, primary_index: str) -> list:
     slug_lower = slug.lower()
     others = []
     checks = [
-        ("SII", "SELECT 1 FROM scores s JOIN stablecoins st ON st.id=s.stablecoin_id WHERE LOWER(st.symbol)=%s OR LOWER(st.id)=%s", (slug_lower, slug_lower)),
-        ("PSI", "SELECT 1 FROM psi_scores WHERE LOWER(protocol_slug)=%s LIMIT 1", (slug_lower,)),
+        ("SII", "SELECT 1 FROM scores s JOIN stablecoins_published st ON st.id=s.stablecoin_id WHERE LOWER(st.symbol)=%s OR LOWER(st.id)=%s", (slug_lower, slug_lower)),
+        ("PSI", "SELECT 1 FROM psi_scores_published WHERE LOWER(protocol_slug)=%s LIMIT 1", (slug_lower,)),
         ("RPI", "SELECT 1 FROM rpi_scores WHERE LOWER(protocol_slug)=%s LIMIT 1", (slug_lower,)),
     ]
     for idx in ["lsti", "bri", "dohi", "vsri", "cxri", "tti"]:
@@ -1271,11 +1277,11 @@ async def sitemap_xml():
 
     entities = []
     # SII
-    rows = await fetch_all_async("SELECT st.symbol, s.computed_at FROM scores s JOIN stablecoins st ON st.id=s.stablecoin_id")
+    rows = await fetch_all_async("SELECT st.symbol, s.computed_at FROM scores s JOIN stablecoins_published st ON st.id=s.stablecoin_id")
     for r in (rows or []):
         entities.append((r["symbol"].lower(), r["computed_at"]))
     # PSI
-    rows = await fetch_all_async("SELECT DISTINCT ON (protocol_slug) protocol_slug, computed_at FROM psi_scores ORDER BY protocol_slug, computed_at DESC")
+    rows = await fetch_all_async("SELECT DISTINCT ON (protocol_slug) protocol_slug, computed_at FROM psi_scores_published ORDER BY protocol_slug, computed_at DESC")
     for r in (rows or []):
         entities.append((r["protocol_slug"], r["computed_at"]))
     # RPI
@@ -1312,10 +1318,10 @@ async def sitemap_markdown_xml():
     from fastapi.responses import Response
 
     entities = []
-    rows = await fetch_all_async("SELECT st.symbol, s.computed_at FROM scores s JOIN stablecoins st ON st.id=s.stablecoin_id")
+    rows = await fetch_all_async("SELECT st.symbol, s.computed_at FROM scores s JOIN stablecoins_published st ON st.id=s.stablecoin_id")
     for r in (rows or []):
         entities.append((r["symbol"].lower(), r["computed_at"]))
-    rows = await fetch_all_async("SELECT DISTINCT ON (protocol_slug) protocol_slug, computed_at FROM psi_scores ORDER BY protocol_slug, computed_at DESC")
+    rows = await fetch_all_async("SELECT DISTINCT ON (protocol_slug) protocol_slug, computed_at FROM psi_scores_published ORDER BY protocol_slug, computed_at DESC")
     for r in (rows or []):
         entities.append((r["protocol_slug"], r["computed_at"]))
 
@@ -1581,7 +1587,7 @@ async def get_scores(response: Response, methodology_version: Optional[str] = Qu
     rows = await fetch_all_async("""
         SELECT s.*, st.name, st.symbol, st.issuer, st.contract AS token_contract
         FROM scores s
-        JOIN stablecoins st ON st.id = s.stablecoin_id
+        JOIN stablecoins_published st ON st.id = s.stablecoin_id
         ORDER BY s.overall_score DESC
     """)
 
@@ -1720,13 +1726,16 @@ async def get_score_detail(coin: str, methodology_version: Optional[str] = Query
     row = await fetch_one_async("""
         SELECT s.*, st.name, st.symbol, st.issuer, st.contract AS token_contract, st.attestation_config, st.regulatory_licenses
         FROM scores s
-        JOIN stablecoins st ON st.id = s.stablecoin_id
+        JOIN stablecoins_published st ON st.id = s.stablecoin_id
         WHERE s.stablecoin_id = %s
     """, (coin,))
-    
+
     if not row:
-        # Check if the stablecoin exists but isn't scored yet
-        exists = await fetch_one_async("SELECT id FROM stablecoins WHERE id = %s", (coin,))
+        # Check if the stablecoin exists (and is published) but isn't scored yet.
+        # `stablecoins_published` filters out unpublished entities — an unpublished
+        # entity returns 404 ("not found") rather than the "exists but not scored"
+        # branch, deliberately denying its existence on the public API.
+        exists = await fetch_one_async("SELECT id FROM stablecoins_published WHERE id = %s", (coin,))
         if exists:
             raise HTTPException(status_code=404, detail=f"Stablecoin '{coin}' exists but has no scores yet")
         raise HTTPException(status_code=404, detail=f"Stablecoin '{coin}' not found")
@@ -1850,6 +1859,8 @@ async def get_score_history(
     days: int = Query(default=90, ge=1, le=365),
 ):
     """Get historical SII scores for a stablecoin."""
+    from app.publication_gate import require_sii_published
+    await require_sii_published(coin)
     rows = await fetch_all_async("""
         SELECT score_date, overall_score, grade, peg_score, liquidity_score,
                mint_burn_score, distribution_score, structural_score,
@@ -1893,6 +1904,8 @@ async def get_recent_scores(
     days: int = Query(default=7, ge=1, le=30),
 ):
     """Lightweight recent score history for trend display (e.g. 7-day sparkline)."""
+    from app.publication_gate import require_sii_published
+    await require_sii_published(coin)
     rows = await fetch_all_async("""
         SELECT score_date, overall_score, grade
         FROM score_history
@@ -1900,12 +1913,6 @@ async def get_recent_scores(
           AND score_date > CURRENT_DATE - INTERVAL '%s days'
         ORDER BY score_date ASC
     """, (coin, days))
-
-    if not rows:
-        # Verify the stablecoin exists
-        exists = await fetch_one_async("SELECT id FROM stablecoins WHERE id = %s", (coin,))
-        if not exists:
-            raise HTTPException(status_code=404, detail=f"Stablecoin '{coin}' not found")
 
     return {
         "stablecoin": coin,
@@ -1929,6 +1936,9 @@ async def get_recent_scores(
 def score_at_date(coin: str, target_date: str):
     """Reconstruct SII score at a specific historical date.
     Sync handler — FastAPI runs in threadpool to avoid blocking the event loop."""
+    from app.publication_gate import is_sii_published
+    if not is_sii_published(coin):
+        raise HTTPException(status_code=404, detail=f"Unknown stablecoin: {coin}")
     from app.services.temporal_engine import reconstruct_score_sync
     try:
         td = datetime.strptime(target_date, "%Y-%m-%d").date()
@@ -1949,6 +1959,9 @@ def score_range(
 ):
     """Reconstruct SII scores for a date range (max 365 days).
     Sync handler — FastAPI runs in threadpool."""
+    from app.publication_gate import is_sii_published
+    if not is_sii_published(coin):
+        raise HTTPException(status_code=404, detail=f"Unknown stablecoin: {coin}")
     from app.services.temporal_engine import reconstruct_range_sync
     try:
         from_date = datetime.strptime(start, "%Y-%m-%d").date()
@@ -1979,6 +1992,9 @@ def backtest_event(
 ):
     """Reconstruct scores across a named crisis event window.
     Sync handler — FastAPI runs in threadpool."""
+    from app.publication_gate import is_sii_published
+    if not is_sii_published(coin):
+        raise HTTPException(status_code=404, detail=f"Unknown stablecoin: {coin}")
     from app.services.temporal_engine import reconstruct_range_sync, CRISIS_EVENTS
 
     if event not in CRISIS_EVENTS:
@@ -2083,7 +2099,7 @@ async def compare_scores(
     rows = await fetch_all_async(f"""
         SELECT s.*, st.name, st.symbol, st.issuer, st.contract AS token_contract
         FROM scores s
-        JOIN stablecoins st ON st.id = s.stablecoin_id
+        JOIN stablecoins_published st ON st.id = s.stablecoin_id
         WHERE s.stablecoin_id IN ({placeholders})
         ORDER BY s.overall_score DESC
     """, tuple(coin_list))
@@ -4243,8 +4259,9 @@ async def cda_coverage():
         if category in ("fiat_backed", "fiat-backed", "fiat") or method != "nav_oracle":
             fiat_covered.append(iss["asset_symbol"])
 
-    # Total known fiat-backed from stablecoin registry
-    all_coins = await fetch_all_async("SELECT id, symbol FROM stablecoins")
+    # Total known fiat-backed from stablecoin registry (published entities only —
+    # unpublished/auto-discovered candidates are not surfaced as CDA coverage gaps).
+    all_coins = await fetch_all_async("SELECT id, symbol FROM stablecoins_published")
     total_fiat = len(all_coins)
 
     gaps = []
@@ -4813,7 +4830,7 @@ async def psi_scores():
             formula_version, computed_at,
             confidence, confidence_tag, component_coverage,
             components_populated, components_total, missing_categories
-        FROM psi_scores
+        FROM psi_scores_published
         ORDER BY protocol_slug, computed_at DESC
     """)
     from app.index_definitions.psi_v01 import PSI_V01_DEFINITION
@@ -4907,6 +4924,8 @@ async def psi_definition():
 @app.get("/api/psi/scores/{slug}/at/{date_str}")
 async def psi_score_at_date(slug: str, date_str: str):
     """Reconstruct PSI score for a protocol at a historical date."""
+    from app.publication_gate import require_psi_published
+    await require_psi_published(slug)
     try:
         from datetime import date as date_type
         from app.services.psi_temporal_engine import reconstruct_psi_score
@@ -4926,6 +4945,8 @@ async def psi_score_range(
     end: Optional[str] = Query(default=None),
 ):
     """Reconstruct daily PSI scores for a date range (max 365 days)."""
+    from app.publication_gate import require_psi_published
+    await require_psi_published(slug)
     from app.services.psi_temporal_engine import reconstruct_psi_range
     to_date = date.fromisoformat(end) if end else date.today()
     from_date = date.fromisoformat(start) if start else to_date - timedelta(days=30)
@@ -4944,6 +4965,8 @@ async def psi_score_range(
 @app.get("/api/psi/scores/{slug}/backtest/{event}")
 async def psi_backtest_event(slug: str, event: str):
     """Reconstruct PSI scores during a named crisis event."""
+    from app.publication_gate import require_psi_published
+    await require_psi_published(slug)
     from app.services.psi_temporal_engine import reconstruct_psi_range
     from app.services.temporal_engine import CRISIS_EVENTS
     crisis = CRISIS_EVENTS.get(event)
@@ -5021,10 +5044,12 @@ async def admin_run_protocol_expansion(request: Request):
 @app.get("/api/psi/scores/{slug}/verify")
 async def verify_psi_score(slug: str):
     """Verify the latest PSI score by re-deriving from stored raw values."""
+    from app.publication_gate import require_psi_published
+    await require_psi_published(slug)
     row = await fetch_one_async("""
         SELECT protocol_slug, overall_score, grade, raw_values,
                inputs_hash, formula_version, computed_at
-        FROM psi_scores WHERE protocol_slug = %s
+        FROM psi_scores_published WHERE protocol_slug = %s
         ORDER BY computed_at DESC LIMIT 1
     """, (slug,))
 
@@ -5081,7 +5106,7 @@ async def psi_score_detail(slug: str):
                formula_version, computed_at,
                confidence, confidence_tag, component_coverage,
                components_populated, components_total, missing_categories
-        FROM psi_scores
+        FROM psi_scores_published
         WHERE protocol_slug = %s
         ORDER BY computed_at DESC
         LIMIT 1
@@ -5554,7 +5579,7 @@ def _build_protocol_treasury(rows_by_slug):
     for slug, rows in rows_by_slug.items():
         # Get PSI score for this protocol
         psi_row = fetch_one("""
-            SELECT protocol_name, overall_score FROM psi_scores
+            SELECT protocol_name, overall_score FROM psi_scores_published
             WHERE protocol_slug = %s ORDER BY computed_at DESC LIMIT 1
         """, (slug,))
         psi_name = psi_row["protocol_name"] if psi_row else slug
@@ -5673,7 +5698,7 @@ async def stablecoin_protocol_exposure(symbol: str):
         FROM protocol_treasury_holdings h
         LEFT JOIN LATERAL (
             SELECT protocol_name, overall_score
-            FROM psi_scores
+            FROM psi_scores_published
             WHERE protocol_slug = h.protocol_slug
             ORDER BY computed_at DESC LIMIT 1
         ) p ON true
@@ -5686,7 +5711,7 @@ async def stablecoin_protocol_exposure(symbol: str):
     # Get SII score for this stablecoin
     sii_row = await fetch_one_async("""
         SELECT s.overall_score FROM scores s
-        JOIN stablecoins st ON st.id = s.stablecoin_id
+        JOIN stablecoins_published st ON st.id = s.stablecoin_id
         WHERE UPPER(st.symbol) = %s
     """, (sym_upper,))
     sii_score = round(float(sii_row["overall_score"]), 1) if sii_row and sii_row.get("overall_score") else None
@@ -5841,7 +5866,7 @@ def _build_collateral_protocol(rows):
 
     slug = rows[0]["protocol_slug"]
     psi_row = fetch_one("""
-        SELECT protocol_name, overall_score FROM psi_scores
+        SELECT protocol_name, overall_score FROM psi_scores_published
         WHERE protocol_slug = %s ORDER BY computed_at DESC LIMIT 1
     """, (slug,))
     psi_name = psi_row["protocol_name"] if psi_row else slug
@@ -6012,7 +6037,7 @@ async def stablecoin_collateral_exposure(symbol: str):
         FROM protocol_collateral_exposure ce
         LEFT JOIN LATERAL (
             SELECT protocol_name, overall_score
-            FROM psi_scores
+            FROM psi_scores_published
             WHERE protocol_slug = ce.protocol_slug
             ORDER BY computed_at DESC LIMIT 1
         ) p ON true
@@ -6025,7 +6050,7 @@ async def stablecoin_collateral_exposure(symbol: str):
     # Get SII score
     sii_row = await fetch_one_async("""
         SELECT s.overall_score FROM scores s
-        JOIN stablecoins st ON st.id = s.stablecoin_id
+        JOIN stablecoins_published st ON st.id = s.stablecoin_id
         WHERE UPPER(st.symbol) = %s
     """, (sym_upper,))
     sii_score = round(float(sii_row["overall_score"]), 1) if sii_row and sii_row.get("overall_score") else None
@@ -6065,9 +6090,9 @@ async def stablecoin_collateral_exposure(symbol: str):
 @app.get("/api/protocols/{slug}/full-exposure")
 async def protocol_full_exposure(slug: str):
     """Combined treasury holdings + collateral exposure for one protocol."""
-    # PSI score
+    # PSI score (published-gated — unpublished/auto-discovered protocols return 404)
     psi_row = await fetch_one_async("""
-        SELECT protocol_name, overall_score FROM psi_scores
+        SELECT protocol_name, overall_score FROM psi_scores_published
         WHERE protocol_slug = %s ORDER BY computed_at DESC LIMIT 1
     """, (slug,))
     if not psi_row:
@@ -7116,7 +7141,7 @@ def _render_rankings_html() -> str:
     rows = fetch_all("""
         SELECT s.*, st.name, st.symbol, st.issuer
         FROM scores s
-        JOIN stablecoins st ON st.id = s.stablecoin_id
+        JOIN stablecoins_published st ON st.id = s.stablecoin_id
         ORDER BY s.overall_score DESC
     """)
 
@@ -7444,7 +7469,7 @@ def _render_proof_html(identifier: str, surface: str) -> str:
     if surface == "sii":
         row = fetch_one("""
             SELECT s.*, st.name, st.symbol, st.issuer
-            FROM scores s JOIN stablecoins st ON st.id = s.stablecoin_id
+            FROM scores s JOIN stablecoins_published st ON st.id = s.stablecoin_id
             WHERE s.stablecoin_id = %s
         """, (identifier,))
         if not row:
@@ -7483,7 +7508,7 @@ def _render_proof_html(identifier: str, surface: str) -> str:
 
     elif surface == "psi":
         row = fetch_one("""
-            SELECT * FROM psi_scores
+            SELECT * FROM psi_scores_published
             WHERE protocol_slug = %s ORDER BY computed_at DESC LIMIT 1
         """, (identifier,))
         if not row:
@@ -7812,6 +7837,131 @@ async def acknowledge_discovery_signal(signal_id: int, key: str = Query(default=
 
 
 # =============================================================================
+# Publication gate — operator approval endpoint (migration 112).
+#
+# Flips the published flag for a single entity. Source of truth for the
+# automation-boundary policy: discovery is automatic, publication is not.
+# The architect calls this (or runs the equivalent SQL) to make a
+# freshly-discovered entity visible on every public surface.
+# =============================================================================
+
+@app.post("/api/admin/publish/{entity_type}/{slug}")
+async def publish_entity(
+    entity_type: str,
+    slug: str,
+    request: Request,
+    state: str = Query(default="published", pattern="^(published|unpublished)$"),
+    actor: str = Query(default="operator"),
+    notes: Optional[str] = Query(default=None),
+):
+    """Flip the publication flag for an SII coin or PSI protocol.
+
+    entity_type: "sii" or "psi"
+    slug:        coin id (e.g. "usdc") for sii, protocol_slug for psi
+    state:       "published" (default) or "unpublished"
+    actor:       label written to published_by / assessment event
+    notes:       optional free-text rationale stored on
+                 protocol_publication_state.notes (PSI only)
+
+    Writes an assessment_event with trigger_type='publication_approved'
+    (or 'publication_revoked') so the flip is part of the audit trail.
+    """
+    _check_admin_key(request)
+
+    if entity_type not in ("sii", "psi"):
+        raise HTTPException(status_code=400, detail="entity_type must be 'sii' or 'psi'")
+
+    publish = (state == "published")
+    slug_lc = slug.lower()
+
+    if entity_type == "sii":
+        existing = await fetch_one_async(
+            "SELECT id, published FROM stablecoins WHERE id = %s", (slug_lc,),
+        )
+        if not existing:
+            raise HTTPException(status_code=404, detail=f"Stablecoin '{slug_lc}' not found")
+        prior = bool(existing.get("published"))
+        await execute_async(
+            "UPDATE stablecoins SET published = %s, updated_at = NOW() WHERE id = %s",
+            (publish, slug_lc),
+        )
+    else:
+        # PSI — upsert publication state row (auto-discovery may have
+        # never written one).
+        existing = await fetch_one_async(
+            "SELECT published FROM protocol_publication_state WHERE protocol_slug = %s",
+            (slug_lc,),
+        )
+        prior = bool(existing.get("published")) if existing else False
+        if publish:
+            await execute_async(
+                """INSERT INTO protocol_publication_state
+                       (protocol_slug, published, published_at, published_by, notes, updated_at)
+                   VALUES (%s, TRUE, NOW(), %s, %s, NOW())
+                   ON CONFLICT (protocol_slug) DO UPDATE SET
+                       published = TRUE,
+                       published_at = NOW(),
+                       published_by = EXCLUDED.published_by,
+                       notes = COALESCE(EXCLUDED.notes, protocol_publication_state.notes),
+                       updated_at = NOW()""",
+                (slug_lc, actor, notes),
+            )
+        else:
+            await execute_async(
+                """INSERT INTO protocol_publication_state
+                       (protocol_slug, published, unpublished_at, notes, updated_at)
+                   VALUES (%s, FALSE, NOW(), %s, NOW())
+                   ON CONFLICT (protocol_slug) DO UPDATE SET
+                       published = FALSE,
+                       unpublished_at = NOW(),
+                       notes = COALESCE(EXCLUDED.notes, protocol_publication_state.notes),
+                       updated_at = NOW()""",
+                (slug_lc, notes),
+            )
+
+    # Audit-trail assessment event. Mirrors the shape used by
+    # psi_collector for psi_score_change events.
+    trigger = "publication_approved" if publish else "publication_revoked"
+    try:
+        await execute_async(
+            """INSERT INTO assessment_events
+                   (wallet_address, chain, trigger_type, trigger_detail,
+                    severity, broadcast, created_at)
+               VALUES (%s, 'multi', %s, %s::jsonb, 'notable', FALSE, NOW())""",
+            (
+                f"{entity_type}:{slug_lc}",
+                trigger,
+                json.dumps({
+                    "entity_type": entity_type,
+                    "entity_id": slug_lc,
+                    "prior_state": "published" if prior else "unpublished",
+                    "new_state": state,
+                    "actor": actor,
+                    "notes": notes,
+                }),
+            ),
+        )
+    except Exception as e:
+        # Audit-event failure must not block the gate flip itself.
+        # Surface in response so operator notices but the state change persists.
+        logger.warning(f"publish_entity: assessment_event write failed: {e}")
+
+    # Bust caches so the change takes effect on next request.
+    try:
+        _cache.clear()
+    except Exception:
+        pass
+
+    return {
+        "entity_type": entity_type,
+        "slug": slug_lc,
+        "prior_state": "published" if prior else "unpublished",
+        "new_state": state,
+        "actor": actor,
+    }
+
+
+# =============================================================================
 # Universal Data Layer API endpoints
 # =============================================================================
 
@@ -8063,14 +8213,14 @@ async def drift_exploit_analysis():
     psi_row = await fetch_one_async("""
         SELECT protocol_slug, protocol_name, overall_score, grade,
                category_scores, component_scores, raw_values, formula_version, computed_at
-        FROM psi_scores WHERE protocol_slug = 'drift'
+        FROM psi_scores_published WHERE protocol_slug = 'drift'
         ORDER BY computed_at DESC LIMIT 1
     """)
     if psi_row:
         # Count rank
         all_protocols = await fetch_all_async("""
             SELECT DISTINCT ON (protocol_slug) protocol_slug, overall_score
-            FROM psi_scores ORDER BY protocol_slug, computed_at DESC
+            FROM psi_scores_published ORDER BY protocol_slug, computed_at DESC
         """)
         sorted_protos = sorted(
             [r for r in all_protocols if r.get("overall_score")],
@@ -8591,11 +8741,11 @@ async def test_lens(lens_id: str):
     if not lens_config:
         raise HTTPException(status_code=404, detail=f"Lens '{lens_id}' not found")
 
-    # Get all scored stablecoins
+    # Get all scored stablecoins (published only — lens testing is a public surface).
     rows = await fetch_all_async("""
         SELECT s.stablecoin_id, st.name, st.symbol
         FROM scores s
-        JOIN stablecoins st ON st.id = s.stablecoin_id
+        JOIN stablecoins_published st ON st.id = s.stablecoin_id
         ORDER BY s.overall_score DESC
     """)
 

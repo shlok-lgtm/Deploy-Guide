@@ -245,12 +245,12 @@ async def detect_protocol_divergence():
         WITH latest AS (
             SELECT DISTINCT ON (protocol_slug)
                 protocol_slug, protocol_name, overall_score, computed_at
-            FROM psi_scores ORDER BY protocol_slug, computed_at DESC
+            FROM psi_scores_published ORDER BY protocol_slug, computed_at DESC
         ),
         previous AS (
             SELECT DISTINCT ON (protocol_slug)
                 protocol_slug, overall_score AS prev_score
-            FROM psi_scores
+            FROM psi_scores_published
             WHERE scored_date < CURRENT_DATE
             ORDER BY protocol_slug, computed_at DESC
         )
@@ -320,12 +320,12 @@ async def detect_cross_index_divergence():
         WITH latest AS (
             SELECT DISTINCT ON (protocol_slug)
                 protocol_slug, overall_score, computed_at
-            FROM psi_scores ORDER BY protocol_slug, computed_at DESC
+            FROM psi_scores_published ORDER BY protocol_slug, computed_at DESC
         ),
         previous AS (
             SELECT DISTINCT ON (protocol_slug)
                 protocol_slug, overall_score AS prev_score
-            FROM psi_scores WHERE scored_date < CURRENT_DATE
+            FROM psi_scores_published WHERE scored_date < CURRENT_DATE
             ORDER BY protocol_slug, computed_at DESC
         )
         SELECT l.protocol_slug, l.overall_score AS psi_score,
@@ -401,12 +401,13 @@ async def detect_actor_flow_divergence():
     """
     results = []
 
-    # Get all scored stablecoins with contract addresses
+    # Get all scored stablecoins with contract addresses (published only —
+    # auto-discovered unpublished entities do not appear in divergence signals).
     coins = await fetch_all_async(
         """
         SELECT s.stablecoin_id, st.symbol, st.contract
         FROM scores s
-        JOIN stablecoins st ON st.id = s.stablecoin_id
+        JOIN stablecoins_published st ON st.id = s.stablecoin_id
         WHERE st.contract IS NOT NULL AND st.contract != ''
         """
     )

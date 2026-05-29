@@ -63,10 +63,11 @@ def compute_aggregate_cqi(portfolio: list[dict]) -> dict:
         weight = amount / total_value
         protocol = pos.get("protocol_slug")
 
-        # Get SII score
+        # Get SII score (publication-gated — unpublished entities are treated
+        # as if absent from the scoring universe in the playground report).
         sii_row = fetch_one("""
             SELECT s.overall_score FROM scores s
-            JOIN stablecoins st ON st.id = s.stablecoin_id
+            JOIN stablecoins_published st ON st.id = s.stablecoin_id
             WHERE UPPER(st.symbol) = %s
         """, (symbol,))
         sii_score = float(sii_row["overall_score"]) if sii_row and sii_row.get("overall_score") else None
@@ -76,7 +77,7 @@ def compute_aggregate_cqi(portfolio: list[dict]) -> dict:
 
         if protocol:
             psi_row = fetch_one("""
-                SELECT overall_score FROM psi_scores
+                SELECT overall_score FROM psi_scores_published
                 WHERE protocol_slug = %s ORDER BY computed_at DESC LIMIT 1
             """, (protocol,))
             psi_score = float(psi_row["overall_score"]) if psi_row and psi_row.get("overall_score") else None

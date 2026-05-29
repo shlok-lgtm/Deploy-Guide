@@ -20,7 +20,7 @@ The SII dashboard and API are **live in production**. The following are stable a
 - `app/governance.py` — Governance document crawler + sentiment analysis (Aave, MakerDAO, Compound, Morpho, Frax forums).
 - `app/content_engine.py` — Content signal generation from governance data.
 - `frontend/src/App.jsx` (3,212 lines) — React dashboard. Vite build. Do not rewrite from scratch.
-- `migrations/` — applied SQL migrations up to 084. Next migration: 085.
+- `migrations/` — applied SQL migrations up to 112. Next migration: 113.
 
 ## Architecture
 
@@ -267,7 +267,7 @@ Spokes never import from `app/`. They never touch the database directly.
 - Python backend (FastAPI, psycopg2, httpx for async HTTP)
 - React frontend (Vite, single-file App.jsx pattern)
 - All database access through `app/database.py` helpers (`fetch_one`, `fetch_all`, `execute`, `get_cursor`)
-- New migrations go in `migrations/` with sequential numbering (next: 085)
+- New migrations go in `migrations/` with sequential numbering (next: 113)
 - Scores are 0-100, grades A+ through F
 - **Never use the word "rating"** — use "score," "index," "surface"
 - **Terminology:** validation (not traction), bear/base/bull (not conservative)
