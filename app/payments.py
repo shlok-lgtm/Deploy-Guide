@@ -248,7 +248,7 @@ async def paid_sii_rankings(request: Request):
     rows = await asyncio.to_thread(fetch_all, """
         SELECT s.*, st.name, st.symbol, st.issuer, st.contract AS token_contract
         FROM scores s
-        JOIN stablecoins st ON st.id = s.stablecoin_id
+        JOIN stablecoins_published st ON st.id = s.stablecoin_id
         ORDER BY s.overall_score DESC
     """)
     results = []
@@ -287,7 +287,7 @@ async def paid_sii_detail(request: Request, coin: str):
     row = await asyncio.to_thread(fetch_one, """
         SELECT s.*, st.name, st.symbol, st.issuer, st.contract AS token_contract
         FROM scores s
-        JOIN stablecoins st ON st.id = s.stablecoin_id
+        JOIN stablecoins_published st ON st.id = s.stablecoin_id
         WHERE s.stablecoin_id = %s
     """, (coin,))
     if not row:
@@ -337,7 +337,7 @@ async def paid_psi_all(request: Request):
         SELECT DISTINCT ON (protocol_slug)
             protocol_slug, protocol_name, overall_score, grade,
             category_scores, formula_version, computed_at
-        FROM psi_scores ORDER BY protocol_slug, computed_at DESC
+        FROM psi_scores_published ORDER BY protocol_slug, computed_at DESC
     """)
     from app.index_definitions.psi_v01 import PSI_V01_DEFINITION
     await asyncio.to_thread(_log_payment, request, request.url.path)
@@ -365,7 +365,7 @@ async def paid_psi_detail(request: Request, slug: str):
     row = await asyncio.to_thread(fetch_one, """
         SELECT protocol_slug, protocol_name, overall_score, grade,
                category_scores, component_scores, raw_values, formula_version, computed_at
-        FROM psi_scores WHERE protocol_slug = %s ORDER BY computed_at DESC LIMIT 1
+        FROM psi_scores_published WHERE protocol_slug = %s ORDER BY computed_at DESC LIMIT 1
     """, (slug,))
     if not row:
         raise HTTPException(status_code=404, detail=f"Protocol '{slug}' not found")

@@ -80,7 +80,7 @@ def compute_cqi(asset_symbol, protocol_slug):
     sii_row = fetch_one("""
         SELECT s.overall_score, s.grade, s.component_count
         FROM scores s
-        JOIN stablecoins st ON st.id = s.stablecoin_id
+        JOIN stablecoins_published st ON st.id = s.stablecoin_id
         WHERE UPPER(st.symbol) = UPPER(%s)
     """, (asset_symbol,))
 
@@ -90,7 +90,7 @@ def compute_cqi(asset_symbol, protocol_slug):
     # Get PSI score
     psi_row = fetch_one("""
         SELECT overall_score, grade, protocol_name, component_scores
-        FROM psi_scores
+        FROM psi_scores_published
         WHERE protocol_slug = %s
         ORDER BY computed_at DESC
         LIMIT 1
@@ -179,7 +179,7 @@ def compute_rqs(holdings: list[dict], coverage_threshold: float = 0.0) -> dict:
         sii_row = fetch_one("""
             SELECT s.overall_score, s.component_count, s.computed_at
             FROM scores s
-            JOIN stablecoins st ON st.id = s.stablecoin_id
+            JOIN stablecoins_published st ON st.id = s.stablecoin_id
             WHERE UPPER(st.symbol) = UPPER(%s)
         """, (symbol,))
 
@@ -273,7 +273,7 @@ def compute_rqs_for_protocol(protocol_slug: str, coverage_threshold: float = 0.0
     # Verify protocol exists in PSI
     psi_row = fetch_one("""
         SELECT protocol_name, overall_score
-        FROM psi_scores
+        FROM psi_scores_published
         WHERE protocol_slug = %s
         ORDER BY computed_at DESC LIMIT 1
     """, (protocol_slug,))
@@ -416,7 +416,7 @@ def compute_cqi_matrix():
     stablecoins = fetch_all("""
         SELECT st.symbol, s.overall_score, s.grade, s.component_count
         FROM scores s
-        JOIN stablecoins st ON st.id = s.stablecoin_id
+        JOIN stablecoins_published st ON st.id = s.stablecoin_id
         WHERE s.overall_score IS NOT NULL
         ORDER BY s.overall_score DESC
     """)
@@ -424,7 +424,7 @@ def compute_cqi_matrix():
     protocols = fetch_all("""
         SELECT DISTINCT ON (protocol_slug)
             protocol_slug, protocol_name, overall_score, grade, component_scores
-        FROM psi_scores
+        FROM psi_scores_published
         ORDER BY protocol_slug, computed_at DESC
     """)
 

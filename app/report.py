@@ -64,11 +64,11 @@ def assemble_report_data(entity_type: str, entity_id: str, persist: bool = True)
 
 
 def _assemble_stablecoin(symbol: str) -> dict | None:
-    """Assemble SII report for a stablecoin."""
+    """Assemble SII report for a stablecoin (published-gated)."""
     row = fetch_one("""
         SELECT s.*, st.name, st.symbol, st.issuer, st.contract AS token_contract
         FROM scores s
-        JOIN stablecoins st ON st.id = s.stablecoin_id
+        JOIN stablecoins_published st ON st.id = s.stablecoin_id
         WHERE UPPER(st.symbol) = UPPER(%s)
     """, (symbol,))
 
@@ -158,7 +158,7 @@ def _assemble_protocol(slug: str) -> dict | None:
         SELECT id, protocol_slug, protocol_name, overall_score, grade,
                category_scores, component_scores, raw_values,
                formula_version, inputs_hash, computed_at
-        FROM psi_scores
+        FROM psi_scores_published
         WHERE protocol_slug = %s
         ORDER BY computed_at DESC LIMIT 1
     """, (slug,))
@@ -318,7 +318,7 @@ def _assemble_wallet(address: str) -> dict | None:
     for h in holdings:
         if h.get("is_scored") and h.get("symbol"):
             sid = fetch_one(
-                "SELECT id FROM stablecoins WHERE UPPER(symbol) = UPPER(%s)",
+                "SELECT id FROM stablecoins_published WHERE UPPER(symbol) = UPPER(%s)",
                 (h["symbol"],),
             )
             h["proof_url"] = f"/proof/sii/{sid['id']}" if sid else None
@@ -410,7 +410,7 @@ def _get_protocols_for_stablecoin(symbol: str) -> list[dict]:
         rows = fetch_all("""
             SELECT DISTINCT ON (ps.protocol_slug)
                 ps.protocol_slug, ps.protocol_name, ps.overall_score, ps.grade
-            FROM psi_scores ps
+            FROM psi_scores_published ps
             JOIN protocol_collateral_exposure ce ON ce.protocol_slug = ps.protocol_slug
             WHERE UPPER(ce.token_symbol) = UPPER(%s)
               AND ce.is_stablecoin = TRUE
@@ -441,7 +441,7 @@ def _get_stablecoin_exposure(protocol_slug: str) -> list[dict]:
                    MAX(st.name) AS name,
                    COUNT(DISTINCT l.chain) AS chain_count
             FROM latest l
-            LEFT JOIN stablecoins st ON UPPER(st.symbol) = UPPER(l.token_symbol)
+            LEFT JOIN stablecoins_published st ON UPPER(st.symbol) = UPPER(l.token_symbol)
             LEFT JOIN scores s ON s.stablecoin_id = st.id
             GROUP BY l.token_symbol
             ORDER BY exposure_usd DESC NULLS LAST
@@ -949,7 +949,7 @@ def _get_reserve_composition_history(symbol: str, days: int = 90) -> dict:
 def _get_peg_behavior(symbol: str, days: int = 90) -> dict:
     """Peg stability summary from price history."""
     try:
-        sid_row = fetch_one("SELECT id FROM stablecoins WHERE UPPER(symbol) = UPPER(%s)", (symbol,))
+        sid_row = fetch_one("SELECT id FROM stablecoins_published WHERE UPPER(symbol) = UPPER(%s)", (symbol,))
         if not sid_row:
             return {}
         sid = sid_row["id"]
@@ -1042,7 +1042,7 @@ def _get_cross_protocol_exposure(symbol: str) -> list:
             FROM latest l
             LEFT JOIN (
                 SELECT DISTINCT ON (protocol_slug) protocol_slug, overall_score, grade
-                FROM psi_scores ORDER BY protocol_slug, computed_at DESC
+                FROM psi_scores_published ORDER BY protocol_slug, computed_at DESC
             ) ps ON ps.protocol_slug = l.protocol_slug
             GROUP BY l.protocol_slug
             ORDER BY exposure_usd DESC NULLS LAST

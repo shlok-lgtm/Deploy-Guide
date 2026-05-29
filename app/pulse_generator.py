@@ -59,11 +59,13 @@ async def run_daily_pulse():
     today = date.today().isoformat()
     logger.info(f"Generating daily pulse for {today}")
 
-    # 1. All current stablecoin scores (from scores table, not stablecoins)
+    # 1. All current stablecoin scores (from scores table, not stablecoins) —
+    # publication-gated. Unpublished/auto-discovered entities do not appear
+    # in the public pulse until approved.
     stablecoins = await fetch_all_async("""
         SELECT st.symbol, s.overall_score, s.grade, s.formula_version
         FROM scores s
-        JOIN stablecoins st ON st.id = s.stablecoin_id
+        JOIN stablecoins_published st ON st.id = s.stablecoin_id
         ORDER BY s.overall_score DESC
     """)
 
@@ -167,7 +169,7 @@ async def run_daily_pulse():
         psi_rows = await fetch_all_async("""
             SELECT DISTINCT ON (protocol_slug)
                 protocol_slug, protocol_name, overall_score, grade
-            FROM psi_scores
+            FROM psi_scores_published
             ORDER BY protocol_slug, computed_at DESC
         """)
         psi_summary = [
