@@ -3,12 +3,18 @@ Cross-Domain Coherence Sweep
 ==============================
 Daily validation that the hub's state domains are internally consistent.
 
-Four checks:
+Five checks:
 1. **Freshness gaps** — every attested domain updated within its expected cadence.
 2. **Record count drift** — domain record counts haven't changed by >50 % day-over-day.
 3. **SII / PSI alignment** — every scored stablecoin that appears in a PSI protocol
    has a recent SII score, and vice versa.
 4. **State root coverage** — the latest pulse state root references all expected domains.
+5. **Output-stream liveness** — for domains where one heartbeat covers several
+   independent output streams (e.g. discovery_signals, mempool_observations),
+   each declared stream's OUTPUT TABLE is verified directly against its own
+   cadence. A heartbeat that fires while a covered stream has been silent past
+   its cadence threshold surfaces as DEGRADED — closing the optimistic-direction
+   instrumentation lie that hid the 2026-05-21 entity_discovery outage.
 """
 
 import json
@@ -103,6 +109,137 @@ DOMAIN_FREQUENCIES = {
     "oracle_readings": 2,             # fast-cycle pipeline, alert if >2h stale
     "oracle_stress_events": 168,      # event-driven, check weekly
 }
+
+
+# ---------------------------------------------------------------------------
+# Output-stream cadence registry
+# ---------------------------------------------------------------------------
+# State_attestations records that the LOOP ran; it does not prove that every
+# OUTPUT STREAM the loop is responsible for actually produced rows. When a
+# single heartbeat domain covers several independent writers, the aggregate
+# timestamp is misleading in the optimistic direction: one fast stream can
+# keep the heartbeat green while another writer goes silent for days.
+#
+# Each entry below verifies one stream's freshness by querying the
+# destination TABLE directly (not state_attestations) against its own
+# cadence threshold. Documented misfires:
+#
+#   * discovery_signals — entity_discovery (168h) went 5d dark across all
+#     five generic-index domains on 2026-05-21 while large_mint_burn /
+#     micro_depeg kept firing every ~5min. Heartbeat stayed green.
+#
+#   * mempool_observations — _attest_observations_summary attests
+#     {status: no_rows_yet, captured: 0} every ~10min, so the heartbeat
+#     stays fresh even though the watcher last captured at 2026-05-08.
+#     Verifying mempool_observations.seen_at directly closes the lie.
+#
+# A stream issue is WARNING when age > cadence and ALERT when age > 2x.
+
+OUTPUT_STREAM_CHECKS = [
+    {
+        "domain": "discovery_signals",
+        "stream": "large_mint_burn:sii",
+        "query": (
+            "SELECT MAX(detected_at) AS ts FROM discovery_signals "
+            "WHERE signal_type = 'large_mint_burn' AND domain = 'sii'"
+        ),
+        "cadence_hours": 4,
+    },
+    {
+        "domain": "discovery_signals",
+        "stream": "micro_depeg:sii",
+        "query": (
+            "SELECT MAX(detected_at) AS ts FROM discovery_signals "
+            "WHERE signal_type = 'micro_depeg' AND domain = 'sii'"
+        ),
+        "cadence_hours": 4,
+    },
+    {
+        "domain": "discovery_signals",
+        "stream": "concentration_topology:graph",
+        "query": (
+            "SELECT MAX(detected_at) AS ts FROM discovery_signals "
+            "WHERE signal_type = 'concentration_topology' AND domain = 'graph'"
+        ),
+        "cadence_hours": 26,
+    },
+    *[
+        {
+            "domain": "discovery_signals",
+            "stream": f"entity_discovery:{idx}",
+            "query": (
+                "SELECT MAX(detected_at) AS ts FROM discovery_signals "
+                f"WHERE signal_type = 'entity_discovery' AND domain = '{idx}'"
+            ),
+            "cadence_hours": 168,
+        }
+        for idx in ("bri", "cxri", "lsti", "tti", "vsri")
+    ],
+    {
+        "domain": "mempool_observations",
+        "stream": "mempool_observations:seen_at",
+        "query": "SELECT MAX(seen_at) AS ts FROM mempool_observations",
+        "cadence_hours": 2,
+    },
+]
+
+
+def _check_output_streams() -> list[dict]:
+    """Verify per-stream OUTPUT liveness against its own cadence threshold.
+
+    The companion to _check_freshness. _check_freshness asks "did the loop
+    attest recently?" — this asks "did each output stream the loop is
+    supposed to produce actually produce rows recently?". Both must pass
+    before a multi-stream domain can claim healthy."""
+    issues = []
+    now = datetime.now(timezone.utc)
+    for check in OUTPUT_STREAM_CHECKS:
+        try:
+            row = fetch_one(check["query"])
+        except Exception as e:
+            issues.append({
+                "check": "output_stream",
+                "domain": check["domain"],
+                "stream": check["stream"],
+                "severity": "warning",
+                "detail": f"output-stream query failed: {e}",
+            })
+            continue
+
+        ts = None
+        if row:
+            for v in row.values():
+                if v is not None:
+                    ts = v
+                    break
+
+        if ts is None:
+            issues.append({
+                "check": "output_stream",
+                "domain": check["domain"],
+                "stream": check["stream"],
+                "severity": "alert",
+                "detail": "no output rows ever produced for this stream",
+            })
+            continue
+
+        if hasattr(ts, "tzinfo") and ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        age_hours = (now - ts).total_seconds() / 3600
+        cadence = check["cadence_hours"]
+        if age_hours > cadence:
+            issues.append({
+                "check": "output_stream",
+                "domain": check["domain"],
+                "stream": check["stream"],
+                "severity": "alert" if age_hours > cadence * 2 else "warning",
+                "detail": (
+                    f"output silent {age_hours:.1f}h "
+                    f"(cadence {cadence}h) — heartbeat may be fresh "
+                    f"while this stream is dead"
+                ),
+            })
+    return issues
 
 
 # ---------------------------------------------------------------------------
@@ -310,6 +447,7 @@ def run_coherence_sweep() -> dict:
     """
     all_issues = []
     all_issues.extend(_check_freshness())
+    all_issues.extend(_check_output_streams())
     all_issues.extend(_check_record_count_drift())
     all_issues.extend(_check_sii_psi_alignment())
     all_issues.extend(_check_state_root_coverage())
