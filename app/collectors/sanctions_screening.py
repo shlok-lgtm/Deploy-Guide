@@ -191,26 +191,30 @@ def run_sanctions_screening() -> dict:
             except Exception:
                 pass
 
-    # Attest batch
-    if targets_screened > 0:
+    # Attest batch — RAN-gated, not DELTA-gated. Always attest once the screen
+    # completes, even when targets_screened == 0. The payload already carries
+    # the count, so "ran, screened 0" is an honest heartbeat. Gating on
+    # `targets_screened > 0` let the sanctions_screening domain (24h coherence
+    # floor) go silent whenever the target query returned nothing — the same
+    # heartbeat-lie as parent_company_financials / holder_ingestion.
+    try:
+        from app.state_attestation import attest_state
+        attest_state("sanctions_screening", [{
+            "date": today.isoformat(),
+            "targets_screened": targets_screened,
+            "matches_found": matches_found,
+        }], writer_id="module.sanctions_screening")
+    except Exception as e:
+        logger.warning(f"Sanctions screening attestation failed: {e}")
         try:
-            from app.state_attestation import attest_state
-            attest_state("sanctions_screening", [{
-                "date": today.isoformat(),
-                "targets_screened": targets_screened,
-                "matches_found": matches_found,
-            }], writer_id="module.sanctions_screening")
-        except Exception as e:
-            logger.warning(f"Sanctions screening attestation failed: {ae}")
-            try:
-                from app.worker import _record_cycle_error
-                _record_cycle_error(
-                    error_type="collectors_run_sanctions_screening_failure",
-                    error_message=str(e)[:500],
-                    cycle_phase="sanctions_screening",
-                )
-            except Exception:
-                pass
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_run_sanctions_screening_failure",
+                error_message=str(e)[:500],
+                cycle_phase="sanctions_screening",
+            )
+        except Exception:
+            pass
 
     summary = {
         "targets_screened": targets_screened,
