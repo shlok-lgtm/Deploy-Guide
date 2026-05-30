@@ -173,7 +173,12 @@ OUTPUT_STREAM_CHECKS = [
             ),
             "cadence_hours": 168,
         }
-        for idx in ("bri", "cxri", "lsti", "tti", "vsri")
+        # Phase 2 (PSI auto-discovery integration) added 'psi' to this set.
+        # Phase 3 will add 'sii' when the peggedAssets feed lands. Both
+        # share the 168h weekly cadence Circle 7 uses, and both write to
+        # discovery_signals via app/data_layer/entity_discovery.py so the
+        # check semantics are identical — no per-domain query variation.
+        for idx in ("bri", "cxri", "lsti", "psi", "tti", "vsri")
     ],
     {
         "domain": "mempool_observations",

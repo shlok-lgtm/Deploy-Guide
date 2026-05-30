@@ -28,7 +28,16 @@ logger = logging.getLogger(__name__)
 
 DEFILLAMA_BASE = "https://api.llama.fi"
 
-# Category to Circle 7 index mapping with TVL thresholds
+# Category to Circle 7 index mapping with TVL thresholds.
+#
+# PSI and SII discovery do NOT use protocol-category mapping — they use
+# different DeFiLlama endpoints (pools + peggedAssets respectively) with
+# their own gates. Phase 2 routes the existing PSI pipeline through
+# the framework via `_run_psi_discovery_via_framework()` below so that
+# `discovery_signals WHERE signal_type='entity_discovery' AND domain='psi'`
+# advances on the same cycle the Circle 7 streams do, satisfying the
+# OUTPUT_STREAM_CHECKS registry entry added in app/coherence.py.
+# SII discovery (Phase 3) will plug in alongside via the same shape.
 CATEGORY_INDEX_MAP = {
     # DeFiLlama categories → index
     "Liquid Staking": {"index": "lsti", "min_tvl": 10_000_000},
@@ -178,6 +187,155 @@ def _store_discovered_entities(entities: list[dict]):
     logger.info(f"Stored {stored} entity discovery signals")
 
 
+def _store_psi_discovery_signals(
+    promoted_slugs: list[str],
+    cycle_stats: dict,
+) -> int:
+    """Write entity_discovery rows for PSI promotions in the cycle.
+
+    Phase 2: PSI is now visible alongside Circle 7 in discovery_signals.
+    Without this, the OUTPUT_STREAM_CHECKS entry for entity_discovery:psi
+    (cadence 168h) would query an empty stream and flag DEGRADED — the same
+    blind-heartbeat shape #268 fixed for the Circle 7 indices.
+
+    One signal_type='entity_discovery' row is written per promoted protocol
+    in the cycle. The domain is 'psi'. Cycle stats are stored in `detail`
+    so operators can see candidate/promotion counts at the per-cycle
+    granularity the framework expects.
+
+    Returns the number of signal rows written.
+    """
+    from app.database import get_cursor
+
+    written = 0
+    if not promoted_slugs:
+        # Even with zero promotions, write one summary row so the stream
+        # advances and the cadence registry doesn't flag DEGRADED purely
+        # because no candidate cleared the gate this week. Distinguishable
+        # via detail.cycle_status='no_promotions'.
+        try:
+            with get_cursor() as cur:
+                cur.execute(
+                    """INSERT INTO discovery_signals
+                       (signal_type, domain, title, description, entities,
+                        novelty_score, direction, magnitude, baseline,
+                        detail, methodology_version)
+                       VALUES ('entity_discovery', 'psi', %s, %s, %s,
+                               %s, %s, %s, %s, %s, 'discovery-v0.1.0')""",
+                    (
+                        "PSI discovery cycle — no new promotions",
+                        f"Considered {cycle_stats.get('discovered', 0)} candidates above $10M TVL; "
+                        f"enriched {cycle_stats.get('enriched', 0)}; "
+                        f"promoted {cycle_stats.get('promoted', 0)}.",
+                        json.dumps([]),
+                        0.1,
+                        "stable",
+                        0,
+                        None,
+                        json.dumps({**cycle_stats, "cycle_status": "no_promotions"}),
+                    ),
+                )
+            written = 1
+        except Exception as e:
+            logger.warning(f"[psi-discovery] heartbeat write failed: {e}")
+            try:
+                from app.worker import _record_cycle_error
+                _record_cycle_error(
+                    error_type="psi_discovery_heartbeat_write_failure",
+                    error_message=str(e)[:500],
+                    cycle_phase="entity_discovery",
+                )
+            except Exception:
+                pass
+        return written
+
+    for slug in promoted_slugs:
+        try:
+            with get_cursor() as cur:
+                cur.execute(
+                    """INSERT INTO discovery_signals
+                       (signal_type, domain, title, description, entities,
+                        novelty_score, direction, magnitude, baseline,
+                        detail, methodology_version)
+                       VALUES ('entity_discovery', 'psi', %s, %s, %s,
+                               %s, %s, %s, %s, %s, 'discovery-v0.1.0')""",
+                    (
+                        f"New PSI candidate promoted: {slug}",
+                        f"Protocol {slug} cleared the PSI promotion gate "
+                        "(TVL >= $10M, category coverage complete).",
+                        json.dumps([slug]),
+                        0.3,
+                        "new",
+                        None,
+                        None,
+                        json.dumps({**cycle_stats,
+                                    "promoted_slug": slug,
+                                    "cycle_status": "promoted"}),
+                    ),
+                )
+            written += 1
+        except Exception as e:
+            logger.warning(
+                f"[psi-discovery] signal write failed for {slug}: {e}"
+            )
+    return written
+
+
+async def _run_psi_discovery_via_framework() -> dict:
+    """Run PSI's existing discover → enrich → promote chain and surface it
+    through the entity_discovery framework.
+
+    Phase 2 integration: psi_collector's pipeline at
+    `app/collectors/psi_collector.py:1339-1816` is unchanged in behavior;
+    this wrapper adds (a) per-domain visibility in `discovery_signals` and
+    (b) framework-level logging consistent with the Circle 7 cycles.
+
+    Returns a stats dict for caller composition.
+    """
+    from app.collectors.psi_collector import (
+        discover_protocols,
+        enrich_protocol_backlog,
+        promote_eligible_protocols,
+    )
+    from app.database import fetch_all
+
+    logger.error("[psi-discovery] cycle starting")
+    discovered = await asyncio.to_thread(discover_protocols)
+    enriched = await asyncio.to_thread(enrich_protocol_backlog)
+
+    # Capture freshly-promoted slugs by diffing pre/post.
+    promote_pre = await asyncio.to_thread(
+        fetch_all,
+        "SELECT slug FROM protocol_backlog WHERE enrichment_status = 'promoted'",
+    )
+    pre_set = {r["slug"] for r in (promote_pre or [])}
+    promoted = await asyncio.to_thread(promote_eligible_protocols)
+    promote_post = await asyncio.to_thread(
+        fetch_all,
+        "SELECT slug FROM protocol_backlog WHERE enrichment_status = 'promoted'",
+    )
+    new_promoted = sorted({r["slug"] for r in (promote_post or [])} - pre_set)
+
+    cycle_stats = {
+        "discovered": discovered,
+        "enriched": enriched,
+        "promoted": promoted,
+        "newly_promoted_count": len(new_promoted),
+    }
+    signals_written = await asyncio.to_thread(
+        _store_psi_discovery_signals, new_promoted, cycle_stats,
+    )
+    logger.error(
+        f"[psi-discovery] cycle done: discovered={discovered} "
+        f"enriched={enriched} promoted={promoted} "
+        f"newly_promoted={new_promoted} signals_written={signals_written}"
+    )
+
+    return {**cycle_stats,
+            "newly_promoted": new_promoted,
+            "signals_written": signals_written}
+
+
 async def run_entity_discovery() -> dict:
     """
     Full entity discovery cycle:
@@ -185,6 +343,7 @@ async def run_entity_discovery() -> dict:
     2. Filter by category and TVL threshold
     3. Exclude already-tracked entities
     4. Emit discovery signals for new candidates
+    5. Run PSI discovery via the same framework (Phase 2)
 
     Returns summary.
     """
@@ -246,6 +405,28 @@ async def run_entity_discovery() -> dict:
         f"by_index={index_summary}"
     )
 
+    # Phase 2: PSI's existing discover/enrich/promote chain runs on the
+    # same cycle so its `entity_discovery:psi` stream advances on the same
+    # 168h cadence the Circle 7 streams use. Failure here must not block
+    # the Circle 7 summary already computed above.
+    psi_stats: dict = {}
+    try:
+        psi_stats = await _run_psi_discovery_via_framework()
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.error(f"[psi-discovery] cycle failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="psi_discovery_framework_cycle_failure",
+                error_message=str(e)[:500],
+                cycle_phase="entity_discovery",
+            )
+        except Exception:
+            pass
+        psi_stats = {"error": str(e)[:200]}
+
     return {
         "protocols_scanned": len(protocols),
         "already_tracked": len(existing),
@@ -255,4 +436,5 @@ async def run_entity_discovery() -> dict:
             {"name": c["name"], "index": c["target_index"], "tvl": c["tvl"]}
             for c in sorted(candidates, key=lambda x: x["tvl"], reverse=True)[:20]
         ],
+        "psi_discovery": psi_stats,
     }
