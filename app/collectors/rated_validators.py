@@ -220,25 +220,29 @@ def collect_validator_performance() -> dict:
             except Exception:
                 pass
 
-    # Attest batch
-    if snapshots_stored > 0:
+    # Attest batch — RAN-gated, not DELTA-gated. Always attest once the scan
+    # completes, even when operators_stored == 0. The payload already carries
+    # the count, so "ran, stored 0" is an honest heartbeat. Gating on
+    # `snapshots_stored > 0` let the validator_performance domain (24h
+    # coherence floor) go perpetually stale whenever no new snapshots landed —
+    # the same heartbeat-lie as parent_company_financials / holder_ingestion.
+    try:
+        from app.state_attestation import attest_state
+        attest_state("validator_performance", [{
+            "snapshot_date": today.isoformat(),
+            "operators_stored": snapshots_stored,
+        }], writer_id="module.rated_validators")
+    except Exception as e:
+        logger.warning(f"Validator performance attestation failed: {e}")
         try:
-            from app.state_attestation import attest_state
-            attest_state("validator_performance", [{
-                "snapshot_date": today.isoformat(),
-                "operators_stored": snapshots_stored,
-            }], writer_id="module.rated_validators")
-        except Exception as e:
-            logger.warning(f"Validator performance attestation failed: {ae}")
-            try:
-                from app.worker import _record_cycle_error
-                _record_cycle_error(
-                    error_type="collectors_collect_validator_performance_failure",
-                    error_message=str(e)[:500],
-                    cycle_phase="rated_validators",
-                )
-            except Exception:
-                pass
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_collect_validator_performance_failure",
+                error_message=str(e)[:500],
+                cycle_phase="rated_validators",
+            )
+        except Exception:
+            pass
 
     summary = {
         "operators_checked": operators_checked,

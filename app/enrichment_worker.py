@@ -765,12 +765,22 @@ async def run_enrichment_pipeline() -> dict:
         try:
             from app.state_attestation import attest_state
             signals = result.get("divergence_signals", []) if isinstance(result, dict) else []
+            # RAN-gated, not DELTA-gated. detect_all_divergences() runs every
+            # enrichment cycle; in steady state it frequently finds zero
+            # divergences (capital flows track quality). Gating the attest on
+            # `if signals:` let the divergence_signals domain (4h coherence
+            # floor) go silent on any quiet cycle while the detector was
+            # healthy — the same heartbeat-lie as parent_company_financials /
+            # holder_ingestion. Attest the cycle either way; an empty cycle is
+            # a valid "ran, no divergences" statement.
             if signals:
                 records = [
                     {"type": s.get("type"), "severity": s.get("severity")}
                     for s in signals
                 ]
-                await asyncio.to_thread(attest_state, "divergence_signals", records, None, "enrichment.divergence_detection")
+            else:
+                records = [{"status": "ran_no_results", "results_count": 0}]
+            await asyncio.to_thread(attest_state, "divergence_signals", records, None, "enrichment.divergence_detection")
         except Exception as e:
             logger.error(f"[enrichment] divergence attestation failed: {e}")
             try:
@@ -1238,8 +1248,17 @@ async def run_enrichment_pipeline() -> dict:
                 fetch_all,
                 "SELECT source_domain, attestation_hash, proved_at FROM provenance_proofs WHERE proved_at > NOW() - INTERVAL '2 hours'",
             )
+            # RAN-gated, not DELTA-gated. The guard counts proofs that landed
+            # in a trailing 2h SELECT window, NOT what this run did — exactly
+            # the lookback-window shape that left cda_extractions empty for
+            # 30+ days (see cda_collector.py:34). When the linking run lands
+            # nothing new inside the window (steady state, slow proof cadence)
+            # the provenance domain (24h coherence floor) goes silent while
+            # run_provenance_linking() ran fine. Attest the cycle either way.
             if prov_rows:
                 await asyncio.to_thread(attest_state, "provenance", [dict(r) for r in prov_rows], None, "enrichment.provenance_update")
+            else:
+                await asyncio.to_thread(attest_state, "provenance", [{"status": "ran_no_results", "window_hours": 2, "proofs_in_window": 0}], None, "enrichment.provenance_update")
         except Exception as e:
             logger.error(f"[enrichment] provenance attestation failed: {e}")
             try:
