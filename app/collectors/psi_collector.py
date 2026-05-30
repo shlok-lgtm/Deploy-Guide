@@ -1335,6 +1335,81 @@ def sync_collateral_to_backlog():
 _DISCOVERY_TVL_THRESHOLD = 10_000_000  # $10M stablecoin exposure minimum
 _ENRICHMENT_DAILY_LIMIT = 5
 
+# Floor below which the TVL-gate rejection is not telemetered. Projects with
+# trivial (sub-$1M) stablecoin exposure are not "promotion candidates" in any
+# meaningful sense — emitting a rejected event for them would flood
+# assessment_events with hundreds of rows per cycle for no operator value.
+# The scenario's $9M near-miss case is comfortably above this floor.
+_PROMOTION_TELEMETRY_FLOOR_USD = 1_000_000
+
+
+def _emit_psi_promotion_event(
+    slug: str,
+    decision: str,
+    reason: str,
+    tvl_at_consideration: float | None,
+    extra: dict | None = None,
+    writer_id: str = "psi_collector",
+) -> None:
+    """Emit a psi_promotion_attempted assessment_event.
+
+    Phase 2 (PSI/SII auto-discovery): closes the telemetry blind spot
+    flagged in the May 27 punchlist (Section B item 4). Before this
+    helper, no producer existed for psi_promotion_attempted — the question
+    "of N candidates considered last cycle, M passed the TVL gate, K
+    failed for these specific reasons" was unanswerable from telemetry.
+
+    Args:
+      slug: protocol slug being decided on.
+      decision: "accepted" or "rejected" — the binary outcome at this gate.
+      reason: an *enumerable* rejection reason; for accepted events, the
+              accept-stage label. Allowed values:
+                rejected: tvl_below_threshold, category_incomplete,
+                          enrichment_no_defillama_data, promotion_failed
+                accepted: tvl_gate_passed, category_complete, promoted
+      tvl_at_consideration: numeric TVL observed at the time of decision
+              (None when not applicable, e.g. category-completeness checks).
+      extra: additional structured payload (missing categories, etc.).
+      writer_id: provenance label per migration 111 / V9.x discriminator.
+
+    The event is written to assessment_events using the
+    'protocol:<slug>' wallet_address convention that psi_score_change
+    events already use. severity is 'notable' (gate decisions are
+    operationally informative, not user-broadcast).
+    """
+    payload = {
+        "candidate_slug": slug,
+        "decision": decision,
+        "rejection_reason": reason if decision == "rejected" else None,
+        "accept_reason": reason if decision == "accepted" else None,
+        "tvl_at_consideration": tvl_at_consideration,
+        "cycle_timestamp": datetime.now(timezone.utc).isoformat(),
+        "writer_id": writer_id,
+    }
+    if extra:
+        payload["extra"] = extra
+    try:
+        execute(
+            """INSERT INTO assessment_events
+                   (wallet_address, chain, trigger_type, trigger_detail,
+                    severity, broadcast)
+               VALUES (%s, 'multi', 'psi_promotion_attempted', %s::jsonb,
+                       'notable', FALSE)""",
+            (f"protocol:{slug}", json.dumps(payload)),
+        )
+    except Exception as e:
+        logger.warning(f"psi_promotion_attempted emit failed for {slug}: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="psi_promotion_attempted_emit_failure",
+                error_message=str(e)[:500],
+                cycle_phase="psi_collector",
+            )
+        except Exception:
+            pass
+
+
 
 def discover_protocols():
     """Discover new protocols from DeFiLlama pool data that have meaningful stablecoin exposure.
@@ -1424,7 +1499,19 @@ def discover_protocols():
         key=lambda x: x[1]["total_stable_tvl"],
         reverse=True,
     ):
-        if exp["total_stable_tvl"] < _DISCOVERY_TVL_THRESHOLD:
+        tvl_observed = exp["total_stable_tvl"]
+        if tvl_observed < _DISCOVERY_TVL_THRESHOLD:
+            # TVL-gate rejection — telemeter only candidates within meaningful
+            # distance of the threshold (above _PROMOTION_TELEMETRY_FLOOR_USD).
+            # Sub-floor projects flood without operator value.
+            if tvl_observed >= _PROMOTION_TELEMETRY_FLOOR_USD:
+                _emit_psi_promotion_event(
+                    slug=project,
+                    decision="rejected",
+                    reason="tvl_below_threshold",
+                    tvl_at_consideration=tvl_observed,
+                    extra={"threshold_usd": _DISCOVERY_TVL_THRESHOLD},
+                )
             continue
 
         # Use project name as slug (DeFiLlama convention)
@@ -1449,6 +1536,13 @@ def discover_protocols():
                 unscored_list,
             ))
             discovered += 1
+            _emit_psi_promotion_event(
+                slug=slug,
+                decision="accepted",
+                reason="tvl_gate_passed",
+                tvl_at_consideration=tvl_observed,
+                extra={"unscored_stablecoin_tvl_usd": exp["unscored_tvl"]},
+            )
         except Exception as e:
             logger.warning(f"Failed to upsert protocol backlog for {slug}: {e}")
             try:
@@ -1590,11 +1684,28 @@ def enrich_protocol_backlog():
         is_complete, missing_cats = is_category_complete(raw_values, PSI_V01_DEFINITION)
         if is_complete:
             new_status = "ready"
+            _emit_psi_promotion_event(
+                slug=slug,
+                decision="accepted",
+                reason="category_complete",
+                tvl_at_consideration=tvl,
+                extra={"components_available": components_available,
+                       "components_total": components_total},
+            )
         else:
             new_status = "enriching"
             logger.debug(
                 f"Enrichment: {name} ({slug}) category-incomplete — "
                 f"missing: {', '.join(missing_cats)}"
+            )
+            _emit_psi_promotion_event(
+                slug=slug,
+                decision="rejected",
+                reason="category_incomplete",
+                tvl_at_consideration=tvl,
+                extra={"missing_categories": missing_cats,
+                       "components_available": components_available,
+                       "components_total": components_total},
             )
 
         try:
@@ -1665,6 +1776,15 @@ def promote_eligible_protocols():
                 f"${row['stablecoin_exposure_usd']:,.0f} stablecoin exposure, "
                 f"{row['coverage_pct']:.0f}% component coverage "
                 f"({row['components_available']}/{row['components_total']})"
+            )
+            _emit_psi_promotion_event(
+                slug=row["slug"],
+                decision="accepted",
+                reason="promoted",
+                tvl_at_consideration=float(row["stablecoin_exposure_usd"] or 0),
+                extra={"coverage_pct": float(row["coverage_pct"] or 0),
+                       "components_available": int(row["components_available"] or 0),
+                       "components_total": int(row["components_total"] or 0)},
             )
         except Exception as e:
             logger.warning(f"Failed to promote protocol {row['slug']}: {e}")
