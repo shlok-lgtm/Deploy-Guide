@@ -521,6 +521,40 @@ async def collect_governance_proposals() -> dict:
 
         results["protocols_checked"] += 1
 
+    # Cycle-completion attestation — RAN-gated heartbeat. The inner per-proposal
+    # attest in _upsert_proposal() only fires on a NEW proposal (it proves
+    # individual proposal-body capture and is left intact). For slow-moving
+    # governance the steady state is zero new proposals per cycle, so that inner
+    # attest never fired and the governance_proposals domain (24h coherence
+    # floor) read as perpetually stale despite the collector running every
+    # cycle — 217 output rows, 0 attestations ever (Neon prod 2026-05-29). Attest
+    # once the sweep completes, with the cycle's captured+updated count, so a
+    # quiet cycle still records an honest "ran, 0" heartbeat.
+    try:
+        from app.state_attestation import compute_batch_hash, store_attestation
+        store_attestation(
+            "governance_proposals",
+            compute_batch_hash([{
+                "protocols_checked": results["protocols_checked"],
+                "proposals_captured": results["proposals_captured"],
+                "proposals_updated": results["proposals_updated"],
+                "swept_at": datetime.now(timezone.utc).isoformat(),
+            }]),
+            record_count=results["proposals_captured"] + results["proposals_updated"],
+            writer_id="module.governance_proposals",
+        )
+    except Exception as e:
+        logger.warning(f"Governance proposals cycle attestation failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_collect_governance_proposals_failure",
+                error_message=str(e)[:500],
+                cycle_phase="governance_proposals",
+            )
+        except Exception:
+            pass
+
     logger.info(
         f"Governance proposals: protocols={results['protocols_checked']} "
         f"captured={results['proposals_captured']} "

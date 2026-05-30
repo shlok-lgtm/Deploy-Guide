@@ -735,6 +735,51 @@ async def collect_parameter_history() -> dict:
             except Exception:
                 pass
 
+    # Cycle-completion attestation — RAN-gated heartbeat for both output
+    # domains. The inner attests (_handle_parameter_change /
+    # _store_daily_snapshot) only fire when a change or snapshot is actually
+    # written. Since the May-14 kill switch (#252) every registry protocol is in
+    # KILLED_PROTOCOLS, so a normal cycle writes nothing new and those inner
+    # attests never fire — protocol_parameter_changes (4h floor) and
+    # protocol_parameter_snapshots (24h floor) have read stale since their last
+    # write on 2026-05-14 despite the collector running every cycle (55 + 4
+    # output rows, last attest 2026-05-14; Neon prod 2026-05-29). Scope was
+    # reduced, not removed, so the heartbeat must still fire. Attest once the run
+    # completes, with the live table counts, so a quiet cycle records an honest
+    # "ran, N total".
+    try:
+        from app.state_attestation import compute_batch_hash, store_attestation
+        now_iso = datetime.now(timezone.utc).isoformat()
+        heartbeat_hash = compute_batch_hash([{
+            "protocols_checked": results["protocols_checked"],
+            "changes_detected": results["changes_detected"],
+            "snapshots_stored": results["snapshots_stored"],
+            "ran_at": now_iso,
+        }])
+        for _domain in ("protocol_parameter_changes", "protocol_parameter_snapshots"):
+            total_row = await fetch_one_async(f"SELECT COUNT(*) AS n FROM {_domain}")
+            total = int(total_row["n"]) if total_row else 0
+            await asyncio.to_thread(
+                store_attestation,
+                _domain,
+                heartbeat_hash,
+                total,
+                writer_id="module.parameter_history",
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"Parameter history cycle attestation failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_collect_parameter_history_failure",
+                error_message=str(e)[:500],
+                cycle_phase="parameter_history",
+            )
+        except Exception:
+            pass
+
     logger.info(
         f"Parameter history: protocols={results['protocols_checked']} "
         f"params={results['parameters_checked']} "

@@ -301,6 +301,42 @@ def collect_enforcement_records() -> dict:
             except Exception:
                 pass
 
+    # Cycle-completion attestation — RAN-gated heartbeat. The per-entity attest
+    # above only fires when `new_records > 0`; with enforcement records landing
+    # rarely (often zero new rows for weeks), that branch left the
+    # enforcement_records domain (168h coherence floor) unable to distinguish
+    # "scanned, found nothing" from "collector never ran" — 0 output rows, 0
+    # attestations ever (Neon prod 2026-05-29). The collector IS registered and
+    # runs (app/worker.py Pipeline 20). Attest once the scan completes, with the
+    # live table count, so a quiet scan records an honest "ran, N total"
+    # heartbeat.
+    try:
+        from app.state_attestation import compute_batch_hash, store_attestation
+        total_row = fetch_one("SELECT COUNT(*) AS n FROM enforcement_records")
+        total_records = int(total_row["n"]) if total_row else 0
+        store_attestation(
+            "enforcement_records",
+            compute_batch_hash([{
+                "entities_scanned": entities_scanned,
+                "new_records": new_records,
+                "skipped_recent": skipped_recent,
+                "scanned_at": datetime.now(timezone.utc).isoformat(),
+            }]),
+            record_count=total_records,
+            writer_id="module.enforcement_history",
+        )
+    except Exception as e:
+        logger.warning(f"Enforcement cycle attestation failed: {e}")
+        try:
+            from app.worker import _record_cycle_error
+            _record_cycle_error(
+                error_type="collectors_collect_enforcement_records_failure",
+                error_message=str(e)[:500],
+                cycle_phase="enforcement_history",
+            )
+        except Exception:
+            pass
+
     summary = {
         "entities_scanned": entities_scanned,
         "new_records": new_records,
